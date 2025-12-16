@@ -203,8 +203,6 @@ def create_lollipop_plot(gene_name, studies_data):
     plot_data = []
     
     for study_name, df in studies_data.items():
-        if study_name not in STUDIES:
-            continue
         
         if 'Gene' in df.columns:
             gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
@@ -264,8 +262,11 @@ def create_lollipop_plot(gene_name, studies_data):
             size = 10 + abs(lfc if lfc else 0) * 1.5
             size = min(size, 16)  # Cap at 16
             
+            # Get study label
+            study_label = STUDIES.get(study_name, study_name)
+            
             plot_data.append({
-                'study': STUDIES[study_name],
+                'study': study_label,
                 'auc': auc,
                 'lfc': lfc if lfc else 0,
                 'direction': direction,
@@ -314,19 +315,25 @@ def create_lollipop_plot(gene_name, studies_data):
     fig.add_vline(x=0.7, line_dash="dot", line_color="#eeeeee", line_width=0.5)
     
     fig.update_layout(
-        title=f"AUROC Across Studies: {gene_name}",
-        xaxis_title="AUROC",
+        title=dict(text=f"AUROC Across Studies: {gene_name}", font=dict(size=14, color='#000000')),
+        xaxis_title=dict(text="AUROC", font=dict(size=12, color='#000000')),
         yaxis_title="",
-        height=250,
+        height=300,
         hovermode='closest',
-        xaxis=dict(range=[0.45, 1.0]),
+        xaxis=dict(
+            range=[0.45, 1.0],
+            tickfont=dict(color='#000000', size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor='#f0f0f0'
+        ),
+        yaxis=dict(
+            tickfont=dict(color='#000000', size=11),
+            showgrid=False
+        ),
         showlegend=False,
         plot_bgcolor='white',
-        paper_bgcolor='white',
-        xaxis_showgrid=True,
-        xaxis_gridwidth=0.5,
-        xaxis_gridcolor='#f0f0f0',
-        yaxis_showgrid=False
+        paper_bgcolor='white'
     )
     
     return fig
@@ -341,8 +348,6 @@ def create_auc_logfc_scatter(gene_name, studies_data):
     plot_data = []
     
     for study_name, df in studies_data.items():
-        if study_name not in STUDIES:
-            continue
         
         if 'Gene' in df.columns:
             gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
@@ -395,8 +400,11 @@ def create_auc_logfc_scatter(gene_name, studies_data):
                     direction = 'Healthy'
                     symbol = 'triangle-down'
             
+            # Get study label
+            study_label = STUDIES.get(study_name, study_name)
+            
             plot_data.append({
-                'study': STUDIES[study_name],
+                'study': study_label,
                 'auc': auc,
                 'lfc': lfc,
                 'direction': direction,
@@ -430,21 +438,27 @@ def create_auc_logfc_scatter(gene_name, studies_data):
     fig.add_vline(x=0.5, line_dash="dash", line_color="#dddddd", line_width=1)
     
     fig.update_layout(
-        title="Concordance: AUC vs logFC",
-        xaxis_title="AUROC",
-        yaxis_title="logFC (MAFLD vs Healthy)",
-        height=300,
+        title=dict(text="Concordance: AUC vs logFC", font=dict(size=14, color='#000000')),
+        xaxis_title=dict(text="AUROC", font=dict(size=12, color='#000000')),
+        yaxis_title=dict(text="logFC (MAFLD vs Healthy)", font=dict(size=12, color='#000000')),
+        height=350,
         hovermode='closest',
-        xaxis=dict(range=[0.45, 1.0]),
+        xaxis=dict(
+            range=[0.45, 1.0],
+            tickfont=dict(color='#000000', size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor='#f0f0f0'
+        ),
+        yaxis=dict(
+            tickfont=dict(color='#000000', size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor='#f0f0f0'
+        ),
         showlegend=False,
         plot_bgcolor='white',
-        paper_bgcolor='white',
-        xaxis_showgrid=True,
-        xaxis_gridwidth=0.5,
-        xaxis_gridcolor='#f0f0f0',
-        yaxis_showgrid=True,
-        yaxis_gridwidth=0.5,
-        yaxis_gridcolor='#f0f0f0'
+        paper_bgcolor='white'
     )
     
     return fig
