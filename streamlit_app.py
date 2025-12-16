@@ -73,8 +73,9 @@ def load_studies():
     
     studies = {}
     
-    for file_path in single_omics_dir.rglob("*"):
-        if file_path.suffix in ['.csv', '.parquet']:
+    # Load all parquet and csv files
+    for file_path in single_omics_dir.glob("*"):
+        if file_path.is_file() and file_path.suffix in ['.csv', '.parquet']:
             try:
                 study_name = file_path.stem
                 
@@ -83,8 +84,9 @@ def load_studies():
                 else:
                     df = pd.read_csv(file_path)
                 
-                studies[study_name] = df
-            except:
+                if not df.empty:
+                    studies[study_name] = df
+            except Exception as e:
                 pass
     
     return studies
@@ -196,7 +198,7 @@ def compute_consistency_score(gene_name, studies_data):
 # ============================================================================
 
 def create_lollipop_plot(gene_name, studies_data):
-    """Create horizontal lollipop plot with direction cues"""
+    """Create horizontal lollipop plot with direction cues (triangle markers)"""
     
     plot_data = []
     
@@ -235,39 +237,39 @@ def create_lollipop_plot(gene_name, studies_data):
                     pass
         
         if auc is not None:
-            # Determine direction
+            # Determine direction and marker symbol
             if 'direction' in row.index:
                 dir_val = str(row['direction']).lower()
                 if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
-                    direction = '↑ MAFLD'
-                    color = '#1f77b4'
+                    direction = 'MAFLD'
+                    symbol = 'triangle-up'
                 elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
-                    direction = '↓ Healthy'
-                    color = '#ff7f0e'
+                    direction = 'Healthy'
+                    symbol = 'triangle-down'
                 else:
                     direction = 'Neutral'
-                    color = '#808080'
+                    symbol = 'circle'
             else:
                 if lfc and lfc > 0:
-                    direction = '↑ MAFLD'
-                    color = '#1f77b4'
+                    direction = 'MAFLD'
+                    symbol = 'triangle-up'
                 elif lfc and lfc < 0:
-                    direction = '↓ Healthy'
-                    color = '#ff7f0e'
+                    direction = 'Healthy'
+                    symbol = 'triangle-down'
                 else:
                     direction = 'Neutral'
-                    color = '#808080'
+                    symbol = 'circle'
             
             # Dot size based on logFC magnitude (subtle)
-            size = 12 + abs(lfc if lfc else 0) * 2
-            size = min(size, 20)  # Cap at 20
+            size = 10 + abs(lfc if lfc else 0) * 1.5
+            size = min(size, 16)  # Cap at 16
             
             plot_data.append({
                 'study': STUDIES[study_name],
                 'auc': auc,
                 'lfc': lfc if lfc else 0,
                 'direction': direction,
-                'color': color,
+                'symbol': symbol,
                 'size': size
             })
     
@@ -279,45 +281,52 @@ def create_lollipop_plot(gene_name, studies_data):
     
     fig = go.Figure()
     
-    # Add lollipop lines
+    # Add lollipop lines (subtle gray)
     for item in plot_data:
         fig.add_trace(go.Scatter(
             x=[0.5, item['auc']],
             y=[item['study'], item['study']],
             mode='lines',
-            line=dict(color=item['color'], width=2),
+            line=dict(color='#cccccc', width=1.5),
             showlegend=False,
             hoverinfo='skip'
         ))
     
-    # Add dots with direction labels
+    # Add dots with direction symbols
     for item in plot_data:
         fig.add_trace(go.Scatter(
             x=[item['auc']],
             y=[item['study']],
-            mode='markers+text',
-            marker=dict(size=item['size'], color=item['color'], line=dict(width=2, color='white')),
-            text=[item['direction']],
-            textposition='middle right',
-            textfont=dict(size=10, color=item['color']),
-            hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}<br>{item['direction']}",
+            mode='markers',
+            marker=dict(
+                size=item['size'],
+                color='#333333',
+                symbol=item['symbol'],
+                line=dict(width=0)
+            ),
+            hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}<br>Direction: {item['direction']}",
             hoverinfo='text',
             showlegend=False
         ))
     
-    # Add reference lines
-    fig.add_vline(x=0.5, line_dash="dot", line_color="lightgray", line_width=1)
-    fig.add_vline(x=0.7, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.5)
+    # Add reference lines (subtle)
+    fig.add_vline(x=0.5, line_dash="dot", line_color="#dddddd", line_width=1)
+    fig.add_vline(x=0.7, line_dash="dot", line_color="#eeeeee", line_width=0.5)
     
     fig.update_layout(
         title=f"AUROC Across Studies: {gene_name}",
         xaxis_title="AUROC",
-        yaxis_title="Study",
+        yaxis_title="",
         height=250,
         hovermode='closest',
         xaxis=dict(range=[0.45, 1.0]),
         showlegend=False,
-        plot_bgcolor='rgba(240,240,240,0.5)'
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        xaxis_showgrid=True,
+        xaxis_gridwidth=0.5,
+        xaxis_gridcolor='#f0f0f0',
+        yaxis_showgrid=False
     )
     
     return fig
@@ -366,32 +375,32 @@ def create_auc_logfc_scatter(gene_name, studies_data):
                     pass
         
         if auc is not None and lfc is not None:
-            # Determine direction
+            # Determine direction and marker symbol
             if 'direction' in row.index:
                 dir_val = str(row['direction']).lower()
                 if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
-                    direction = '↑ MAFLD'
-                    color = '#1f77b4'
+                    direction = 'MAFLD'
+                    symbol = 'triangle-up'
                 elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
-                    direction = '↓ Healthy'
-                    color = '#ff7f0e'
+                    direction = 'Healthy'
+                    symbol = 'triangle-down'
                 else:
                     direction = 'Neutral'
-                    color = '#808080'
+                    symbol = 'circle'
             else:
                 if lfc > 0:
-                    direction = '↑ MAFLD'
-                    color = '#1f77b4'
+                    direction = 'MAFLD'
+                    symbol = 'triangle-up'
                 else:
-                    direction = '↓ Healthy'
-                    color = '#ff7f0e'
+                    direction = 'Healthy'
+                    symbol = 'triangle-down'
             
             plot_data.append({
                 'study': STUDIES[study_name],
                 'auc': auc,
                 'lfc': lfc,
                 'direction': direction,
-                'color': color
+                'symbol': symbol
             })
     
     if len(plot_data) < 2:
@@ -399,29 +408,26 @@ def create_auc_logfc_scatter(gene_name, studies_data):
     
     fig = go.Figure()
     
-    # Add quadrant background
-    fig.add_shape(type="rect", x0=0.5, y0=0, x1=1.0, y1=max([d['lfc'] for d in plot_data])*1.1,
-                  fillcolor="blue", opacity=0.05, layer="below", line_width=0)
-    fig.add_shape(type="rect", x0=0.5, y0=min([d['lfc'] for d in plot_data])*1.1, x1=1.0, y1=0,
-                  fillcolor="orange", opacity=0.05, layer="below", line_width=0)
-    
-    # Add points
+    # Add points with direction symbols
     for item in plot_data:
         fig.add_trace(go.Scatter(
             x=[item['auc']],
             y=[item['lfc']],
-            mode='markers+text',
-            marker=dict(size=12, color=item['color'], line=dict(width=2, color='white')),
-            text=[item['study'].split('\n')[0][:10]],  # Short label
-            textposition='top center',
-            hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}",
+            mode='markers',
+            marker=dict(
+                size=10,
+                color='#333333',
+                symbol=item['symbol'],
+                line=dict(width=0)
+            ),
+            hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}<br>Direction: {item['direction']}",
             hoverinfo='text',
             showlegend=False
         ))
     
-    # Add reference lines
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, opacity=0.5)
-    fig.add_vline(x=0.5, line_dash="dash", line_color="gray", line_width=1, opacity=0.5)
+    # Add reference lines only (no quadrant backgrounds)
+    fig.add_hline(y=0, line_dash="dash", line_color="#dddddd", line_width=1)
+    fig.add_vline(x=0.5, line_dash="dash", line_color="#dddddd", line_width=1)
     
     fig.update_layout(
         title="Concordance: AUC vs logFC",
@@ -431,7 +437,14 @@ def create_auc_logfc_scatter(gene_name, studies_data):
         hovermode='closest',
         xaxis=dict(range=[0.45, 1.0]),
         showlegend=False,
-        plot_bgcolor='rgba(240,240,240,0.5)'
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        xaxis_showgrid=True,
+        xaxis_gridwidth=0.5,
+        xaxis_gridcolor='#f0f0f0',
+        yaxis_showgrid=True,
+        yaxis_gridwidth=0.5,
+        yaxis_gridcolor='#f0f0f0'
     )
     
     return fig
