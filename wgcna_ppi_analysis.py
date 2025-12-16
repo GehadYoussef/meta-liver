@@ -72,15 +72,29 @@ def load_wgcna_module_data():
     """
     data_dir = find_data_dir()
     if data_dir is None:
-        return {}
+        # Try current directory as fallback
+        if Path("wgcna").exists():
+            data_dir = Path(".")
+        elif Path("../meta-liver-data/wgcna").exists():
+            data_dir = Path("../meta-liver-data")
+        else:
+            return {}
     
     wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
-        return {}
+        # Try direct path
+        if Path("wgcna").exists():
+            wgcna_dir = Path("wgcna")
+        else:
+            return {}
     
     modules_dir = find_subfolder(wgcna_dir, "modules")
     if modules_dir is None:
-        return {}
+        # Try direct path
+        if (wgcna_dir / "modules").exists():
+            modules_dir = wgcna_dir / "modules"
+        else:
+            return {}
     
     module_data = {}
     

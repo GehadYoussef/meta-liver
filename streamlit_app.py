@@ -416,6 +416,16 @@ if data_loaded:
         st.sidebar.success(f"✓ Knowledge graph loaded")
     else:
         st.sidebar.warning("⚠ Knowledge graph not available")
+    
+    if wgcna_module_data:
+        st.sidebar.success(f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)")
+    else:
+        st.sidebar.warning("⚠ WGCNA modules not available")
+    
+    if ppi_data:
+        st.sidebar.success(f"✓ PPI networks loaded")
+    else:
+        st.sidebar.warning("⚠ PPI networks not available")
 else:
     st.sidebar.error("✗ Error loading data")
 
