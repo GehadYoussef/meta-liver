@@ -8,8 +8,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pathlib import Path
-from robust_data_loader import load_single_omics_studies, load_kg_data
+from robust_data_loader import load_single_omics_studies, load_kg_data, load_wgcna_expr, load_ppi_data
 from kg_analysis import get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
+from wgcna_ppi_analysis import get_coexpressed_partners, find_ppi_interactors, get_network_stats
 
 # ============================================================================
 # CONFIG
@@ -31,17 +32,21 @@ def load_all_data():
     """Load all data"""
     single_omics = load_single_omics_studies()
     kg_data = load_kg_data()
-    return single_omics, kg_data
+    wgcna_expr = load_wgcna_expr()
+    ppi_data = load_ppi_data()
+    return single_omics, kg_data, wgcna_expr, ppi_data
 
 
 try:
-    single_omics_data, kg_data = load_all_data()
+    single_omics_data, kg_data, wgcna_expr, ppi_data = load_all_data()
     data_loaded = True
 except Exception as e:
     st.error(f"Error loading data: {e}")
     data_loaded = False
     single_omics_data = {}
     kg_data = {}
+    wgcna_expr = pd.DataFrame()
+    ppi_data = {}
 
 # ============================================================================
 # ROBUST GENE MATCHING
@@ -446,8 +451,8 @@ else:
         if consistency is None:
             st.warning(f"Gene '{search_query}' not found in any study")
         else:
-            # Create two main tabs
-            tab_omics, tab_kg = st.tabs(["Single-Omics Evidence", "MAFLD Knowledge Graph"])
+            # Create three main tabs
+            tab_omics, tab_kg, tab_coexpr = st.tabs(["Single-Omics Evidence", "MAFLD Knowledge Graph", "Co-expression and PPI Networks"])
             
             # ================================================================
             # TAB 1: SINGLE-OMICS EVIDENCE
@@ -570,6 +575,64 @@ else:
                         st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
                 else:
                     st.warning("⚠ Knowledge graph data not loaded")
+            
+            # ================================================================
+            # TAB 3: CO-EXPRESSION AND PPI NETWORKS
+            # ================================================================
+            
+            with tab_coexpr:
+                st.markdown("""
+                This tab summarises the gene's systems-level context from WGCNA module membership 
+                and protein–protein interaction (PPI) networks. We report the WGCNA module assignment 
+                (and key module statistics where available) and highlight the most strongly co-expressed 
+                partners to indicate shared regulation. We then place the gene in the PPI network to show 
+                direct interactors and local network properties, supporting prioritisation of plausible 
+                mechanisms and helping to distinguish co-expression structure from physical interaction evidence.
+                """)
+                
+                st.markdown("---")
+                
+                # WGCNA Section
+                st.markdown("**WGCNA Co-expression Module**")
+                
+                if not wgcna_expr.empty:
+                    # Get co-expressed partners
+                    coexpr_df = get_coexpressed_partners(search_query, wgcna_expr, top_n=15)
+                    
+                    if coexpr_df is not None:
+                        st.markdown(f"Top co-expressed partners with {search_query}:")
+                        st.dataframe(coexpr_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"⚠ '{search_query}' not found in WGCNA expression matrix")
+                else:
+                    st.info("⚠ WGCNA expression data not available")
+                
+                st.markdown("---")
+                
+                # PPI Section
+                st.markdown("**Protein-Protein Interaction Network**")
+                
+                if ppi_data:
+                    # Get PPI interactors
+                    ppi_df = find_ppi_interactors(search_query, ppi_data)
+                    
+                    if ppi_df is not None:
+                        # Get network stats
+                        net_stats = get_network_stats(search_query, ppi_data)
+                        
+                        if net_stats:
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("Direct Interactors", net_stats['degree'])
+                            with col2:
+                                st.write(f"**Network Property:** {net_stats['description']}")
+                        
+                        st.markdown(f"Direct interaction partners of {search_query}:")
+                        st.dataframe(ppi_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info(f"⚠ '{search_query}' not found in PPI networks")
+                else:
+                    st.info("⚠ PPI network data not available")
 
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Two-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph</p></div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | Co-expression and PPI Networks</p></div>", unsafe_allow_html=True)
