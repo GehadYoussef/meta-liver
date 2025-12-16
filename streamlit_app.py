@@ -19,11 +19,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Define the 3 studies
+# Define the 4 studies
 STUDIES = {
     'GSE212837_Human_snRNAseq': 'GSE212837 (Human snRNA)',
     'GSE189600_Human_snRNAseq': 'GSE189600 (Human snRNA)',
     'GSE166504_Mouse_scRNAseq': 'GSE166504 (Mouse scRNA)',
+    'GSE210501_Mouse_scRNAseq': 'GSE210501 (Mouse scRNA)',
 }
 
 # ============================================================================
@@ -128,7 +129,7 @@ def compute_consistency_score(gene_name, studies_data):
         
         # Get logFC
         lfc = None
-        for col in ['avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
+        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
             if col in row.index:
                 try:
                     lfc = float(row[col])
@@ -141,7 +142,17 @@ def compute_consistency_score(gene_name, studies_data):
         
         if lfc is not None:
             lfc_values.append(lfc)
-            directions.append(np.sign(lfc))
+            # Use direction column if available, otherwise use sign of lfc
+            if 'direction' in row.index:
+                dir_val = str(row['direction']).lower()
+                if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
+                    directions.append(1)
+                elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
+                    directions.append(-1)
+                else:
+                    directions.append(np.sign(lfc))
+            else:
+                directions.append(np.sign(lfc))
     
     if not auc_values:
         return None
@@ -181,11 +192,11 @@ def compute_consistency_score(gene_name, studies_data):
     }
 
 # ============================================================================
-# FOREST PLOT
+# LOLLIPOP PLOT
 # ============================================================================
 
-def create_forest_plot(gene_name, studies_data):
-    """Create forest plot"""
+def create_lollipop_plot(gene_name, studies_data):
+    """Create horizontal lollipop plot with direction cues"""
     
     plot_data = []
     
@@ -215,7 +226,7 @@ def create_forest_plot(gene_name, studies_data):
                     pass
         
         lfc = None
-        for col in ['avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
+        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
             if col in row.index:
                 try:
                     lfc = float(row[col])
@@ -224,45 +235,203 @@ def create_forest_plot(gene_name, studies_data):
                     pass
         
         if auc is not None:
+            # Determine direction
+            if 'direction' in row.index:
+                dir_val = str(row['direction']).lower()
+                if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
+                    direction = '↑ MAFLD'
+                    color = '#1f77b4'
+                elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
+                    direction = '↓ Healthy'
+                    color = '#ff7f0e'
+                else:
+                    direction = 'Neutral'
+                    color = '#808080'
+            else:
+                if lfc and lfc > 0:
+                    direction = '↑ MAFLD'
+                    color = '#1f77b4'
+                elif lfc and lfc < 0:
+                    direction = '↓ Healthy'
+                    color = '#ff7f0e'
+                else:
+                    direction = 'Neutral'
+                    color = '#808080'
+            
+            # Dot size based on logFC magnitude (subtle)
+            size = 12 + abs(lfc if lfc else 0) * 2
+            size = min(size, 20)  # Cap at 20
+            
             plot_data.append({
                 'study': STUDIES[study_name],
                 'auc': auc,
                 'lfc': lfc if lfc else 0,
-                'direction': '↑ MAFLD' if (lfc and lfc > 0) else ('↓ Healthy' if (lfc and lfc < 0) else 'Neutral')
+                'direction': direction,
+                'color': color,
+                'size': size
             })
     
     if not plot_data:
         return None
     
+    # Sort by AUC for better visualization
+    plot_data = sorted(plot_data, key=lambda x: x['auc'])
+    
     fig = go.Figure()
     
+    # Add lollipop lines
     for item in plot_data:
-        color = '#1f77b4' if item['lfc'] > 0 else '#ff7f0e' if item['lfc'] < 0 else '#808080'
-        
+        fig.add_trace(go.Scatter(
+            x=[0.5, item['auc']],
+            y=[item['study'], item['study']],
+            mode='lines',
+            line=dict(color=item['color'], width=2),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+    
+    # Add dots with direction labels
+    for item in plot_data:
         fig.add_trace(go.Scatter(
             x=[item['auc']],
             y=[item['study']],
-            mode='markers',
-            marker=dict(size=15, color=color),
-            text=f"AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}<br>{item['direction']}",
-            hovertemplate='<b>%{y}</b><br>%{text}<extra></extra>',
+            mode='markers+text',
+            marker=dict(size=item['size'], color=item['color'], line=dict(width=2, color='white')),
+            text=[item['direction']],
+            textposition='middle right',
+            textfont=dict(size=10, color=item['color']),
+            hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}<br>{item['direction']}",
+            hoverinfo='text',
             showlegend=False
         ))
     
-    median_auc = np.median([d['auc'] for d in plot_data])
-    fig.add_vline(x=median_auc, line_dash="dash", line_color="red", 
-                  annotation_text=f"Median: {median_auc:.3f}")
-    fig.add_vline(x=0.5, line_dash="dot", line_color="gray", 
-                  annotation_text="Random (0.5)")
+    # Add reference lines
+    fig.add_vline(x=0.5, line_dash="dot", line_color="lightgray", line_width=1)
+    fig.add_vline(x=0.7, line_dash="dot", line_color="lightgray", line_width=1, opacity=0.5)
     
     fig.update_layout(
-        title=f"AUC Forest Plot: {gene_name}",
-        xaxis_title="AUC (Discrimination Ability)",
+        title=f"AUROC Across Studies: {gene_name}",
+        xaxis_title="AUROC",
         yaxis_title="Study",
+        height=250,
+        hovermode='closest',
+        xaxis=dict(range=[0.45, 1.0]),
+        showlegend=False,
+        plot_bgcolor='rgba(240,240,240,0.5)'
+    )
+    
+    return fig
+
+# ============================================================================
+# AUC vs logFC SCATTER
+# ============================================================================
+
+def create_auc_logfc_scatter(gene_name, studies_data):
+    """Create AUC vs logFC scatter plot showing concordance"""
+    
+    plot_data = []
+    
+    for study_name, df in studies_data.items():
+        if study_name not in STUDIES:
+            continue
+        
+        if 'Gene' in df.columns:
+            gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
+        elif 'gene' in df.columns:
+            gene_match = df[df['gene'].str.contains(gene_name, case=False, na=False)]
+        else:
+            continue
+        
+        if gene_match.empty:
+            continue
+        
+        row = gene_match.iloc[0]
+        
+        auc = None
+        for col in ['AUC', 'auc', 'AUC_score']:
+            if col in row.index:
+                try:
+                    auc = float(row[col])
+                    break
+                except:
+                    pass
+        
+        lfc = None
+        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
+            if col in row.index:
+                try:
+                    lfc = float(row[col])
+                    break
+                except:
+                    pass
+        
+        if auc is not None and lfc is not None:
+            # Determine direction
+            if 'direction' in row.index:
+                dir_val = str(row['direction']).lower()
+                if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
+                    direction = '↑ MAFLD'
+                    color = '#1f77b4'
+                elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
+                    direction = '↓ Healthy'
+                    color = '#ff7f0e'
+                else:
+                    direction = 'Neutral'
+                    color = '#808080'
+            else:
+                if lfc > 0:
+                    direction = '↑ MAFLD'
+                    color = '#1f77b4'
+                else:
+                    direction = '↓ Healthy'
+                    color = '#ff7f0e'
+            
+            plot_data.append({
+                'study': STUDIES[study_name],
+                'auc': auc,
+                'lfc': lfc,
+                'direction': direction,
+                'color': color
+            })
+    
+    if len(plot_data) < 2:
+        return None
+    
+    fig = go.Figure()
+    
+    # Add quadrant background
+    fig.add_shape(type="rect", x0=0.5, y0=0, x1=1.0, y1=max([d['lfc'] for d in plot_data])*1.1,
+                  fillcolor="blue", opacity=0.05, layer="below", line_width=0)
+    fig.add_shape(type="rect", x0=0.5, y0=min([d['lfc'] for d in plot_data])*1.1, x1=1.0, y1=0,
+                  fillcolor="orange", opacity=0.05, layer="below", line_width=0)
+    
+    # Add points
+    for item in plot_data:
+        fig.add_trace(go.Scatter(
+            x=[item['auc']],
+            y=[item['lfc']],
+            mode='markers+text',
+            marker=dict(size=12, color=item['color'], line=dict(width=2, color='white')),
+            text=[item['study'].split('\n')[0][:10]],  # Short label
+            textposition='top center',
+            hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}",
+            hoverinfo='text',
+            showlegend=False
+        ))
+    
+    # Add reference lines
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", line_width=1, opacity=0.5)
+    fig.add_vline(x=0.5, line_dash="dash", line_color="gray", line_width=1, opacity=0.5)
+    
+    fig.update_layout(
+        title="Concordance: AUC vs logFC",
+        xaxis_title="AUROC",
+        yaxis_title="logFC (MAFLD vs Healthy)",
         height=300,
         hovermode='closest',
-        xaxis=dict(range=[0.4, 1.0]),
-        showlegend=False
+        xaxis=dict(range=[0.45, 1.0]),
+        showlegend=False,
+        plot_bgcolor='rgba(240,240,240,0.5)'
     )
     
     return fig
@@ -302,7 +471,7 @@ def create_results_table(gene_name, studies_data):
                     pass
         
         lfc = None
-        for col in ['avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
+        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
             if col in row.index:
                 try:
                     lfc = float(row[col])
@@ -310,7 +479,17 @@ def create_results_table(gene_name, studies_data):
                 except:
                     pass
         
-        direction = "↑ MAFLD" if (lfc and lfc > 0) else ("↓ Healthy" if (lfc and lfc < 0) else "Unknown")
+        # Determine direction
+        if 'direction' in row.index:
+            dir_val = str(row['direction']).lower()
+            if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
+                direction = '↑ MAFLD'
+            elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
+                direction = '↓ Healthy'
+            else:
+                direction = 'Unknown'
+        else:
+            direction = "↑ MAFLD" if (lfc and lfc > 0) else ("↓ Healthy" if (lfc and lfc < 0) else "Unknown")
         
         results.append({
             'Study': STUDIES[study_name],
@@ -348,7 +527,7 @@ if not search_query:
     
     Search for a gene to see:
     - **Consistency Score** - How consistent is the signal?
-    - **Forest Plot** - AUC across 3 studies
+    - **Forest Plot** - AUC across 4 studies
     - **Results Table** - Detailed metrics
     
     ### Try searching for:
@@ -365,6 +544,7 @@ else:
     
     if not studies_data:
         st.error("No studies data found!")
+        st.info(f"Found {len(studies_data)} studies")
     else:
         consistency = compute_consistency_score(search_query, studies_data)
         
@@ -384,16 +564,24 @@ else:
                 st.metric("AUC Consistency", f"{consistency['auc_consistency']:.1%}")
             
             with col4:
-                st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
+                st.metric("Studies Found", f"{len(consistency['auc_values'])}")
             
             # Interpretation
             st.info(f"✅ **{consistency['interpretation']}**")
             
-            # Forest plot
-            st.markdown("**AUC Across Studies**")
-            fig = create_forest_plot(search_query, studies_data)
+            # Lollipop plot
+            st.markdown("**AUROC Across Studies**")
+            fig = create_lollipop_plot(search_query, studies_data)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
+            
+            # AUC vs logFC scatter
+            st.markdown("**Concordance: AUC vs logFC**")
+            fig_scatter = create_auc_logfc_scatter(search_query, studies_data)
+            if fig_scatter:
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.info("Not enough data for concordance plot")
             
             # Results table
             st.markdown("**Detailed Results**")
@@ -401,5 +589,5 @@ else:
             if results_df is not None:
                 st.dataframe(results_df, use_container_width=True, hide_index=True)
 
-st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver v4</p></div>", unsafe_allow_html=True)
+    st.markdown("---")
+st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver v4 - Lollipop plot + Concordance scatter</p></div>", unsafe_allow_html=True)
