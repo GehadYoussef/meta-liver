@@ -1,11 +1,12 @@
 """
 WGCNA and PPI Network Analysis Module
-Properly handles WGCNA folder structure including modules subfolder
+Loads module-specific gene mapping files from wgcna/modules/ folder
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import re
 
 
 def find_data_dir():
@@ -65,8 +66,9 @@ def find_file(directory: Path, filename_pattern: str):
 
 def load_wgcna_module_data():
     """
-    Load WGCNA module data from wgcna/modules subfolder.
-    Looks for files like: geneModuleMembership.csv, moduleEigenvectors.csv, etc.
+    Load all WGCNA module data from wgcna/modules/ subfolder.
+    Looks for Nodes-gene-id-mapping-{module}.csv files for each module.
+    Returns dict with module names as keys and gene dataframes as values.
     """
     data_dir = find_data_dir()
     if data_dir is None:
@@ -82,47 +84,23 @@ def load_wgcna_module_data():
     
     module_data = {}
     
-    # Load gene-module membership
-    for filename in ["geneModuleMembership.csv", "geneModuleMembership.parquet", 
-                     "gene_module_membership.csv", "gene_module_membership.parquet"]:
-        file_path = find_file(modules_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    module_data['membership'] = pd.read_parquet(file_path)
-                else:
-                    module_data['membership'] = pd.read_csv(file_path, index_col=0)
-                break
-            except Exception as e:
-                pass
-    
-    # Load module eigenvectors
-    for filename in ["moduleEigenvectors.csv", "moduleEigenvectors.parquet",
-                     "module_eigenvectors.csv", "module_eigenvectors.parquet"]:
-        file_path = find_file(modules_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    module_data['eigenvectors'] = pd.read_parquet(file_path)
-                else:
-                    module_data['eigenvectors'] = pd.read_csv(file_path, index_col=0)
-                break
-            except Exception as e:
-                pass
-    
-    # Load module trait correlations
-    for filename in ["moduleTraitCor.csv", "moduleTraitCor.parquet",
-                     "module_trait_cor.csv", "module_trait_cor.parquet"]:
-        file_path = find_file(modules_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    module_data['trait_cor'] = pd.read_parquet(file_path)
-                else:
-                    module_data['trait_cor'] = pd.read_csv(file_path, index_col=0)
-                break
-            except Exception as e:
-                pass
+    # Find all Nodes-gene-id-mapping-*.csv files
+    for file_path in modules_dir.glob("Nodes-gene-id-mapping-*.csv"):
+        try:
+            # Extract module name from filename
+            # e.g., "Nodes-gene-id-mapping-tan.csv" -> "tan"
+            match = re.search(r'Nodes-gene-id-mapping-(.+)\.csv', file_path.name)
+            if match:
+                module_name = match.group(1)
+                
+                # Load the gene mapping file
+                df = pd.read_csv(file_path)
+                
+                # Ensure we have the expected columns
+                if 'hgnc_symbol' in df.columns and 'module' in df.columns:
+                    module_data[module_name] = df
+        except Exception as e:
+            pass
     
     return module_data
 
@@ -130,40 +108,28 @@ def load_wgcna_module_data():
 def get_gene_module(gene_name, module_data):
     """
     Find which WGCNA module a gene belongs to.
-    Returns module name and membership data.
+    Returns module name and gene info.
     """
     
-    if not module_data or 'membership' not in module_data:
+    if not module_data:
         return None
     
-    membership_df = module_data['membership']
-    
-    # Try exact match first (case-insensitive)
     gene_lower = gene_name.lower()
     
-    if isinstance(membership_df.index, pd.Index):
-        matching = [idx for idx in membership_df.index if str(idx).lower() == gene_lower]
-        if matching:
-            gene_idx = matching[0]
-            row = membership_df.loc[gene_idx]
-            
-            # Find module column (usually first column or named 'Module', 'module', etc.)
-            module_col = None
-            for col in membership_df.columns:
-                if 'module' in col.lower():
-                    module_col = col
-                    break
-            
-            if module_col is None and len(membership_df.columns) > 0:
-                module_col = membership_df.columns[0]
-            
-            if module_col:
-                return {
-                    'gene': gene_idx,
-                    'module': row[module_col],
-                    'membership_score': float(row[module_col]) if pd.api.types.is_numeric_dtype(row[module_col]) else None,
-                    'data': row
-                }
+    # Search through all modules
+    for module_name, gene_df in module_data.items():
+        if gene_df.empty or 'hgnc_symbol' not in gene_df.columns:
+            continue
+        
+        # Try exact match (case-insensitive)
+        matching = gene_df[gene_df['hgnc_symbol'].str.lower() == gene_lower]
+        
+        if not matching.empty:
+            return {
+                'gene': gene_name,
+                'module': module_name,
+                'data': matching.iloc[0]
+            }
     
     return None
 
@@ -174,37 +140,35 @@ def get_module_genes(module_name, module_data):
     Returns dataframe of genes in the module.
     """
     
-    if not module_data or 'membership' not in module_data:
+    if not module_data or module_name not in module_data:
         return None
     
-    membership_df = module_data['membership']
+    gene_df = module_data[module_name]
     
-    # Find module column
-    module_col = None
-    for col in membership_df.columns:
-        if 'module' in col.lower():
-            module_col = col
-            break
-    
-    if module_col is None and len(membership_df.columns) > 0:
-        module_col = membership_df.columns[0]
-    
-    if module_col is None:
+    if gene_df.empty:
         return None
     
-    # Filter to genes in this module
-    module_mask = membership_df[module_col].astype(str).str.lower() == str(module_name).lower()
-    genes_in_module = membership_df[module_mask]
+    # Return the dataframe with relevant columns
+    if 'hgnc_symbol' in gene_df.columns:
+        display_cols = ['hgnc_symbol']
+        if 'ensembl_gene_id' in gene_df.columns:
+            display_cols.append('ensembl_gene_id')
+        
+        result = gene_df[display_cols].copy()
+        result.columns = ['Gene', 'Ensembl ID'] if len(display_cols) > 1 else ['Gene']
+        return result
     
-    if genes_in_module.empty:
-        return None
+    return gene_df
+
+
+def get_all_modules(module_data):
+    """
+    Get list of all available modules.
+    """
+    if not module_data:
+        return []
     
-    # Return top genes by membership score if available
-    if len(genes_in_module.columns) > 1:
-        # Sort by second column (usually membership score)
-        genes_in_module = genes_in_module.sort_values(genes_in_module.columns[1], ascending=False)
-    
-    return genes_in_module.head(20)
+    return sorted(module_data.keys())
 
 
 def get_coexpressed_partners(gene_name, expr_df, top_n=15):
