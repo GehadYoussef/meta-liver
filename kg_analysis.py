@@ -1,6 +1,6 @@
 """
 Knowledge Graph Analysis Module
-Analyzes gene position in MASH subgraph without edge information
+Analyzes gene position in MASH subgraph
 """
 
 import pandas as pd
@@ -60,32 +60,31 @@ def get_gene_kg_info(gene_name, kg_data):
     return info
 
 
-def get_cluster_nodes(cluster_id, kg_data, top_n=10):
-    """Get top nodes in the same cluster"""
+def get_cluster_genes(cluster_id, kg_data):
+    """Get all genes/proteins in cluster, sorted by PageRank"""
     
     if 'nodes' not in kg_data:
         return None
     
     nodes_df = kg_data['nodes']
     
-    # Filter to cluster
-    cluster_nodes = nodes_df[nodes_df['Cluster'] == cluster_id].copy()
+    # Filter to cluster and genes/proteins
+    genes = nodes_df[
+        (nodes_df['Cluster'] == cluster_id) &
+        (nodes_df['Type'].str.contains('gene|protein', case=False, na=False))
+    ].copy()
     
-    if cluster_nodes.empty:
+    if genes.empty:
         return None
     
     # Sort by PageRank (descending)
-    cluster_nodes = cluster_nodes.sort_values('PageRank Score', ascending=False)
-    
-    # Get top N
-    top_nodes = cluster_nodes.head(top_n)
+    genes = genes.sort_values('PageRank Score', ascending=False)
     
     # Format for display
     results = []
-    for _, row in top_nodes.iterrows():
+    for _, row in genes.iterrows():
         results.append({
             'Name': row['Name'],
-            'Type': row.get('Type', 'Unknown'),
             'PageRank': f"{float(row['PageRank Score']):.4f}",
             'Betweenness': f"{float(row['Betweenness Score']):.4f}",
             'Eigen': f"{float(row['Eigen Score']):.4f}"
@@ -94,29 +93,67 @@ def get_cluster_nodes(cluster_id, kg_data, top_n=10):
     return pd.DataFrame(results)
 
 
-def get_top_drugs(kg_data, top_n=10):
-    """Get top drugs in the subgraph by PageRank"""
+def get_cluster_drugs(cluster_id, kg_data):
+    """Get all drugs in cluster, sorted by PageRank"""
     
-    if 'drugs' not in kg_data:
+    if 'nodes' not in kg_data:
         return None
     
-    drugs_df = kg_data['drugs'].copy()
+    nodes_df = kg_data['nodes']
+    
+    # Filter to cluster and drugs
+    drugs = nodes_df[
+        (nodes_df['Cluster'] == cluster_id) &
+        (nodes_df['Type'].str.lower() == 'drug')
+    ].copy()
+    
+    if drugs.empty:
+        return None
     
     # Sort by PageRank (descending)
-    drugs_df = drugs_df.sort_values('PageRank Score', ascending=False)
-    
-    # Get top N
-    top_drugs = drugs_df.head(top_n)
+    drugs = drugs.sort_values('PageRank Score', ascending=False)
     
     # Format for display
     results = []
-    for _, row in top_drugs.iterrows():
+    for _, row in drugs.iterrows():
         results.append({
-            'Drug': row['Name'],
+            'Name': row['Name'],
             'PageRank': f"{float(row['PageRank Score']):.4f}",
             'Betweenness': f"{float(row['Betweenness Score']):.4f}",
-            'Eigen': f"{float(row['Eigen Score']):.4f}",
-            'Cluster': row.get('Cluster', 'Unknown')
+            'Eigen': f"{float(row['Eigen Score']):.4f}"
+        })
+    
+    return pd.DataFrame(results)
+
+
+def get_cluster_diseases(cluster_id, kg_data):
+    """Get all diseases in cluster, sorted by PageRank"""
+    
+    if 'nodes' not in kg_data:
+        return None
+    
+    nodes_df = kg_data['nodes']
+    
+    # Filter to cluster and diseases
+    diseases = nodes_df[
+        (nodes_df['Cluster'] == cluster_id) &
+        (nodes_df['Type'].str.lower() == 'disease')
+    ].copy()
+    
+    if diseases.empty:
+        return None
+    
+    # Sort by PageRank (descending)
+    diseases = diseases.sort_values('PageRank Score', ascending=False)
+    
+    # Format for display
+    results = []
+    for _, row in diseases.iterrows():
+        results.append({
+            'Name': row['Name'],
+            'PageRank': f"{float(row['PageRank Score']):.4f}",
+            'Betweenness': f"{float(row['Betweenness Score']):.4f}",
+            'Eigen': f"{float(row['Eigen Score']):.4f}"
         })
     
     return pd.DataFrame(results)
@@ -124,9 +161,6 @@ def get_top_drugs(kg_data, top_n=10):
 
 def interpret_centrality(pagerank, betweenness, eigen):
     """Interpret centrality scores"""
-    
-    # Normalize scores to 0-1 range for interpretation
-    # (assuming they're already normalized or we use relative ranking)
     
     interpretations = []
     
