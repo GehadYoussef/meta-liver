@@ -145,26 +145,24 @@ def compute_consistency_score(gene_name, studies_data):
     if found_count == 0:
         return None
     
-    # Calculate consistency metrics
+    # AUROC Consistency: How stable are the AUC values?
     auc_consistency = 1 - (np.std(auc_values) / np.mean(auc_values)) if len(auc_values) > 1 else 1.0
     auc_consistency = max(0, min(1, auc_consistency))
     
+    # Direction Consistency: How often is the direction the same?
     direction_agreement = max(directions.count('MAFLD'), directions.count('Healthy')) / len(directions) if directions else 0
     
-    overall_score = (auc_consistency * 0.6 + direction_agreement * 0.4)
-    
-    # Interpretation
-    if overall_score > 0.8:
-        interpretation = "Highly consistent signal across studies"
-    elif overall_score > 0.6:
-        interpretation = "Moderately consistent signal"
-    elif overall_score > 0.4:
-        interpretation = "Weakly consistent signal"
+    # Conditional interpretation based on both dimensions
+    if auc_consistency > 0.7 and direction_agreement > 0.7:
+        interpretation = "Highly consistent: stable AUROC, consistent direction"
+    elif auc_consistency > 0.7 and direction_agreement <= 0.7:
+        interpretation = "Stable AUROC, mixed direction"
+    elif auc_consistency <= 0.7 and direction_agreement > 0.7:
+        interpretation = "Variable AUROC, consistent direction"
     else:
-        interpretation = "Inconsistent signal across studies"
+        interpretation = "Variable AUROC, mixed direction"
     
     return {
-        'score': overall_score,
         'auc_values': auc_values,
         'auc_median': np.median(auc_values) if auc_values else 0,
         'auc_consistency': auc_consistency,
@@ -467,23 +465,23 @@ else:
                 
                 st.markdown("---")
                 
-                # Metrics
+                # Metrics: Separate AUROC and Direction Consistency
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    st.metric("Consistency Score", f"{consistency['score']:.2f}")
+                    st.metric("AUROC Consistency", f"{consistency['auc_consistency']:.1%}")
                 
                 with col2:
-                    st.metric("Median AUC", f"{consistency['auc_median']:.3f}")
+                    st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
                 
                 with col3:
-                    st.metric("AUC Consistency", f"{consistency['auc_consistency']:.1%}")
+                    st.metric("Median AUC", f"{consistency['auc_median']:.3f}")
                 
                 with col4:
                     st.metric("Studies Found", f"{consistency['found_count']}")
                 
-                # Interpretation
-                st.info(f"✅ **{consistency['interpretation']}**")
+                # Conditional Interpretation
+                st.info(f"📊 **{consistency['interpretation']}**")
                 
                 # Lollipop plot
                 st.markdown("**AUROC Across Studies**")
