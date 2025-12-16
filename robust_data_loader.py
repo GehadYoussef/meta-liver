@@ -12,11 +12,11 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ============================================================================
-# AUTO-DETECT DATA DIRECTORY
+# AUTO-DETECT DATA DIRECTORY (RUNTIME)
 # ============================================================================
 
 def find_data_dir() -> Optional[Path]:
-    """Auto-detect data directory (case-insensitive)"""
+    """Auto-detect data directory (case-insensitive) - computed at runtime"""
     
     # Try common locations
     possible_dirs = [
@@ -24,6 +24,8 @@ def find_data_dir() -> Optional[Path]:
         Path("meta_liver_data"),
         Path("data"),
         Path("../meta-liver-data"),
+        Path.home() / "meta-liver-data",
+        Path.home() / "meta_liver_data",
     ]
     
     for dir_path in possible_dirs:
@@ -74,15 +76,14 @@ def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
 # CACHED DATA LOADERS
 # ============================================================================
 
-DATA_DIR = find_data_dir()
-
 @st.cache_data
 def load_wgcna_expr() -> pd.DataFrame:
     """Load WGCNA expression matrix"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return pd.DataFrame()
     
-    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
     
@@ -103,10 +104,11 @@ def load_wgcna_expr() -> pd.DataFrame:
 @st.cache_data
 def load_wgcna_mes() -> pd.DataFrame:
     """Load WGCNA module eigenvectors"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return pd.DataFrame()
     
-    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
     
@@ -126,10 +128,11 @@ def load_wgcna_mes() -> pd.DataFrame:
 @st.cache_data
 def load_wgcna_mod_trait_cor() -> pd.DataFrame:
     """Load module-trait correlations"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return pd.DataFrame()
     
-    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
     
@@ -149,10 +152,11 @@ def load_wgcna_mod_trait_cor() -> pd.DataFrame:
 @st.cache_data
 def load_wgcna_mod_trait_pval() -> pd.DataFrame:
     """Load module-trait p-values"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return pd.DataFrame()
     
-    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
     
@@ -172,10 +176,11 @@ def load_wgcna_mod_trait_pval() -> pd.DataFrame:
 @st.cache_data
 def load_single_omics_studies() -> Dict[str, pd.DataFrame]:
     """Load all single-omics studies"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return {}
     
-    single_omics_dir = find_subfolder(DATA_DIR, "single_omics")
+    single_omics_dir = find_subfolder(data_dir, "single_omics")
     if single_omics_dir is None:
         return {}
     
@@ -201,10 +206,11 @@ def load_single_omics_studies() -> Dict[str, pd.DataFrame]:
 @st.cache_data
 def load_kg_data() -> Dict[str, pd.DataFrame]:
     """Load all knowledge graph data"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return {}
     
-    kg_dir = find_subfolder(DATA_DIR, "knowledge_graphs")
+    kg_dir = find_subfolder(data_dir, "knowledge_graphs")
     if kg_dir is None:
         return {}
     
@@ -229,10 +235,11 @@ def load_kg_data() -> Dict[str, pd.DataFrame]:
 @st.cache_data
 def load_ppi_data() -> Dict[str, pd.DataFrame]:
     """Load all PPI network data"""
-    if DATA_DIR is None:
+    data_dir = find_data_dir()
+    if data_dir is None:
         return {}
     
-    ppi_dir = find_subfolder(DATA_DIR, "ppi_networks")
+    ppi_dir = find_subfolder(data_dir, "ppi_networks")
     if ppi_dir is None:
         return {}
     
@@ -262,7 +269,7 @@ def check_data_availability() -> Dict[str, bool]:
     """Check what data is available"""
     
     availability = {
-        'data_dir': DATA_DIR is not None,
+        'data_dir': find_data_dir() is not None,
         'wgcna_expr': not load_wgcna_expr().empty,
         'wgcna_mes': not load_wgcna_mes().empty,
         'wgcna_mod_trait_cor': not load_wgcna_mod_trait_cor().empty,

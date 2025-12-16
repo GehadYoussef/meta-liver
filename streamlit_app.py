@@ -1,6 +1,6 @@
 """
 Meta Liver - Interactive Streamlit App for Liver Genomics Analysis
-Auto-detects studies and data, no hardcoding
+Robust gene matching, unified consistency scoring, auto-detected studies
 """
 
 import streamlit as st
@@ -44,56 +44,112 @@ except Exception as e:
     kg_data = {}
 
 # ============================================================================
-# CONSISTENCY SCORING
+# ROBUST GENE MATCHING
+# ============================================================================
+
+def find_gene_in_study(gene_name, study_df):
+    """
+    Find gene in study dataframe with robust matching.
+    Returns (matched_row, gene_col_name) or (None, None) if not found.
+    Exact match preferred over substring match.
+    """
+    
+    # Determine gene column name
+    gene_col = None
+    if 'Gene' in study_df.columns:
+        gene_col = 'Gene'
+    elif 'gene' in study_df.columns:
+        gene_col = 'gene'
+    else:
+        return None, None
+    
+    # Try exact match first (case-insensitive)
+    exact_match = study_df[study_df[gene_col].str.lower() == gene_name.lower()]
+    if not exact_match.empty:
+        return exact_match.iloc[0], gene_col
+    
+    # Fall back to substring match only if no exact match
+    substring_match = study_df[study_df[gene_col].str.contains(gene_name, case=False, na=False)]
+    if not substring_match.empty:
+        return substring_match.iloc[0], gene_col
+    
+    return None, None
+
+
+def extract_metrics_from_row(row):
+    """Extract AUC, logFC, and direction from a row"""
+    
+    auc = None
+    for col in ['AUC', 'auc', 'AUC_score']:
+        if col in row.index:
+            try:
+                auc = float(row[col])
+                break
+            except:
+                pass
+    
+    lfc = None
+    for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
+        if col in row.index:
+            try:
+                lfc = float(row[col])
+                break
+            except:
+                pass
+    
+    # Determine direction (unified logic)
+    direction = None
+    if 'direction' in row.index:
+        dir_val = str(row['direction']).lower()
+        if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
+            direction = 'MAFLD'
+        elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
+            direction = 'Healthy'
+    else:
+        # Infer from logFC if direction column missing
+        if lfc is not None:
+            direction = 'MAFLD' if lfc > 0 else 'Healthy'
+    
+    return auc, lfc, direction
+
+
+# ============================================================================
+# CONSISTENCY SCORING (UNIFIED)
 # ============================================================================
 
 def compute_consistency_score(gene_name, studies_data):
-    """Compute consistency score"""
+    """
+    Compute consistency score with unified direction logic.
+    Direction is determined by explicit 'direction' column OR inferred from logFC.
+    """
     
     auc_values = []
     directions = []
     found_count = 0
     
     for study_name, df in studies_data.items():
-        # Find gene (case-insensitive)
-        if 'Gene' in df.columns:
-            gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
-        elif 'gene' in df.columns:
-            gene_match = df[df['gene'].str.contains(gene_name, case=False, na=False)]
-        else:
-            continue
+        row, gene_col = find_gene_in_study(gene_name, df)
         
-        if gene_match.empty:
+        if row is None:
             continue
         
         found_count += 1
-        row = gene_match.iloc[0]
-        
-        # Extract AUC
-        auc = None
-        for col in ['AUC', 'auc', 'AUC_score']:
-            if col in row.index:
-                try:
-                    auc = float(row[col])
-                    break
-                except:
-                    pass
+        auc, lfc, direction = extract_metrics_from_row(row)
         
         if auc is not None:
             auc_values.append(auc)
         
-        # Extract direction
-        if 'direction' in row.index:
-            directions.append(str(row['direction']).lower())
+        if direction is not None:
+            directions.append(direction)
     
     if found_count == 0:
         return None
     
     # Calculate consistency metrics
-    auc_consistency = 1 - (np.std(auc_values) / np.mean(auc_values)) if auc_values else 0
+    auc_consistency = 1 - (np.std(auc_values) / np.mean(auc_values)) if len(auc_values) > 1 else 1.0
     auc_consistency = max(0, min(1, auc_consistency))
     
-    direction_agreement = max(directions.count('mafld'), directions.count('healthy')) / len(directions) if directions else 0
+    direction_agreement = max(directions.count('MAFLD'), directions.count('Healthy')) / len(directions) if directions else 0
     
     overall_score = (auc_consistency * 0.6 + direction_agreement * 0.4)
     
@@ -127,73 +183,40 @@ def create_lollipop_plot(gene_name, studies_data):
     plot_data = []
     
     for study_name, df in studies_data.items():
+        row, gene_col = find_gene_in_study(gene_name, df)
         
-        if 'Gene' in df.columns:
-            gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
-        elif 'gene' in df.columns:
-            gene_match = df[df['gene'].str.contains(gene_name, case=False, na=False)]
+        if row is None:
+            continue
+        
+        auc, lfc, direction = extract_metrics_from_row(row)
+        
+        if auc is None:
+            continue
+        
+        # Determine marker symbol
+        if direction == 'MAFLD':
+            symbol = 'triangle-up'
+            color = '#2E86AB'
+        elif direction == 'Healthy':
+            symbol = 'triangle-down'
+            color = '#A23B72'
         else:
-            continue
+            symbol = 'circle'
+            color = '#999999'
         
-        if gene_match.empty:
-            continue
+        # Dot size based on logFC magnitude (subtle)
+        size = 10 + abs(lfc if lfc else 0) * 1.5
+        size = min(size, 16)  # Cap at 16
         
-        row = gene_match.iloc[0]
-        
-        auc = None
-        for col in ['AUC', 'auc', 'AUC_score']:
-            if col in row.index:
-                try:
-                    auc = float(row[col])
-                    break
-                except:
-                    pass
-        
-        lfc = None
-        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
-            if col in row.index:
-                try:
-                    lfc = float(row[col])
-                    break
-                except:
-                    pass
-        
-        if auc is not None:
-            # Determine direction and marker symbol
-            if 'direction' in row.index:
-                dir_val = str(row['direction']).lower()
-                if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
-                    direction = 'MAFLD'
-                    symbol = 'triangle-up'
-                elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
-                    direction = 'Healthy'
-                    symbol = 'triangle-down'
-                else:
-                    direction = 'Neutral'
-                    symbol = 'circle'
-            else:
-                if lfc and lfc > 0:
-                    direction = 'MAFLD'
-                    symbol = 'triangle-up'
-                elif lfc and lfc < 0:
-                    direction = 'Healthy'
-                    symbol = 'triangle-down'
-                else:
-                    direction = 'Neutral'
-                    symbol = 'circle'
-            
-            # Dot size based on logFC magnitude (subtle)
-            size = 10 + abs(lfc if lfc else 0) * 1.5
-            size = min(size, 16)  # Cap at 16
-            
-            plot_data.append({
-                'study': study_name,
-                'auc': auc,
-                'lfc': lfc if lfc else 0,
-                'direction': direction,
-                'symbol': symbol,
-                'size': size
-            })
+        plot_data.append({
+            'study': study_name,
+            'auc': auc,
+            'lfc': lfc if lfc else 0,
+            'direction': direction,
+            'symbol': symbol,
+            'color': color,
+            'size': size
+        })
     
     if not plot_data:
         return None
@@ -223,7 +246,7 @@ def create_lollipop_plot(gene_name, studies_data):
             marker=dict(
                 size=item['size'],
                 symbol=item['symbol'],
-                color='#2E86AB' if item['direction'] == 'MAFLD' else '#A23B72' if item['direction'] == 'Healthy' else '#999999',
+                color=item['color'],
                 line=dict(color='white', width=1)
             ),
             hovertext=f"<b>{item['study']}</b><br>AUC: {item['auc']:.3f}<br>logFC: {item['lfc']:.3f}<br>Direction: {item['direction']}",
@@ -263,68 +286,31 @@ def create_auc_logfc_scatter(gene_name, studies_data):
     plot_data = []
     
     for study_name, df in studies_data.items():
+        row, gene_col = find_gene_in_study(gene_name, df)
         
-        if 'Gene' in df.columns:
-            gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
-        elif 'gene' in df.columns:
-            gene_match = df[df['gene'].str.contains(gene_name, case=False, na=False)]
+        if row is None:
+            continue
+        
+        auc, lfc, direction = extract_metrics_from_row(row)
+        
+        if auc is None or lfc is None:
+            continue
+        
+        # Determine marker symbol
+        if direction == 'MAFLD':
+            symbol = 'triangle-up'
+        elif direction == 'Healthy':
+            symbol = 'triangle-down'
         else:
-            continue
+            symbol = 'circle'
         
-        if gene_match.empty:
-            continue
-        
-        row = gene_match.iloc[0]
-        
-        auc = None
-        for col in ['AUC', 'auc', 'AUC_score']:
-            if col in row.index:
-                try:
-                    auc = float(row[col])
-                    break
-                except:
-                    pass
-        
-        lfc = None
-        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
-            if col in row.index:
-                try:
-                    lfc = float(row[col])
-                    break
-                except:
-                    pass
-        
-        if auc is not None and lfc is not None:
-            # Determine direction
-            if 'direction' in row.index:
-                dir_val = str(row['direction']).lower()
-                if 'nash' in dir_val or 'nafld' in dir_val or 'mafld' in dir_val:
-                    direction = 'MAFLD'
-                    symbol = 'triangle-up'
-                elif 'healthy' in dir_val or 'control' in dir_val or 'chow' in dir_val:
-                    direction = 'Healthy'
-                    symbol = 'triangle-down'
-                else:
-                    direction = 'Neutral'
-                    symbol = 'circle'
-            else:
-                if lfc > 0:
-                    direction = 'MAFLD'
-                    symbol = 'triangle-up'
-                elif lfc < 0:
-                    direction = 'Healthy'
-                    symbol = 'triangle-down'
-                else:
-                    direction = 'Neutral'
-                    symbol = 'circle'
-            
-            plot_data.append({
-                'study': study_name,
-                'auc': auc,
-                'lfc': lfc,
-                'direction': direction,
-                'symbol': symbol
-            })
+        plot_data.append({
+            'study': study_name,
+            'auc': auc,
+            'lfc': lfc,
+            'direction': direction,
+            'symbol': symbol
+        })
     
     if len(plot_data) < 2:
         return None
@@ -388,46 +374,18 @@ def create_results_table(gene_name, studies_data):
     results = []
     
     for study_name, df in studies_data.items():
+        row, gene_col = find_gene_in_study(gene_name, df)
         
-        if 'Gene' in df.columns:
-            gene_match = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
-        elif 'gene' in df.columns:
-            gene_match = df[df['gene'].str.contains(gene_name, case=False, na=False)]
-        else:
+        if row is None:
             continue
         
-        if gene_match.empty:
-            continue
-        
-        row = gene_match.iloc[0]
-        
-        auc = None
-        for col in ['AUC', 'auc', 'AUC_score']:
-            if col in row.index:
-                try:
-                    auc = float(row[col])
-                    break
-                except:
-                    pass
-        
-        lfc = None
-        for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
-            if col in row.index:
-                try:
-                    lfc = float(row[col])
-                    break
-                except:
-                    pass
-        
-        direction = "Unknown"
-        if 'direction' in row.index:
-            direction = str(row['direction'])
+        auc, lfc, direction = extract_metrics_from_row(row)
         
         results.append({
             'Study': study_name,
             'AUC': f"{auc:.3f}" if auc else "N/A",
             'logFC': f"{lfc:.3f}" if lfc else "N/A",
-            'Direction': direction
+            'Direction': direction if direction else "Unknown"
         })
     
     if not results:
@@ -585,4 +543,4 @@ else:
                 st.warning("⚠ Knowledge graph data not loaded")
 
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Auto-detecting studies and data</p></div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Robust matching, unified consistency scoring</p></div>", unsafe_allow_html=True)

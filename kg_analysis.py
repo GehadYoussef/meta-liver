@@ -1,6 +1,6 @@
 """
 Knowledge Graph Analysis Module
-Analyzes gene position in MASH subgraph
+Analyzes gene position in MASH subgraph with robust filtering
 """
 
 import pandas as pd
@@ -10,7 +10,16 @@ from pathlib import Path
 
 def find_data_dir():
     """Find data directory"""
-    for path in [Path("meta-liver-data"), Path("meta_liver_data"), Path("data")]:
+    possible_dirs = [
+        Path("meta-liver-data"),
+        Path("meta_liver_data"),
+        Path("data"),
+        Path("../meta-liver-data"),
+        Path.home() / "meta-liver-data",
+        Path.home() / "meta_liver_data",
+    ]
+    
+    for path in possible_dirs:
         if path.exists():
             return path
     return None
@@ -54,59 +63,47 @@ def find_file(directory: Path, filename_pattern: str):
     return None
 
 
-def load_kg_data(data_dir=None):
-    """Load knowledge graph data files"""
-    if data_dir is None:
-        data_dir = find_data_dir()
+def load_kg_data_from_dict(kg_dict):
+    """
+    Convert kg_dict (keyed by filestem) to standard format (keyed by 'nodes', 'drugs')
+    This handles the format returned by robust_data_loader.load_kg_data()
+    """
+    formatted = {}
     
-    if data_dir is None:
-        return {}
+    # Look for nodes dataframe
+    for key in ['MASH_subgraph_nodes', 'mash_subgraph_nodes', 'nodes']:
+        if key in kg_dict:
+            formatted['nodes'] = kg_dict[key]
+            break
     
-    kg_dir = find_subfolder(data_dir, "knowledge_graphs")
-    if kg_dir is None:
-        return {}
+    # Look for drugs dataframe
+    for key in ['MASH_subgraph_drugs', 'mash_subgraph_drugs', 'drugs']:
+        if key in kg_dict:
+            formatted['drugs'] = kg_dict[key]
+            break
     
-    kg_data = {}
-    
-    # Load MASH subgraph nodes
-    for filename in ["MASH_subgraph_nodes.parquet", "MASH_subgraph_nodes.csv"]:
-        file_path = find_file(kg_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    kg_data['nodes'] = pd.read_parquet(file_path)
-                else:
-                    kg_data['nodes'] = pd.read_csv(file_path)
-                break
-            except Exception as e:
-                pass
-    
-    # Load MASH subgraph drugs
-    for filename in ["MASH_subgraph_drugs.parquet", "MASH_subgraph_drugs.csv"]:
-        file_path = find_file(kg_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    kg_data['drugs'] = pd.read_parquet(file_path)
-                else:
-                    kg_data['drugs'] = pd.read_csv(file_path)
-                break
-            except Exception as e:
-                pass
-    
-    return kg_data
+    return formatted
 
 
 def get_gene_kg_info(gene_name, kg_data):
     """Get knowledge graph information for a gene"""
+    
+    # Handle both formats: dict keyed by 'nodes' or dict keyed by filestem
+    if isinstance(kg_data, dict):
+        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
+            kg_data = load_kg_data_from_dict(kg_data)
     
     if 'nodes' not in kg_data:
         return None
     
     nodes_df = kg_data['nodes']
     
-    # Search for gene (case-insensitive)
-    gene_match = nodes_df[nodes_df['Name'].str.contains(gene_name, case=False, na=False)]
+    # Exact match first (case-insensitive)
+    gene_match = nodes_df[nodes_df['Name'].str.lower() == gene_name.lower()]
+    
+    # If no exact match, try substring (but warn about it)
+    if gene_match.empty:
+        gene_match = nodes_df[nodes_df['Name'].str.contains(f"^{gene_name}$", case=False, na=False, regex=True)]
     
     if gene_match.empty:
         return {
@@ -114,6 +111,7 @@ def get_gene_kg_info(gene_name, kg_data):
             'message': f"'{gene_name}' not found in MASH subgraph"
         }
     
+    # If multiple matches, take the first (but this shouldn't happen with exact match)
     gene_row = gene_match.iloc[0]
     
     # Extract metrics
@@ -133,16 +131,27 @@ def get_gene_kg_info(gene_name, kg_data):
 def get_cluster_genes(cluster_id, kg_data):
     """Get all genes/proteins in cluster, sorted by PageRank"""
     
+    # Handle both formats
+    if isinstance(kg_data, dict):
+        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
+            kg_data = load_kg_data_from_dict(kg_data)
+    
     if 'nodes' not in kg_data:
         return None
     
     nodes_df = kg_data['nodes']
     
-    # Filter to cluster and genes/proteins
-    genes = nodes_df[
-        (nodes_df['Cluster'] == cluster_id) &
-        (nodes_df['Type'].str.contains('gene|protein', case=False, na=False))
-    ].copy()
+    # Robust cluster matching (handle string/int mismatch)
+    cluster_id_str = str(cluster_id).lower()
+    
+    # Filter to cluster
+    cluster_mask = nodes_df['Cluster'].astype(str).str.lower() == cluster_id_str
+    genes = nodes_df[cluster_mask].copy()
+    
+    # Filter to genes/proteins (case-insensitive, flexible matching)
+    if 'Type' in genes.columns:
+        type_mask = genes['Type'].astype(str).str.lower().str.contains('gene|protein', na=False)
+        genes = genes[type_mask]
     
     if genes.empty:
         return None
@@ -166,21 +175,36 @@ def get_cluster_genes(cluster_id, kg_data):
 def get_cluster_drugs(cluster_id, kg_data):
     """Get all drugs in cluster, sorted by PageRank"""
     
+    # Handle both formats
+    if isinstance(kg_data, dict):
+        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
+            kg_data = load_kg_data_from_dict(kg_data)
+    
+    drugs = None
+    
     # Try to use dedicated drugs dataframe first
     if 'drugs' in kg_data and not kg_data['drugs'].empty:
-        drugs = kg_data['drugs'][
-            kg_data['drugs']['Cluster'] == cluster_id
-        ].copy()
-    else:
-        # Fall back to filtering nodes table
+        drugs_df = kg_data['drugs']
+        cluster_id_str = str(cluster_id).lower()
+        cluster_mask = drugs_df['Cluster'].astype(str).str.lower() == cluster_id_str
+        drugs = drugs_df[cluster_mask].copy()
+    
+    # Fall back to filtering nodes table
+    if drugs is None or drugs.empty:
         if 'nodes' not in kg_data:
             return None
         
         nodes_df = kg_data['nodes']
-        drugs = nodes_df[
-            (nodes_df['Cluster'] == cluster_id) &
-            (nodes_df['Type'].str.lower() == 'drug')
-        ].copy()
+        cluster_id_str = str(cluster_id).lower()
+        
+        # Filter to cluster
+        cluster_mask = nodes_df['Cluster'].astype(str).str.lower() == cluster_id_str
+        drugs = nodes_df[cluster_mask].copy()
+        
+        # Filter to drugs (case-insensitive, exact match)
+        if 'Type' in drugs.columns:
+            type_mask = drugs['Type'].astype(str).str.lower() == 'drug'
+            drugs = drugs[type_mask]
     
     if drugs.empty:
         return None
@@ -204,16 +228,25 @@ def get_cluster_drugs(cluster_id, kg_data):
 def get_cluster_diseases(cluster_id, kg_data):
     """Get all diseases in cluster, sorted by PageRank"""
     
+    # Handle both formats
+    if isinstance(kg_data, dict):
+        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
+            kg_data = load_kg_data_from_dict(kg_data)
+    
     if 'nodes' not in kg_data:
         return None
     
     nodes_df = kg_data['nodes']
+    cluster_id_str = str(cluster_id).lower()
     
-    # Filter to cluster and diseases
-    diseases = nodes_df[
-        (nodes_df['Cluster'] == cluster_id) &
-        (nodes_df['Type'].str.lower() == 'disease')
-    ].copy()
+    # Filter to cluster
+    cluster_mask = nodes_df['Cluster'].astype(str).str.lower() == cluster_id_str
+    diseases = nodes_df[cluster_mask].copy()
+    
+    # Filter to diseases (case-insensitive, exact match)
+    if 'Type' in diseases.columns:
+        type_mask = diseases['Type'].astype(str).str.lower() == 'disease'
+        diseases = diseases[type_mask]
     
     if diseases.empty:
         return None
