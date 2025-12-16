@@ -311,8 +311,8 @@ def create_lollipop_plot(gene_name, studies_data):
         ))
     
     # Add reference lines (subtle)
-    fig.add_vline(x=0.5, line_dash="dot", line_color="#dddddd", line_width=1)
-    fig.add_vline(x=0.7, line_dash="dot", line_color="#eeeeee", line_width=0.5)
+    fig.add_vline(x=0.5, line_dash="dot", line_color="#999999", line_width=1.5)
+    fig.add_vline(x=0.7, line_dash="dot", line_color="#aaaaaa", line_width=1)
     
     fig.update_layout(
         title=dict(text=f"AUROC Across Studies: {gene_name}", font=dict(size=14, color='#000000')),
@@ -332,7 +332,7 @@ def create_lollipop_plot(gene_name, studies_data):
             showgrid=False
         ),
         showlegend=False,
-        plot_bgcolor='white',
+        plot_bgcolor='#fafafa',
         paper_bgcolor='white'
     )
     
@@ -434,8 +434,8 @@ def create_auc_logfc_scatter(gene_name, studies_data):
         ))
     
     # Add reference lines only (no quadrant backgrounds)
-    fig.add_hline(y=0, line_dash="dash", line_color="#dddddd", line_width=1)
-    fig.add_vline(x=0.5, line_dash="dash", line_color="#dddddd", line_width=1)
+    fig.add_hline(y=0, line_dash="dash", line_color="#999999", line_width=1.5)
+    fig.add_vline(x=0.5, line_dash="dash", line_color="#999999", line_width=1.5)
     
     fig.update_layout(
         title=dict(text="Concordance: AUC vs logFC", font=dict(size=14, color='#000000')),
@@ -457,7 +457,7 @@ def create_auc_logfc_scatter(gene_name, studies_data):
             gridcolor='#f0f0f0'
         ),
         showlegend=False,
-        plot_bgcolor='white',
+        plot_bgcolor='#fafafa',
         paper_bgcolor='white'
     )
     
@@ -542,6 +542,20 @@ search_query = st.sidebar.text_input(
     "🔍 Search Gene",
     placeholder="e.g., SAA1, TP53, IL6...",
 )
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Data Status**")
+
+# Load studies
+studies_data = load_studies()
+
+if studies_data:
+    st.sidebar.success(f"✓ {len(studies_data)} studies loaded")
+    with st.sidebar.expander("📊 Studies:"):
+        for study_name in sorted(studies_data.keys()):
+            st.write(f"• {study_name}")
+else:
+    st.sidebar.error("✗ No studies found")
 
 st.sidebar.markdown("---")
 
