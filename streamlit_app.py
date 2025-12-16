@@ -1,6 +1,6 @@
 """
 Meta Liver - Interactive Streamlit App for Liver Genomics Analysis
-Robust gene matching, unified consistency scoring, auto-detected studies
+Two-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph
 """
 
 import streamlit as st
@@ -448,99 +448,130 @@ else:
         if consistency is None:
             st.warning(f"Gene '{search_query}' not found in any study")
         else:
-            # Metrics
-            col1, col2, col3, col4 = st.columns(4)
+            # Create two main tabs
+            tab_omics, tab_kg = st.tabs(["Single-Omics Evidence", "MAFLD Knowledge Graph"])
             
-            with col1:
-                st.metric("Consistency Score", f"{consistency['score']:.2f}")
+            # ================================================================
+            # TAB 1: SINGLE-OMICS EVIDENCE
+            # ================================================================
             
-            with col2:
-                st.metric("Median AUC", f"{consistency['auc_median']:.3f}")
-            
-            with col3:
-                st.metric("AUC Consistency", f"{consistency['auc_consistency']:.1%}")
-            
-            with col4:
-                st.metric("Studies Found", f"{consistency['found_count']}")
-            
-            # Interpretation
-            st.info(f"✅ **{consistency['interpretation']}**")
-            
-            # Lollipop plot
-            st.markdown("**AUROC Across Studies**")
-            fig = create_lollipop_plot(search_query, single_omics_data)
-            if fig:
-                st.plotly_chart(fig, use_container_width=True)
-            
-            # AUC vs logFC scatter
-            st.markdown("**Concordance: AUC vs logFC**")
-            fig_scatter = create_auc_logfc_scatter(search_query, single_omics_data)
-            if fig_scatter:
-                st.plotly_chart(fig_scatter, use_container_width=True)
-            else:
-                st.info("Not enough data for concordance plot")
-            
-            # Results table
-            st.markdown("**Detailed Results**")
-            results_df = create_results_table(search_query, single_omics_data)
-            if results_df is not None:
-                st.dataframe(results_df, use_container_width=True, hide_index=True)
-            
-            # Knowledge Graph Section
-            st.markdown("---")
-            st.markdown("**Knowledge Graph Context**")
-            
-            if kg_data:
-                kg_info = get_gene_kg_info(search_query, kg_data)
+            with tab_omics:
+                st.markdown("""
+                This tab summarises gene-level evidence across the single-omics data sets. 
+                For the selected gene, we report study-specific AUROC values and differential expression 
+                direction (logFC), together with an overall consistency score reflecting how reproducibly 
+                the signal is observed across cohorts. Visualisations highlight between-study agreement 
+                and potential outliers, and the detailed table provides the underlying per-study statistics 
+                used in downstream interpretation.
+                """)
                 
-                if kg_info and kg_info['found']:
-                    # Gene's position in subgraph
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Cluster", kg_info['cluster'])
-                    with col2:
-                        st.metric("PageRank", f"{kg_info['pagerank']:.4f}")
-                    with col3:
-                        st.metric("Betweenness", f"{kg_info['betweenness']:.4f}")
-                    
-                    # Interpretation
-                    interpretation = interpret_centrality(
-                        kg_info['pagerank'],
-                        kg_info['betweenness'],
-                        kg_info['eigen']
-                    )
-                    st.info(f"📍 {interpretation}")
-                    
-                    # Nodes in same cluster - three tabs
-                    st.markdown("**Nodes in Cluster**")
-                    
-                    tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
-                    
-                    with tab_genes:
-                        genes_df = get_cluster_genes(kg_info['cluster'], kg_data)
-                        if genes_df is not None:
-                            st.dataframe(genes_df, use_container_width=True, hide_index=True)
-                        else:
-                            st.write("No genes/proteins in this cluster")
-                    
-                    with tab_drugs:
-                        drugs_df = get_cluster_drugs(kg_info['cluster'], kg_data)
-                        if drugs_df is not None:
-                            st.dataframe(drugs_df, use_container_width=True, hide_index=True)
-                        else:
-                            st.write("No drugs in this cluster")
-                    
-                    with tab_diseases:
-                        diseases_df = get_cluster_diseases(kg_info['cluster'], kg_data)
-                        if diseases_df is not None:
-                            st.dataframe(diseases_df, use_container_width=True, hide_index=True)
-                        else:
-                            st.write("No diseases in this cluster")
+                st.markdown("---")
+                
+                # Metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Consistency Score", f"{consistency['score']:.2f}")
+                
+                with col2:
+                    st.metric("Median AUC", f"{consistency['auc_median']:.3f}")
+                
+                with col3:
+                    st.metric("AUC Consistency", f"{consistency['auc_consistency']:.1%}")
+                
+                with col4:
+                    st.metric("Studies Found", f"{consistency['found_count']}")
+                
+                # Interpretation
+                st.info(f"✅ **{consistency['interpretation']}**")
+                
+                # Lollipop plot
+                st.markdown("**AUROC Across Studies**")
+                fig = create_lollipop_plot(search_query, single_omics_data)
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # AUC vs logFC scatter
+                st.markdown("**Concordance: AUC vs logFC**")
+                fig_scatter = create_auc_logfc_scatter(search_query, single_omics_data)
+                if fig_scatter:
+                    st.plotly_chart(fig_scatter, use_container_width=True)
                 else:
-                    st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
-            else:
-                st.warning("⚠ Knowledge graph data not loaded")
+                    st.info("Not enough data for concordance plot")
+                
+                # Results table
+                st.markdown("**Detailed Results**")
+                results_df = create_results_table(search_query, single_omics_data)
+                if results_df is not None:
+                    st.dataframe(results_df, use_container_width=True, hide_index=True)
+            
+            # ================================================================
+            # TAB 2: MAFLD KNOWLEDGE GRAPH
+            # ================================================================
+            
+            with tab_kg:
+                st.markdown("""
+                This tab places the selected gene in its network context within the MAFLD MASH subgraph. 
+                We report whether the gene is present in the subgraph, its assigned cluster, and centrality 
+                metrics (PageRank, betweenness, eigenvector) to indicate whether it behaves as a hub or a 
+                peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations, 
+                enabling rapid hypothesis generation about mechanistic neighbours and therapeutically relevant 
+                connections.
+                """)
+                
+                st.markdown("---")
+                
+                if kg_data:
+                    kg_info = get_gene_kg_info(search_query, kg_data)
+                    
+                    if kg_info and kg_info['found']:
+                        # Gene's position in subgraph
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Cluster", kg_info['cluster'])
+                        with col2:
+                            st.metric("PageRank", f"{kg_info['pagerank']:.4f}")
+                        with col3:
+                            st.metric("Betweenness", f"{kg_info['betweenness']:.4f}")
+                        
+                        # Interpretation
+                        interpretation = interpret_centrality(
+                            kg_info['pagerank'],
+                            kg_info['betweenness'],
+                            kg_info['eigen']
+                        )
+                        st.info(f"📍 {interpretation}")
+                        
+                        # Nodes in same cluster - three tabs
+                        st.markdown("**Nodes in Cluster**")
+                        
+                        tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
+                        
+                        with tab_genes:
+                            genes_df = get_cluster_genes(kg_info['cluster'], kg_data)
+                            if genes_df is not None:
+                                st.dataframe(genes_df, use_container_width=True, hide_index=True)
+                            else:
+                                st.write("No genes/proteins in this cluster")
+                        
+                        with tab_drugs:
+                            drugs_df = get_cluster_drugs(kg_info['cluster'], kg_data)
+                            if drugs_df is not None:
+                                st.dataframe(drugs_df, use_container_width=True, hide_index=True)
+                            else:
+                                st.write("No drugs in this cluster")
+                        
+                        with tab_diseases:
+                            diseases_df = get_cluster_diseases(kg_info['cluster'], kg_data)
+                            if diseases_df is not None:
+                                st.dataframe(diseases_df, use_container_width=True, hide_index=True)
+                            else:
+                                st.write("No diseases in this cluster")
+                    else:
+                        st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
+                else:
+                    st.warning("⚠ Knowledge graph data not loaded")
 
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Robust matching, unified consistency scoring</p></div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Two-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph</p></div>", unsafe_allow_html=True)
