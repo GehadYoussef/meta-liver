@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pathlib import Path
+from kg_analysis import load_kg_data, get_gene_kg_info, get_cluster_nodes, get_top_drugs, interpret_centrality
 
 # ============================================================================
 # CONFIG
@@ -557,6 +558,15 @@ if studies_data:
 else:
     st.sidebar.error("✗ No studies found")
 
+# Load knowledge graph data
+data_dir = find_data_dir()
+kg_data = load_kg_data(data_dir) if data_dir else {}
+
+if kg_data:
+    st.sidebar.success(f"✓ Knowledge graph loaded")
+else:
+    st.sidebar.warning("⚠ Knowledge graph not available")
+
 st.sidebar.markdown("---")
 
 if not search_query:
@@ -629,6 +639,52 @@ else:
             results_df = create_results_table(search_query, studies_data)
             if results_df is not None:
                 st.dataframe(results_df, use_container_width=True, hide_index=True)
+            
+            # Knowledge Graph Section
+            st.markdown("---")
+            st.markdown("**Knowledge Graph Context**")
+            
+            if kg_data:
+                kg_info = get_gene_kg_info(search_query, kg_data)
+                
+                if kg_info and kg_info['found']:
+                    # Gene's position in subgraph
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Cluster", kg_info['cluster'])
+                    with col2:
+                        st.metric("PageRank", f"{kg_info['pagerank']:.4f}")
+                    with col3:
+                        st.metric("Betweenness", f"{kg_info['betweenness']:.4f}")
+                    
+                    # Interpretation
+                    interpretation = interpret_centrality(
+                        kg_info['pagerank'],
+                        kg_info['betweenness'],
+                        kg_info['eigen']
+                    )
+                    st.info(f"📍 {interpretation}")
+                    
+                    # Top nodes in same cluster
+                    st.markdown("**Top Nodes in Cluster**")
+                    cluster_nodes = get_cluster_nodes(kg_info['cluster'], kg_data, top_n=10)
+                    if cluster_nodes is not None:
+                        st.dataframe(cluster_nodes, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("No other nodes in this cluster")
+                else:
+                    st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
+                
+                # Top drugs in subgraph
+                st.markdown("**Top Drugs in MASH Subgraph**")
+                top_drugs = get_top_drugs(kg_data, top_n=10)
+                if top_drugs is not None:
+                    st.dataframe(top_drugs, use_container_width=True, hide_index=True)
+                else:
+                    st.write("No drug data available")
+            else:
+                st.warning("⚠ Knowledge graph data not loaded")
 
     st.markdown("---")
 st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver v4 - Lollipop plot + Concordance scatter</p></div>", unsafe_allow_html=True)
