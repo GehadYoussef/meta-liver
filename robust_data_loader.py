@@ -82,13 +82,13 @@ def load_wgcna_expr() -> pd.DataFrame:
     if DATA_DIR is None:
         return pd.DataFrame()
     
-    wcgna_dir = find_subfolder(DATA_DIR, "wcgna")
-    if wcgna_dir is None:
+    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    if wgcna_dir is None:
         return pd.DataFrame()
     
     # Try different filenames
     for filename in ["datExpr_processed.parquet", "datExpr_processed.csv"]:
-        file_path = find_file(wcgna_dir, filename)
+        file_path = find_file(wgcna_dir, filename)
         if file_path:
             try:
                 if file_path.suffix == '.parquet':
@@ -106,12 +106,12 @@ def load_wgcna_mes() -> pd.DataFrame:
     if DATA_DIR is None:
         return pd.DataFrame()
     
-    wcgna_dir = find_subfolder(DATA_DIR, "wcgna")
-    if wcgna_dir is None:
+    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    if wgcna_dir is None:
         return pd.DataFrame()
     
     for filename in ["MEs_processed.parquet", "MEs_processed.csv"]:
-        file_path = find_file(wcgna_dir, filename)
+        file_path = find_file(wgcna_dir, filename)
         if file_path:
             try:
                 if file_path.suffix == '.parquet':
@@ -129,12 +129,12 @@ def load_wgcna_mod_trait_cor() -> pd.DataFrame:
     if DATA_DIR is None:
         return pd.DataFrame()
     
-    wcgna_dir = find_subfolder(DATA_DIR, "wcgna")
-    if wcgna_dir is None:
+    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    if wgcna_dir is None:
         return pd.DataFrame()
     
     for filename in ["moduleTraitCor.parquet", "moduleTraitCor.csv"]:
-        file_path = find_file(wcgna_dir, filename)
+        file_path = find_file(wgcna_dir, filename)
         if file_path:
             try:
                 if file_path.suffix == '.parquet':
@@ -152,12 +152,12 @@ def load_wgcna_mod_trait_pval() -> pd.DataFrame:
     if DATA_DIR is None:
         return pd.DataFrame()
     
-    wcgna_dir = find_subfolder(DATA_DIR, "wcgna")
-    if wcgna_dir is None:
+    wgcna_dir = find_subfolder(DATA_DIR, "wgcna")
+    if wgcna_dir is None:
         return pd.DataFrame()
     
     for filename in ["moduleTraitPvalue.parquet", "moduleTraitPvalue.csv"]:
-        file_path = find_file(wcgna_dir, filename)
+        file_path = find_file(wgcna_dir, filename)
         if file_path:
             try:
                 if file_path.suffix == '.parquet':

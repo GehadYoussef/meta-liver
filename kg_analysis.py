@@ -8,21 +8,91 @@ import numpy as np
 from pathlib import Path
 
 
-def load_kg_data(data_dir):
+def find_data_dir():
+    """Find data directory"""
+    for path in [Path("meta-liver-data"), Path("meta_liver_data"), Path("data")]:
+        if path.exists():
+            return path
+    return None
+
+
+def find_subfolder(parent: Path, folder_pattern: str):
+    """Find subfolder (case-insensitive)"""
+    if not parent.exists():
+        return None
+    
+    # Try exact match
+    exact_path = parent / folder_pattern
+    if exact_path.exists():
+        return exact_path
+    
+    # Try case-insensitive
+    for item in parent.iterdir():
+        if item.is_dir() and item.name.lower() == folder_pattern.lower():
+            return item
+    
+    return None
+
+
+def find_file(directory: Path, filename_pattern: str):
+    """Find file in directory (case-insensitive)"""
+    if not directory.exists():
+        return None
+    
+    # Try exact match first
+    exact_path = directory / filename_pattern
+    if exact_path.exists():
+        return exact_path
+    
+    # Try case-insensitive search
+    for file in directory.rglob("*"):
+        if file.name.lower() == filename_pattern.lower():
+            return file
+        if filename_pattern.lower() in file.name.lower():
+            return file
+    
+    return None
+
+
+def load_kg_data(data_dir=None):
     """Load knowledge graph data files"""
-    kg_dir = data_dir / "knowledge_graphs"
+    if data_dir is None:
+        data_dir = find_data_dir()
+    
+    if data_dir is None:
+        return {}
+    
+    kg_dir = find_subfolder(data_dir, "knowledge_graphs")
+    if kg_dir is None:
+        return {}
     
     kg_data = {}
     
     # Load MASH subgraph nodes
-    nodes_file = kg_dir / "MASH_subgraph_nodes.parquet"
-    if nodes_file.exists():
-        kg_data['nodes'] = pd.read_parquet(nodes_file)
+    for filename in ["MASH_subgraph_nodes.parquet", "MASH_subgraph_nodes.csv"]:
+        file_path = find_file(kg_dir, filename)
+        if file_path:
+            try:
+                if file_path.suffix == '.parquet':
+                    kg_data['nodes'] = pd.read_parquet(file_path)
+                else:
+                    kg_data['nodes'] = pd.read_csv(file_path)
+                break
+            except Exception as e:
+                pass
     
     # Load MASH subgraph drugs
-    drugs_file = kg_dir / "MASH_subgraph_drugs.parquet"
-    if drugs_file.exists():
-        kg_data['drugs'] = pd.read_parquet(drugs_file)
+    for filename in ["MASH_subgraph_drugs.parquet", "MASH_subgraph_drugs.csv"]:
+        file_path = find_file(kg_dir, filename)
+        if file_path:
+            try:
+                if file_path.suffix == '.parquet':
+                    kg_data['drugs'] = pd.read_parquet(file_path)
+                else:
+                    kg_data['drugs'] = pd.read_csv(file_path)
+                break
+            except Exception as e:
+                pass
     
     return kg_data
 
@@ -96,16 +166,21 @@ def get_cluster_genes(cluster_id, kg_data):
 def get_cluster_drugs(cluster_id, kg_data):
     """Get all drugs in cluster, sorted by PageRank"""
     
-    if 'nodes' not in kg_data:
-        return None
-    
-    nodes_df = kg_data['nodes']
-    
-    # Filter to cluster and drugs
-    drugs = nodes_df[
-        (nodes_df['Cluster'] == cluster_id) &
-        (nodes_df['Type'].str.lower() == 'drug')
-    ].copy()
+    # Try to use dedicated drugs dataframe first
+    if 'drugs' in kg_data and not kg_data['drugs'].empty:
+        drugs = kg_data['drugs'][
+            kg_data['drugs']['Cluster'] == cluster_id
+        ].copy()
+    else:
+        # Fall back to filtering nodes table
+        if 'nodes' not in kg_data:
+            return None
+        
+        nodes_df = kg_data['nodes']
+        drugs = nodes_df[
+            (nodes_df['Cluster'] == cluster_id) &
+            (nodes_df['Type'].str.lower() == 'drug')
+        ].copy()
     
     if drugs.empty:
         return None
