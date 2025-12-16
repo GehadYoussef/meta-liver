@@ -8,9 +8,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from pathlib import Path
-from robust_data_loader import load_single_omics_studies, load_kg_data, load_wgcna_expr, load_ppi_data
+from robust_data_loader import load_single_omics_studies, load_kg_data, load_ppi_data
 from kg_analysis import get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
-from wgcna_ppi_analysis import get_coexpressed_partners, find_ppi_interactors, get_network_stats
+from wgcna_ppi_analysis import load_wgcna_module_data, get_gene_module, get_module_genes, get_coexpressed_partners, find_ppi_interactors, get_network_stats
 
 # ============================================================================
 # CONFIG
@@ -32,20 +32,20 @@ def load_all_data():
     """Load all data"""
     single_omics = load_single_omics_studies()
     kg_data = load_kg_data()
-    wgcna_expr = load_wgcna_expr()
+    wgcna_module_data = load_wgcna_module_data()
     ppi_data = load_ppi_data()
-    return single_omics, kg_data, wgcna_expr, ppi_data
+    return single_omics, kg_data, wgcna_module_data, ppi_data
 
 
 try:
-    single_omics_data, kg_data, wgcna_expr, ppi_data = load_all_data()
+    single_omics_data, kg_data, wgcna_module_data, ppi_data = load_all_data()
     data_loaded = True
 except Exception as e:
     st.error(f"Error loading data: {e}")
     data_loaded = False
     single_omics_data = {}
     kg_data = {}
-    wgcna_expr = pd.DataFrame()
+    wgcna_module_data = {}
     ppi_data = {}
 
 # ============================================================================
@@ -595,17 +595,25 @@ else:
                 # WGCNA Section
                 st.markdown("**WGCNA Co-expression Module**")
                 
-                if not wgcna_expr.empty:
-                    # Get co-expressed partners
-                    coexpr_df = get_coexpressed_partners(search_query, wgcna_expr, top_n=15)
+                if wgcna_module_data:
+                    # Get gene's module assignment
+                    gene_module_info = get_gene_module(search_query, wgcna_module_data)
                     
-                    if coexpr_df is not None:
-                        st.markdown(f"Top co-expressed partners with {search_query}:")
-                        st.dataframe(coexpr_df, use_container_width=True, hide_index=True)
+                    if gene_module_info:
+                        st.markdown(f"**Module Assignment:** {gene_module_info['module']}")
+                        
+                        # Get other genes in the same module
+                        module_genes = get_module_genes(gene_module_info['module'], wgcna_module_data)
+                        
+                        if module_genes is not None:
+                            st.markdown(f"Top genes in module {gene_module_info['module']}:")
+                            st.dataframe(module_genes.head(15), use_container_width=True)
+                        else:
+                            st.info(f"No other genes found in module {gene_module_info['module']}")
                     else:
-                        st.info(f"⚠ '{search_query}' not found in WGCNA expression matrix")
+                        st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
                 else:
-                    st.info("⚠ WGCNA expression data not available")
+                    st.info("⚠ WGCNA module data not available")
                 
                 st.markdown("---")
                 
