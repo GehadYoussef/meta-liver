@@ -67,56 +67,62 @@ def find_file(directory: Path, filename_pattern: str):
 
 def load_wgcna_module_data():
     """
-    Load all WGCNA module data from wgcna/modules/ subfolder.
-    Recursively searches for Nodes-gene-id-mapping-{module}.csv files.
+    Load all WGCNA module data by recursively searching for Nodes-gene-id-mapping files.
+    Uses the same data-dir detection as other loaders for consistency.
+    Flexible about column names (hgnc_symbol, symbol, gene, etc.).
     Returns dict with module names as keys and gene dataframes as values.
     """
     
-    # Try to find modules directory - check repo root first
-    # Pick the FIRST directory that exists AND contains mapping files
-    possible_dirs = [
-        Path("wgcna/modules"),           # Repo root (most likely)
-        Path("./wgcna/modules"),         # Current dir
-        Path("../wgcna/modules"),        # Parent dir
-        Path("meta-liver-data/wgcna/modules"),
-        Path("meta_liver_data/wgcna/modules"),
-        Path("data/wgcna/modules"),
-    ]
-    
-    modules_dir = None
-    for p in possible_dirs:
-        if p.exists():
-            # Check if this directory actually contains mapping files (recursively)
-            mapping_files = list(p.rglob("Nodes-gene-id-mapping-*.csv"))
-            if mapping_files:
-                modules_dir = p
-                print(f"DEBUG: Found WGCNA modules at {p} with {len(mapping_files)} mapping files", file=sys.stderr)
-                break
-    
-    if modules_dir is None:
-        print(f"DEBUG: No WGCNA modules found. Checked: {[str(p) for p in possible_dirs]}", file=sys.stderr)
-        return {}
-    
     module_data = {}
     
-    # Recursively find all Nodes-gene-id-mapping-*.csv files
-    for file_path in modules_dir.rglob("Nodes-gene-id-mapping-*.csv"):
-        try:
-            # Extract module name from filename
-            # e.g., "Nodes-gene-id-mapping-tan.csv" -> "tan"
-            match = re.search(r'Nodes-gene-id-mapping-(.+)\.csv', file_path.name)
-            if match:
+    # Search recursively from current directory and common data locations
+    search_roots = [
+        Path("."),  # Current directory (repo root on Streamlit Cloud)
+        find_data_dir() or Path("."),  # Use same data-dir as other loaders
+    ]
+    
+    for root in search_roots:
+        if not root.exists():
+            continue
+        
+        # Recursively search for Nodes-gene-id-mapping files
+        for file_path in root.rglob("Nodes-gene-id-mapping-*.csv"):
+            try:
+                # Extract module name from filename
+                match = re.search(r'Nodes-gene-id-mapping-(.+)\.csv', file_path.name)
+                if not match:
+                    continue
+                
                 module_name = match.group(1)
+                
+                # Skip if already loaded
+                if module_name in module_data:
+                    continue
                 
                 # Load the gene mapping file
                 df = pd.read_csv(file_path)
                 
-                # Ensure we have the expected columns
-                if 'hgnc_symbol' in df.columns and 'module' in df.columns:
-                    module_data[module_name] = df
-                    print(f"DEBUG: Loaded module {module_name} from {file_path}", file=sys.stderr)
-        except Exception as e:
-            print(f"DEBUG: Error loading {file_path}: {e}", file=sys.stderr)
+                # Find gene symbol column (flexible naming)
+                gene_col = None
+                for col in df.columns:
+                    if col.lower() in ['hgnc_symbol', 'symbol', 'gene', 'gene_symbol', 'hgnc']:
+                        gene_col = col
+                        break
+                
+                if gene_col is None:
+                    continue
+                
+                # Store the dataframe
+                module_data[module_name] = df
+                print(f"DEBUG: Loaded WGCNA module {module_name} from {file_path}", file=sys.stderr)
+                
+            except Exception as e:
+                print(f"DEBUG: Error loading {file_path}: {e}", file=sys.stderr)
+    
+    if module_data:
+        print(f"DEBUG: Successfully loaded {len(module_data)} WGCNA modules", file=sys.stderr)
+    else:
+        print(f"DEBUG: No WGCNA modules found after recursive search", file=sys.stderr)
     
     return module_data
 
