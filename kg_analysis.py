@@ -86,7 +86,7 @@ def load_kg_data_from_dict(kg_dict):
 
 
 def get_gene_kg_info(gene_name, kg_data):
-    """Get knowledge graph information for a gene, including empirical percentile ranks"""
+    """Get knowledge graph information for a gene, including empirical percentile ranks and composite centrality"""
     
     # Handle both formats: dict keyed by 'nodes' or dict keyed by filestem
     if isinstance(kg_data, dict):
@@ -113,6 +113,12 @@ def get_gene_kg_info(gene_name, kg_data):
     
     # If multiple matches, take the first (but this shouldn't happen with exact match)
     gene_row = gene_match.iloc[0]
+    gene_idx = gene_match.index[0]
+    
+    # Get node values as Series for percentile computation
+    pr = nodes_df['PageRank Score']
+    bet = nodes_df['Betweenness Score']
+    eig = nodes_df['Eigen Score']
     
     # Get node values
     pr_val = float(gene_row.get('PageRank Score', 0))
@@ -144,6 +150,28 @@ def get_gene_kg_info(gene_name, kg_data):
     eigen_min = float(nodes_df['Eigen Score'].min()) if 'Eigen Score' in nodes_df.columns else 0
     eigen_max = float(nodes_df['Eigen Score'].max()) if 'Eigen Score' in nodes_df.columns else 0
     
+    # Compute composite centrality using weighted geometric mean of percentiles
+    pr_pct_all = pr.rank(pct=True, method="average") * 100.0
+    bet_pct_all = bet.rank(pct=True, method="average") * 100.0
+    eig_pct_all = eig.rank(pct=True, method="average") * 100.0
+    
+    # Weighted geometric mean (rewards consistency across metrics)
+    EPS = 1e-9
+    w_pr, w_bet, w_eig = 0.5, 0.25, 0.25
+    
+    comp = (
+        (np.maximum(pr_pct_all / 100.0, EPS) ** w_pr) *
+        (np.maximum(bet_pct_all / 100.0, EPS) ** w_bet) *
+        (np.maximum(eig_pct_all / 100.0, EPS) ** w_eig)
+    )
+    
+    # Composite context + the node's composite percentile on whole graph
+    comp_min = float(np.nanmin(comp.values)) if len(comp) else None
+    comp_max = float(np.nanmax(comp.values)) if len(comp) else None
+    comp_pct_all = comp.rank(pct=True, method="average") * 100.0
+    comp_node = float(comp.loc[gene_idx]) if gene_idx in comp.index else None
+    comp_pct_node = float(comp_pct_all.loc[gene_idx]) if gene_idx in comp_pct_all.index else None
+    
     # Extract metrics
     info = {
         'found': True,
@@ -161,7 +189,11 @@ def get_gene_kg_info(gene_name, kg_data):
         'bet_percentile': bet_percentile,
         'eigen_min': eigen_min,
         'eigen_max': eigen_max,
-        'eigen_percentile': eigen_percentile
+        'eigen_percentile': eigen_percentile,
+        'composite': comp_node,
+        'composite_min': comp_min,
+        'composite_max': comp_max,
+        'composite_percentile': comp_pct_node
     }
     
     return info

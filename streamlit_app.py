@@ -553,7 +553,7 @@ else:
                         with col4:
                             st.metric("Eigenvector", f"{kg_info['eigen']:.4f}")
                         with col5:
-                            st.write("")  # Spacer
+                            st.metric("Composite", f"{kg_info['composite']:.6f}")
                         with col6:
                             st.write("")  # Spacer
                         
@@ -561,6 +561,17 @@ else:
                         
                         # Show min/max context for all metrics (whole graph)
                         st.markdown("**Centrality Metrics - Whole Graph Context**")
+                        
+                        # Composite centrality section
+                        st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
+                        st.write(f"Composite score: {kg_info['composite']:.6f}")
+                        st.write(f"Min/Max (whole graph): {kg_info['composite_min']:.6f} – {kg_info['composite_max']:.6f}")
+                        st.write(f"Percentile: {kg_info['composite_percentile']:.1f}%")
+                        st.write("*Weights: PageRank 50%, Betweenness 25%, Eigenvector 25%*")
+                        
+                        st.markdown("---")
+                        
+                        st.markdown("**Individual Metrics - Whole Graph Context**")
                         
                         context_col1, context_col2, context_col3 = st.columns(3)
                         
