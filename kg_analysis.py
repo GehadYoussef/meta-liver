@@ -86,7 +86,7 @@ def load_kg_data_from_dict(kg_dict):
 
 
 def get_gene_kg_info(gene_name, kg_data):
-    """Get knowledge graph information for a gene"""
+    """Get knowledge graph information for a gene, including empirical percentile ranks"""
     
     # Handle both formats: dict keyed by 'nodes' or dict keyed by filestem
     if isinstance(kg_data, dict):
@@ -114,15 +114,54 @@ def get_gene_kg_info(gene_name, kg_data):
     # If multiple matches, take the first (but this shouldn't happen with exact match)
     gene_row = gene_match.iloc[0]
     
+    # Get node values
+    pr_val = float(gene_row.get('PageRank Score', 0))
+    bet_val = float(gene_row.get('Betweenness Score', 0))
+    eigen_val = float(gene_row.get('Eigen Score', 0))
+    
+    # Compute empirical percentile ranks (0-100)
+    # Percentile = (number of values <= this value) / (total values) * 100
+    pr_percentile = 0.0
+    bet_percentile = 0.0
+    eigen_percentile = 0.0
+    
+    if 'PageRank Score' in nodes_df.columns:
+        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100
+    
+    if 'Betweenness Score' in nodes_df.columns:
+        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100
+    
+    if 'Eigen Score' in nodes_df.columns:
+        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100
+    
+    # Get min/max for display
+    pr_min = float(nodes_df['PageRank Score'].min()) if 'PageRank Score' in nodes_df.columns else 0
+    pr_max = float(nodes_df['PageRank Score'].max()) if 'PageRank Score' in nodes_df.columns else 0
+    
+    bet_min = float(nodes_df['Betweenness Score'].min()) if 'Betweenness Score' in nodes_df.columns else 0
+    bet_max = float(nodes_df['Betweenness Score'].max()) if 'Betweenness Score' in nodes_df.columns else 0
+    
+    eigen_min = float(nodes_df['Eigen Score'].min()) if 'Eigen Score' in nodes_df.columns else 0
+    eigen_max = float(nodes_df['Eigen Score'].max()) if 'Eigen Score' in nodes_df.columns else 0
+    
     # Extract metrics
     info = {
         'found': True,
         'name': gene_row['Name'],
         'type': gene_row.get('Type', 'Unknown'),
         'cluster': gene_row.get('Cluster', 'Unknown'),
-        'pagerank': float(gene_row.get('PageRank Score', 0)),
-        'betweenness': float(gene_row.get('Betweenness Score', 0)),
-        'eigen': float(gene_row.get('Eigen Score', 0))
+        'pagerank': pr_val,
+        'betweenness': bet_val,
+        'eigen': eigen_val,
+        'pr_min': pr_min,
+        'pr_max': pr_max,
+        'pr_percentile': pr_percentile,
+        'bet_min': bet_min,
+        'bet_max': bet_max,
+        'bet_percentile': bet_percentile,
+        'eigen_min': eigen_min,
+        'eigen_max': eigen_max,
+        'eigen_percentile': eigen_percentile
     }
     
     return info

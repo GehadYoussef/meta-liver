@@ -566,24 +566,24 @@ else:
                         
                         with context_col1:
                             st.write(f"**PageRank**")
-                            st.write(f"Min: {kg_info.get('pr_min', 0):.4f}")
-                            st.write(f"Max: {kg_info.get('pr_max', 0):.4f}")
+                            st.write(f"Min: {kg_info['pr_min']:.4f}")
+                            st.write(f"Max: {kg_info['pr_max']:.4f}")
                             st.write(f"Your node: {kg_info['pagerank']:.4f}")
-                            st.write(f"Percentile: {kg_info.get('pr_percentile', 0):.1f}%")
+                            st.write(f"Percentile: {kg_info['pr_percentile']:.1f}%")
                         
                         with context_col2:
                             st.write(f"**Betweenness**")
-                            st.write(f"Min: {kg_info.get('bet_min', 0):.4f}")
-                            st.write(f"Max: {kg_info.get('bet_max', 0):.4f}")
+                            st.write(f"Min: {kg_info['bet_min']:.4f}")
+                            st.write(f"Max: {kg_info['bet_max']:.4f}")
                             st.write(f"Your node: {kg_info['betweenness']:.4f}")
-                            st.write(f"Percentile: {kg_info.get('bet_percentile', 0):.1f}%")
+                            st.write(f"Percentile: {kg_info['bet_percentile']:.1f}%")
                         
                         with context_col3:
                             st.write(f"**Eigenvector**")
-                            st.write(f"Min: {kg_info.get('eigen_min', 0):.4f}")
-                            st.write(f"Max: {kg_info.get('eigen_max', 0):.4f}")
+                            st.write(f"Min: {kg_info['eigen_min']:.4f}")
+                            st.write(f"Max: {kg_info['eigen_max']:.4f}")
                             st.write(f"Your node: {kg_info['eigen']:.4f}")
-                            st.write(f"Percentile: {kg_info.get('eigen_percentile', 0):.1f}%")
+                            st.write(f"Percentile: {kg_info['eigen_percentile']:.1f}%")
                         
                         st.markdown("---")
                         
