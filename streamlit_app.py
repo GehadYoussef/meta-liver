@@ -27,8 +27,6 @@ st.set_page_config(
 # DATA LOADING
 # ============================================================================
 
-# Cache clearing for debugging
-# Users can clear cache if data doesn't load properly
 @st.cache_data
 def load_all_data():
     """Load all data"""

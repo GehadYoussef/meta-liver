@@ -67,8 +67,8 @@ def find_file(directory: Path, filename_pattern: str):
 
 def load_wgcna_module_data():
     """
-    Load per-module gene mapping files from <data_dir>/wgcna/modules/.
-    Accept flexible filenames (.csv and .parquet) and flexible gene-symbol column names.
+    Load per-module gene mapping files from <data_dir>/wcgna/modules/.
+    Accept .parquet and .csv files with flexible gene-symbol column names.
     """
     module_data = {}
 
@@ -77,12 +77,13 @@ def load_wgcna_module_data():
         print("DEBUG: data_dir not found", file=sys.stderr)
         return {}
 
-    wgcna_dir = find_subfolder(data_dir, "wgcna")
-    if wgcna_dir is None:
-        print(f"DEBUG: wgcna folder not found under {data_dir}", file=sys.stderr)
+    # Look for wcgna folder (note: wcgna, not wgcna)
+    wcgna_dir = find_subfolder(data_dir, "wcgna")
+    if wcgna_dir is None:
+        print(f"DEBUG: wcgna folder not found under {data_dir}", file=sys.stderr)
         return {}
 
-    modules_dir = wgcna_dir / "modules"
+    modules_dir = wcgna_dir / "modules"
     if not modules_dir.exists():
         print(f"DEBUG: modules folder not found: {modules_dir}", file=sys.stderr)
         return {}
@@ -147,21 +148,31 @@ def load_wgcna_module_data():
 
 
 def get_gene_module(gene_name, module_data):
+    """
+    Find which WGCNA module a gene belongs to.
+    Returns module name and gene info.
+    """
+    
     if not module_data:
         return None
-
-    gene_upper = str(gene_name).strip().upper()
-
+    
+    gene_lower = gene_name.lower()
+    
+    # Search through all modules
     for module_name, gene_df in module_data.items():
-        if gene_df.empty or "hgnc_symbol" not in gene_df.columns:
+        if gene_df.empty or 'hgnc_symbol' not in gene_df.columns:
             continue
-
-        sym = gene_df["hgnc_symbol"].astype(str).str.strip().str.upper()
-        matching = gene_df[sym == gene_upper]
-
+        
+        # Try exact match (case-insensitive)
+        matching = gene_df[gene_df['hgnc_symbol'].str.lower() == gene_lower]
+        
         if not matching.empty:
-            return {"gene": gene_name, "module": module_name, "data": matching.iloc[0]}
-
+            return {
+                'gene': gene_name,
+                'module': module_name,
+                'data': matching.iloc[0]
+            }
+    
     return None
 
 
