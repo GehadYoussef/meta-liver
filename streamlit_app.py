@@ -484,7 +484,7 @@ else:
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    st.metric("AUROC Consistency", f"{consistency['auc_consistency']:.1%}")
+                    st.metric("Evidence Score", f"{consistency['evidence_score']:.1%}")
                 
                 with col2:
                     st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
