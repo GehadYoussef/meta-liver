@@ -68,14 +68,12 @@ def find_file(directory: Path, filename_pattern: str):
 def load_wgcna_module_data():
     """
     Load all WGCNA module data from wgcna/modules/ subfolder.
-    Looks for Nodes-gene-id-mapping-{module}.csv files for each module.
+    Recursively searches for Nodes-gene-id-mapping-{module}.csv files.
     Returns dict with module names as keys and gene dataframes as values.
     """
     
     # Try to find modules directory - check repo root first
-    modules_dir = None
-    
-    # Check in order of likelihood
+    # Pick the FIRST directory that exists AND contains mapping files
     possible_dirs = [
         Path("wgcna/modules"),           # Repo root (most likely)
         Path("./wgcna/modules"),         # Current dir
@@ -85,11 +83,15 @@ def load_wgcna_module_data():
         Path("data/wgcna/modules"),
     ]
     
+    modules_dir = None
     for p in possible_dirs:
         if p.exists():
-            modules_dir = p
-            print(f"DEBUG: Found WGCNA modules at {p}", file=sys.stderr)
-            break
+            # Check if this directory actually contains mapping files (recursively)
+            mapping_files = list(p.rglob("Nodes-gene-id-mapping-*.csv"))
+            if mapping_files:
+                modules_dir = p
+                print(f"DEBUG: Found WGCNA modules at {p} with {len(mapping_files)} mapping files", file=sys.stderr)
+                break
     
     if modules_dir is None:
         print(f"DEBUG: No WGCNA modules found. Checked: {[str(p) for p in possible_dirs]}", file=sys.stderr)
@@ -97,8 +99,8 @@ def load_wgcna_module_data():
     
     module_data = {}
     
-    # Find all Nodes-gene-id-mapping-*.csv files
-    for file_path in modules_dir.glob("Nodes-gene-id-mapping-*.csv"):
+    # Recursively find all Nodes-gene-id-mapping-*.csv files
+    for file_path in modules_dir.rglob("Nodes-gene-id-mapping-*.csv"):
         try:
             # Extract module name from filename
             # e.g., "Nodes-gene-id-mapping-tan.csv" -> "tan"
@@ -112,8 +114,9 @@ def load_wgcna_module_data():
                 # Ensure we have the expected columns
                 if 'hgnc_symbol' in df.columns and 'module' in df.columns:
                     module_data[module_name] = df
+                    print(f"DEBUG: Loaded module {module_name} from {file_path}", file=sys.stderr)
         except Exception as e:
-            pass
+            print(f"DEBUG: Error loading {file_path}: {e}", file=sys.stderr)
     
     return module_data
 
