@@ -168,7 +168,7 @@ def get_gene_kg_info(gene_name, kg_data):
 
 
 def get_cluster_genes(cluster_id, kg_data):
-    """Get all genes/proteins in cluster, sorted by PageRank"""
+    """Get all genes/proteins in cluster, sorted by PageRank, with percentiles"""
     
     # Handle both formats
     if isinstance(kg_data, dict):
@@ -198,21 +198,33 @@ def get_cluster_genes(cluster_id, kg_data):
     # Sort by PageRank (descending)
     genes = genes.sort_values('PageRank Score', ascending=False)
     
-    # Format for display
+    # Format for display with percentiles
     results = []
     for _, row in genes.iterrows():
+        pr_val = float(row['PageRank Score'])
+        bet_val = float(row['Betweenness Score'])
+        eigen_val = float(row['Eigen Score'])
+        
+        # Compute percentiles
+        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100
+        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100
+        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100
+        
         results.append({
             'Name': row['Name'],
-            'PageRank': f"{float(row['PageRank Score']):.4f}",
-            'Betweenness': f"{float(row['Betweenness Score']):.4f}",
-            'Eigen': f"{float(row['Eigen Score']):.4f}"
+            'PageRank': f"{pr_val:.4f}",
+            'PR %ile': f"{pr_percentile:.1f}%",
+            'Betweenness': f"{bet_val:.4f}",
+            'Bet %ile': f"{bet_percentile:.1f}%",
+            'Eigen': f"{eigen_val:.4f}",
+            'Eigen %ile': f"{eigen_percentile:.1f}%"
         })
     
     return pd.DataFrame(results)
 
 
 def get_cluster_drugs(cluster_id, kg_data):
-    """Get all drugs in cluster, sorted by PageRank"""
+    """Get all drugs in cluster, sorted by PageRank, with percentiles"""
     
     # Handle both formats
     if isinstance(kg_data, dict):
@@ -220,6 +232,7 @@ def get_cluster_drugs(cluster_id, kg_data):
             kg_data = load_kg_data_from_dict(kg_data)
     
     drugs = None
+    nodes_df = None
     
     # Try to use dedicated drugs dataframe first
     if 'drugs' in kg_data and not kg_data['drugs'].empty:
@@ -248,24 +261,40 @@ def get_cluster_drugs(cluster_id, kg_data):
     if drugs.empty:
         return None
     
+    # Get full nodes_df for percentile calculation if not already set
+    if nodes_df is None and 'nodes' in kg_data:
+        nodes_df = kg_data['nodes']
+    
     # Sort by PageRank (descending)
     drugs = drugs.sort_values('PageRank Score', ascending=False)
     
-    # Format for display
+    # Format for display with percentiles
     results = []
     for _, row in drugs.iterrows():
+        pr_val = float(row['PageRank Score'])
+        bet_val = float(row['Betweenness Score'])
+        eigen_val = float(row['Eigen Score'])
+        
+        # Compute percentiles
+        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100 if nodes_df is not None else 0
+        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100 if nodes_df is not None else 0
+        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100 if nodes_df is not None else 0
+        
         results.append({
             'Name': row['Name'],
-            'PageRank': f"{float(row['PageRank Score']):.4f}",
-            'Betweenness': f"{float(row['Betweenness Score']):.4f}",
-            'Eigen': f"{float(row['Eigen Score']):.4f}"
+            'PageRank': f"{pr_val:.4f}",
+            'PR %ile': f"{pr_percentile:.1f}%",
+            'Betweenness': f"{bet_val:.4f}",
+            'Bet %ile': f"{bet_percentile:.1f}%",
+            'Eigen': f"{eigen_val:.4f}",
+            'Eigen %ile': f"{eigen_percentile:.1f}%"
         })
     
     return pd.DataFrame(results)
 
 
 def get_cluster_diseases(cluster_id, kg_data):
-    """Get all diseases in cluster, sorted by PageRank"""
+    """Get all diseases in cluster, sorted by PageRank, with percentiles"""
     
     # Handle both formats
     if isinstance(kg_data, dict):
@@ -293,14 +322,26 @@ def get_cluster_diseases(cluster_id, kg_data):
     # Sort by PageRank (descending)
     diseases = diseases.sort_values('PageRank Score', ascending=False)
     
-    # Format for display
+    # Format for display with percentiles
     results = []
     for _, row in diseases.iterrows():
+        pr_val = float(row['PageRank Score'])
+        bet_val = float(row['Betweenness Score'])
+        eigen_val = float(row['Eigen Score'])
+        
+        # Compute percentiles
+        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100
+        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100
+        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100
+        
         results.append({
             'Name': row['Name'],
-            'PageRank': f"{float(row['PageRank Score']):.4f}",
-            'Betweenness': f"{float(row['Betweenness Score']):.4f}",
-            'Eigen': f"{float(row['Eigen Score']):.4f}"
+            'PageRank': f"{pr_val:.4f}",
+            'PR %ile': f"{pr_percentile:.1f}%",
+            'Betweenness': f"{bet_val:.4f}",
+            'Bet %ile': f"{bet_percentile:.1f}%",
+            'Eigen': f"{eigen_val:.4f}",
+            'Eigen %ile': f"{eigen_percentile:.1f}%"
         })
     
     return pd.DataFrame(results)
