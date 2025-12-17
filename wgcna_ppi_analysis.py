@@ -68,7 +68,7 @@ def find_file(directory: Path, filename_pattern: str):
 def load_wgcna_module_data():
     """
     Load per-module gene mapping files from <data_dir>/wgcna/modules/.
-    Accept flexible filenames and flexible gene-symbol column names.
+    Accept flexible filenames (.csv and .parquet) and flexible gene-symbol column names.
     """
     module_data = {}
 
@@ -87,20 +87,31 @@ def load_wgcna_module_data():
         print(f"DEBUG: modules folder not found: {modules_dir}", file=sys.stderr)
         return {}
 
-    # Accept lots of possible mapping filenames
+    # Accept CSV and Parquet mapping files
     candidates = []
-    for p in modules_dir.rglob("*.csv"):
-        name = p.name.lower()
-        if "mapping" in name or ("gene" in name and "id" in name):
-            candidates.append(p)
+    for p in modules_dir.rglob("*"):
+        if p.is_file() and p.suffix.lower() in ['.csv', '.parquet']:
+            name = p.name.lower()
+            if "mapping" in name or ("gene" in name and "id" in name):
+                candidates.append(p)
 
-    # If nothing matched heuristics, fall back to all csvs in modules/
+    # If nothing matched heuristics, fall back to all csv/parquet in modules/
     if not candidates:
-        candidates = list(modules_dir.rglob("*.csv"))
+        candidates = []
+        for p in modules_dir.rglob("*"):
+            if p.is_file() and p.suffix.lower() in ['.csv', '.parquet']:
+                candidates.append(p)
 
     for file_path in candidates:
         try:
-            df = pd.read_csv(file_path)
+            # Load based on file type
+            if file_path.suffix.lower() == '.parquet':
+                df = pd.read_parquet(file_path)
+            else:
+                df = pd.read_csv(file_path)
+
+            if df.empty:
+                continue
 
             # Find gene symbol column (flexible)
             gene_col = None
@@ -126,6 +137,7 @@ def load_wgcna_module_data():
 
             if module_name and module_name not in module_data:
                 module_data[module_name] = df
+                print(f"DEBUG: Loaded WGCNA module '{module_name}' from {file_path.name}", file=sys.stderr)
 
         except Exception as e:
             print(f"DEBUG: Error loading {file_path}: {e}", file=sys.stderr)
