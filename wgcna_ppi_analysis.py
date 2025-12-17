@@ -67,140 +67,89 @@ def find_file(directory: Path, filename_pattern: str):
 
 def load_wgcna_module_data():
     """
-    Load all WGCNA module data from wgcna/modules folder.
-    Accepts any CSV file that contains a gene symbol column.
-    Extracts module name from filename or parent folder.
-    Normalizes gene symbol column to 'hgnc_symbol' for consistency.
-    Returns dict with module names as keys and gene dataframes as values.
+    Load per-module gene mapping files from <data_dir>/wgcna/modules/.
+    Accept flexible filenames and flexible gene-symbol column names.
     """
-    
     module_data = {}
-    
-    # First, find the wgcna/modules directory using same logic as other loaders
+
     data_dir = find_data_dir()
     if data_dir is None:
-        data_dir = Path(".")
-    
-    # Look for wgcna/modules folder
-    wgcna_modules_dir = None
-    
-    # Try various possible paths
-    possible_paths = [
-        data_dir / "wgcna" / "modules",
-        Path(".") / "wgcna" / "modules",
-        Path("wgcna") / "modules",
-    ]
-    
-    for p in possible_paths:
-        if p.exists() and p.is_dir():
-            wgcna_modules_dir = p
-            print(f"DEBUG: Found wgcna/modules at {p}", file=sys.stderr)
-            break
-    
-    if wgcna_modules_dir is None:
-        print(f"DEBUG: Could not find wgcna/modules directory", file=sys.stderr)
+        print("DEBUG: data_dir not found", file=sys.stderr)
         return {}
-    
-    # Now load ALL CSV files from wgcna/modules (recursively)
-    # that contain a gene symbol column
-    for file_path in wgcna_modules_dir.rglob("*.csv"):
+
+    wgcna_dir = find_subfolder(data_dir, "wgcna")
+    if wgcna_dir is None:
+        print(f"DEBUG: wgcna folder not found under {data_dir}", file=sys.stderr)
+        return {}
+
+    modules_dir = wgcna_dir / "modules"
+    if not modules_dir.exists():
+        print(f"DEBUG: modules folder not found: {modules_dir}", file=sys.stderr)
+        return {}
+
+    # Accept lots of possible mapping filenames
+    candidates = []
+    for p in modules_dir.rglob("*.csv"):
+        name = p.name.lower()
+        if "mapping" in name or ("gene" in name and "id" in name):
+            candidates.append(p)
+
+    # If nothing matched heuristics, fall back to all csvs in modules/
+    if not candidates:
+        candidates = list(modules_dir.rglob("*.csv"))
+
+    for file_path in candidates:
         try:
-            # Skip certain files that are clearly not mapping files
-            if 'network' in file_path.name.lower() and 'nodes' in file_path.name.lower():
-                # This is likely Network-nodes-*.txt or similar, skip
-                continue
-            
-            # Load the CSV
             df = pd.read_csv(file_path)
-            
-            if df.empty:
-                continue
-            
-            # Find gene symbol column (flexible naming)
+
+            # Find gene symbol column (flexible)
             gene_col = None
             for col in df.columns:
-                if col.lower() in ['hgnc_symbol', 'symbol', 'gene', 'gene_symbol', 'hgnc', 'geneid', 'gene_id']:
+                if str(col).lower() in ["hgnc_symbol", "symbol", "gene", "gene_symbol", "hgnc", "genesymbol"]:
                     gene_col = col
                     break
-            
+
             if gene_col is None:
-                # Not a gene mapping file, skip
                 continue
-            
-            # Extract module name from filename
-            # Try various patterns: gene_id_mapping_blue.csv, module_blue_gene_mapping.csv, etc.
-            module_name = None
-            
-            # Pattern 1: Nodes-gene-id-mapping-{module}.csv
-            match = re.search(r'Nodes-gene-id-mapping-(.+)\.csv', file_path.name)
-            if match:
-                module_name = match.group(1)
-            
-            # Pattern 2: gene_id_mapping_{module}.csv or similar
-            if not module_name:
-                match = re.search(r'[_-]([a-z]+)\.csv', file_path.name, re.IGNORECASE)
-                if match:
-                    module_name = match.group(1).lower()
-            
-            # Pattern 3: Use parent folder name if it looks like a module name
-            if not module_name:
-                parent_name = file_path.parent.name.lower()
-                if parent_name not in ['modules', 'wgcna', 'data']:
-                    module_name = parent_name
-            
-            if not module_name:
-                # Couldn't extract module name, skip
-                continue
-            
-            # Skip if already loaded
-            if module_name in module_data:
-                continue
-            
-            # Normalize: rename the gene column to 'hgnc_symbol' for consistency
-            if gene_col != 'hgnc_symbol':
-                df = df.rename(columns={gene_col: 'hgnc_symbol'})
-            
-            # Store the dataframe
-            module_data[module_name] = df
-            print(f"DEBUG: Loaded WGCNA module '{module_name}' from {file_path.name} (gene col: {gene_col})", file=sys.stderr)
-            
+
+            # Normalise to what downstream expects
+            if gene_col != "hgnc_symbol":
+                df = df.rename(columns={gene_col: "hgnc_symbol"})
+            df["hgnc_symbol"] = df["hgnc_symbol"].astype(str).str.strip().str.upper()
+
+            # Derive module name from filename (last token tends to be the module)
+            stem = file_path.stem
+            stem = re.sub(r"(?i)nodes[-_ ]gene[-_ ]id[-_ ]mapping[-_ ]?", "", stem)
+            stem = re.sub(r"(?i)gene[-_ ]id[-_ ]mapping[-_ ]?", "", stem)
+            stem = re.sub(r"(?i)module[-_ ]?", "", stem)
+            module_name = re.split(r"[-_ ]+", stem.strip())[-1]
+
+            if module_name and module_name not in module_data:
+                module_data[module_name] = df
+
         except Exception as e:
-            print(f"DEBUG: Error loading {file_path.name}: {e}", file=sys.stderr)
-    
-    if module_data:
-        print(f"DEBUG: Successfully loaded {len(module_data)} WGCNA modules: {list(module_data.keys())}", file=sys.stderr)
-    else:
-        print(f"DEBUG: No WGCNA modules found in {wgcna_modules_dir}", file=sys.stderr)
-    
+            print(f"DEBUG: Error loading {file_path}: {e}", file=sys.stderr)
+
+    print(f"DEBUG: Loaded {len(module_data)} WGCNA modules from {modules_dir}", file=sys.stderr)
     return module_data
 
 
 def get_gene_module(gene_name, module_data):
-    """
-    Find which WGCNA module a gene belongs to.
-    Returns module name and gene info.
-    """
-    
     if not module_data:
         return None
-    
-    gene_lower = gene_name.lower()
-    
-    # Search through all modules
+
+    gene_upper = str(gene_name).strip().upper()
+
     for module_name, gene_df in module_data.items():
-        if gene_df.empty or 'hgnc_symbol' not in gene_df.columns:
+        if gene_df.empty or "hgnc_symbol" not in gene_df.columns:
             continue
-        
-        # Try exact match (case-insensitive)
-        matching = gene_df[gene_df['hgnc_symbol'].str.lower() == gene_lower]
-        
+
+        sym = gene_df["hgnc_symbol"].astype(str).str.strip().str.upper()
+        matching = gene_df[sym == gene_upper]
+
         if not matching.empty:
-            return {
-                'gene': gene_name,
-                'module': module_name,
-                'data': matching.iloc[0]
-            }
-    
+            return {"gene": gene_name, "module": module_name, "data": matching.iloc[0]}
+
     return None
 
 
