@@ -124,11 +124,12 @@ def extract_metrics_from_row(row):
 
 def compute_consistency_score(gene_name, studies_data):
     """
-    Compute consistency score with unified direction logic.
+    Compute consistency score using oriented AUC and composite evidence score.
     Direction is determined by explicit 'direction' column OR inferred from logFC.
     """
     
     auc_values = []
+    auc_oriented_vals = []
     directions = []
     found_count = 0
     
@@ -143,6 +144,16 @@ def compute_consistency_score(gene_name, studies_data):
         
         if auc is not None:
             auc_values.append(auc)
+            
+            # Orient AUC so that >0.5 always supports the displayed direction
+            if direction == "MAFLD":
+                auc_oriented = auc
+            elif direction == "Healthy":
+                auc_oriented = 1 - auc  # Flip if direction is opposite
+            else:
+                auc_oriented = auc  # No direction, use raw AUC
+            
+            auc_oriented_vals.append(auc_oriented)
         
         if direction is not None:
             directions.append(direction)
@@ -150,28 +161,49 @@ def compute_consistency_score(gene_name, studies_data):
     if found_count == 0:
         return None
     
-    # AUROC Consistency: How stable are the AUC values?
-    auc_consistency = 1 - (np.std(auc_values) / np.mean(auc_values)) if len(auc_values) > 1 else 1.0
-    auc_consistency = max(0, min(1, auc_consistency))
-    
     # Direction Consistency: How often is the direction the same?
     direction_agreement = max(directions.count('MAFLD'), directions.count('Healthy')) / len(directions) if directions else 0
     
-    # Conditional interpretation based on both dimensions
-    if auc_consistency > 0.7 and direction_agreement > 0.7:
-        interpretation = "Highly consistent: stable AUROC, consistent direction"
-    elif auc_consistency > 0.7 and direction_agreement <= 0.7:
-        interpretation = "Stable AUROC, mixed direction"
-    elif auc_consistency <= 0.7 and direction_agreement > 0.7:
-        interpretation = "Variable AUROC, consistent direction"
+    # Compute evidence score components using oriented AUC
+    # Strength: median oriented AUC rescaled to [0,1] where 0.5->0 and 1.0->1
+    median_auc_oriented = np.median(auc_oriented_vals) if auc_oriented_vals else 0.5
+    strength = max(0.0, (median_auc_oriented - 0.5) / 0.5)
+    
+    # Stability: 1 - IQR scaled to AUC range (0.5)
+    if len(auc_oriented_vals) > 1:
+        iqr = np.subtract(*np.percentile(auc_oriented_vals, [75, 25]))
+        stability = max(0.0, 1.0 - (iqr / 0.5))
     else:
-        interpretation = "Variable AUROC, mixed direction"
+        stability = 1.0
+    
+    # Sample weight: saturating weight so 1-2 studies don't look overly "certain"
+    n_weight = 1.0 - np.exp(-found_count / 3.0)
+    
+    # Composite evidence score
+    evidence_score = strength * stability * direction_agreement * n_weight
+    
+    # Conditional interpretation based on components
+    if strength > 0.7 and stability > 0.7 and direction_agreement > 0.7:
+        interpretation = "Highly consistent: strong, stable, and directionally aligned"
+    elif strength > 0.7 and stability > 0.7:
+        interpretation = "Strong and stable, but mixed direction"
+    elif strength > 0.7 and direction_agreement > 0.7:
+        interpretation = "Strong and directionally aligned, but variable AUC"
+    elif stability > 0.7 and direction_agreement > 0.7:
+        interpretation = "Stable and directionally aligned, but weak signal"
+    else:
+        interpretation = "Weak or inconsistent evidence"
     
     return {
         'auc_values': auc_values,
+        'auc_oriented_vals': auc_oriented_vals,
         'auc_median': np.median(auc_values) if auc_values else 0,
-        'auc_consistency': auc_consistency,
+        'auc_median_oriented': median_auc_oriented,
+        'strength': strength,
+        'stability': stability,
         'direction_agreement': direction_agreement,
+        'evidence_score': evidence_score,
+        'n_weight': n_weight,
         'interpretation': interpretation,
         'found_count': found_count
     }
