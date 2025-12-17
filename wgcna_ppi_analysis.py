@@ -72,59 +72,28 @@ def load_wgcna_module_data():
     Returns dict with module names as keys and gene dataframes as values.
     """
     
-    # Debug: Check what paths exist
-    debug_info = {
-        'cwd': str(Path.cwd()),
-        'paths_checked': []
-    }
+    # Try to find modules directory - check repo root first
+    modules_dir = None
     
-    # Check various possible paths
-    possible_paths = [
+    # Check in order of likelihood
+    possible_dirs = [
+        Path("wgcna/modules"),           # Repo root (most likely)
+        Path("./wgcna/modules"),         # Current dir
+        Path("../wgcna/modules"),        # Parent dir
         Path("meta-liver-data/wgcna/modules"),
         Path("meta_liver_data/wgcna/modules"),
         Path("data/wgcna/modules"),
-        Path("../meta-liver-data/wgcna/modules"),
-        Path.home() / "meta-liver-data/wgcna/modules",
-        Path.home() / "meta_liver_data/wgcna/modules",
-        Path("wgcna/modules"),
-        Path("../wgcna/modules"),
     ]
     
-    for p in possible_paths:
-        exists = p.exists()
-        debug_info['paths_checked'].append({'path': str(p), 'exists': exists})
-        if exists:
+    for p in possible_dirs:
+        if p.exists():
+            modules_dir = p
             print(f"DEBUG: Found WGCNA modules at {p}", file=sys.stderr)
+            break
     
-    # Print debug info
-    print(f"DEBUG: {debug_info}", file=sys.stderr)
-    
-    # Now try to load
-    data_dir = find_data_dir()
-    if data_dir is None:
-        # Try current directory as fallback
-        if Path("wgcna").exists():
-            data_dir = Path(".")
-        elif Path("../meta-liver-data/wgcna").exists():
-            data_dir = Path("../meta-liver-data")
-        else:
-            return {}
-    
-    wgcna_dir = find_subfolder(data_dir, "wgcna")
-    if wgcna_dir is None:
-        # Try direct path
-        if Path("wgcna").exists():
-            wgcna_dir = Path("wgcna")
-        else:
-            return {}
-    
-    modules_dir = find_subfolder(wgcna_dir, "modules")
     if modules_dir is None:
-        # Try direct path
-        if (wgcna_dir / "modules").exists():
-            modules_dir = wgcna_dir / "modules"
-        else:
-            return {}
+        print(f"DEBUG: No WGCNA modules found. Checked: {[str(p) for p in possible_dirs]}", file=sys.stderr)
+        return {}
     
     module_data = {}
     
