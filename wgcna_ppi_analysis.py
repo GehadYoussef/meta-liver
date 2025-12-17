@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import re
+import sys
 
 
 def find_data_dir():
@@ -70,6 +71,35 @@ def load_wgcna_module_data():
     Looks for Nodes-gene-id-mapping-{module}.csv files for each module.
     Returns dict with module names as keys and gene dataframes as values.
     """
+    
+    # Debug: Check what paths exist
+    debug_info = {
+        'cwd': str(Path.cwd()),
+        'paths_checked': []
+    }
+    
+    # Check various possible paths
+    possible_paths = [
+        Path("meta-liver-data/wgcna/modules"),
+        Path("meta_liver_data/wgcna/modules"),
+        Path("data/wgcna/modules"),
+        Path("../meta-liver-data/wgcna/modules"),
+        Path.home() / "meta-liver-data/wgcna/modules",
+        Path.home() / "meta_liver_data/wgcna/modules",
+        Path("wgcna/modules"),
+        Path("../wgcna/modules"),
+    ]
+    
+    for p in possible_paths:
+        exists = p.exists()
+        debug_info['paths_checked'].append({'path': str(p), 'exists': exists})
+        if exists:
+            print(f"DEBUG: Found WGCNA modules at {p}", file=sys.stderr)
+    
+    # Print debug info
+    print(f"DEBUG: {debug_info}", file=sys.stderr)
+    
+    # Now try to load
     data_dir = find_data_dir()
     if data_dir is None:
         # Try current directory as fallback
