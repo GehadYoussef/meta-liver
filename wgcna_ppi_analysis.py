@@ -68,8 +68,7 @@ def find_file(directory: Path, filename_pattern: str):
 def load_wgcna_module_data():
     """
     Load all WGCNA module data by recursively searching for Nodes-gene-id-mapping files.
-    Uses the same data-dir detection as other loaders for consistency.
-    Flexible about column names (hgnc_symbol, symbol, gene, etc.).
+    Normalizes gene symbol column to 'hgnc_symbol' for consistency.
     Returns dict with module names as keys and gene dataframes as values.
     """
     
@@ -110,11 +109,16 @@ def load_wgcna_module_data():
                         break
                 
                 if gene_col is None:
+                    print(f"DEBUG: No gene symbol column found in {file_path}, skipping", file=sys.stderr)
                     continue
+                
+                # Normalize: rename the gene column to 'hgnc_symbol' for consistency
+                if gene_col != 'hgnc_symbol':
+                    df = df.rename(columns={gene_col: 'hgnc_symbol'})
                 
                 # Store the dataframe
                 module_data[module_name] = df
-                print(f"DEBUG: Loaded WGCNA module {module_name} from {file_path}", file=sys.stderr)
+                print(f"DEBUG: Loaded WGCNA module {module_name} from {file_path} (gene col: {gene_col})", file=sys.stderr)
                 
             except Exception as e:
                 print(f"DEBUG: Error loading {file_path}: {e}", file=sys.stderr)
