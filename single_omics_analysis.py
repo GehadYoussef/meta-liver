@@ -61,28 +61,35 @@ def find_gene_in_study(gene_name: str, study_df: pd.DataFrame) -> Tuple[Optional
     return None, None
 
 
+def _to_float(x) -> Optional[float]:
+    """Robust numeric conversion: returns None for NA / non-numeric strings."""
+    try:
+        v = pd.to_numeric(x, errors="coerce")
+        if pd.isna(v):
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+
 def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[float], Optional[str]]:
-    """Extract AUC, logFC, and direction from a row (direction from explicit column if present, else infer from logFC)."""
+    """Extract AUC, logFC, and direction (direction from explicit column if present, else infer from logFC)."""
     if row is None or row.empty:
         return None, None, None
 
     auc = None
-    for col in ["AUC", "auc", "AUC_score"]:
+    for col in ["AUC", "auc", "AUC_score", "AUROC", "auroc", "roc_auc", "ROC_AUC"]:
         if col in row.index:
-            try:
-                auc = float(row[col])
+            auc = _to_float(row[col])
+            if auc is not None:
                 break
-            except Exception:
-                pass
 
     lfc = None
     for col in ["avg_logFC", "avg_LFC", "logFC", "log2FC", "avg_log2FC"]:
         if col in row.index:
-            try:
-                lfc = float(row[col])
+            lfc = _to_float(row[col])
+            if lfc is not None:
                 break
-            except Exception:
-                pass
 
     direction = None
     if "direction" in row.index and pd.notna(row["direction"]):
@@ -111,6 +118,9 @@ def compute_consistency_score(
 
     Strength is based on discriminative AUROC: max(AUC, 1-AUC)
     so AUROC < 0.5 counts as predictive (but label-flipped).
+
+    Note: "auc_oriented_vals" is kept for diagnostics only; it is NOT used
+    to compute the discriminative AUROC.
     """
     if studies_data is None:
         studies_data = load_single_omics_studies()
@@ -120,6 +130,7 @@ def compute_consistency_score(
 
     auc_values: List[float] = []
     auc_oriented_vals: List[float] = []
+    auc_disc_vals: List[float] = []
     directions: List[str] = []
     found_count = 0
 
@@ -131,18 +142,27 @@ def compute_consistency_score(
         found_count += 1
         auc, lfc, direction = extract_metrics_from_row(row)
 
-        if auc is not None and not np.isnan(auc):
-            auc_values.append(float(auc))
-
-            # Oriented AUC (kept for diagnostics; NOT used for strength)
-            if direction == "MAFLD":
-                auc_oriented = float(auc)
-            elif direction == "Healthy":
-                auc_oriented = 1.0 - float(auc)
+        if auc is not None:
+            if not (0.0 <= auc <= 1.0):
+                # Ignore out-of-range values (bad inputs)
+                pass
             else:
-                auc_oriented = float(auc)
+                auc_values.append(float(auc))
 
-            auc_oriented_vals.append(float(auc_oriented))
+                # Discriminative AUC (orientation-invariant) MUST be from raw auc
+                auc_disc_vals.append(float(max(auc, 1.0 - auc)))
+
+                # Oriented AUC (diagnostic): align towards MAFLD as "positive"
+                if direction == "MAFLD":
+                    auc_oriented = float(auc)
+                elif direction == "Healthy":
+                    auc_oriented = float(1.0 - auc)
+                else:
+                    auc_oriented = float(auc)
+
+                # Keep within [0,1]
+                if 0.0 <= auc_oriented <= 1.0:
+                    auc_oriented_vals.append(float(auc_oriented))
 
         if direction is not None:
             directions.append(direction)
@@ -155,26 +175,20 @@ def compute_consistency_score(
         if directions else 0.0
     )
 
-    n_auc = len(auc_oriented_vals)
+    n_auc = len(auc_disc_vals)
 
-    # Discriminative AUC (orientation-invariant)
-    auc_disc_vals = [max(a, 1.0 - a) for a in auc_oriented_vals]
     median_auc_discriminative = float(np.median(auc_disc_vals)) if auc_disc_vals else 0.5
-
     median_auc_raw = float(np.median(auc_values)) if auc_values else 0.0
     median_auc_oriented = float(np.median(auc_oriented_vals)) if auc_oriented_vals else 0.5
 
-    # Strength: 0.5 -> 0, 1.0 -> 1
     strength = max(0.0, (median_auc_discriminative - 0.5) / 0.5)
 
-    # Stability: 1 - IQR/0.5 on discriminative AUC
     if len(auc_disc_vals) > 1:
         iqr = float(np.subtract(*np.percentile(auc_disc_vals, [75, 25])))
         stability = max(0.0, 1.0 - (iqr / 0.5))
     else:
         stability = 1.0
 
-    # Weight by number of valid AUCs
     n_weight = float(1.0 - np.exp(-n_auc / 3.0))
 
     evidence_score = float(strength * stability * float(direction_agreement) * n_weight)
@@ -223,7 +237,7 @@ def create_lollipop_plot(gene_name: str, studies_data: Optional[Dict[str, pd.Dat
             continue
 
         auc, lfc, direction = extract_metrics_from_row(row)
-        if auc is None or np.isnan(auc):
+        if auc is None:
             continue
 
         if direction == "MAFLD":
@@ -320,7 +334,7 @@ def create_auc_logfc_scatter(gene_name: str, studies_data: Optional[Dict[str, pd
             continue
 
         auc, lfc, direction = extract_metrics_from_row(row)
-        if auc is None or lfc is None or np.isnan(auc) or np.isnan(lfc):
+        if auc is None or lfc is None:
             continue
 
         if direction == "MAFLD":
@@ -404,8 +418,8 @@ def create_results_table(gene_name: str, studies_data: Optional[Dict[str, pd.Dat
 
         results.append({
             "Study": study_name,
-            "AUC": f"{auc:.3f}" if (auc is not None and not np.isnan(auc)) else "N/A",
-            "logFC": f"{lfc:.3f}" if (lfc is not None and not np.isnan(lfc)) else "N/A",
+            "AUC": f"{auc:.3f}" if (auc is not None) else "N/A",
+            "logFC": f"{lfc:.3f}" if (lfc is not None) else "N/A",
             "Direction": direction if direction else "Unknown"
         })
 
