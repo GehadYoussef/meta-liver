@@ -543,10 +543,10 @@ else:
                 if kg_data:
                     kg_info = get_gene_kg_info(search_query, kg_data)
 
-                    if kg_info and kg_info.get("found", False):
+                    if kg_info:
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("Cluster", kg_info["cluster"])
+                            st.metric("Cluster", kg_info.get("cluster", "N/A"))
                         with col2:
                             st.metric("PageRank", f"{kg_info['pagerank']:.4f}")
                         with col3:
@@ -562,24 +562,24 @@ else:
 
                         st.markdown("---")
 
-                        st.markdown("**Centrality Metrics - Whole Graph Context**")
+                        st.markdown("**Centrality Metrics – MASH Subgraph Context**")
                         st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
                         st.write(f"Composite score: {kg_info['composite']:.6f}")
-                        st.write(f"Min/Max (whole graph): {kg_info['composite_min']:.6f} – {kg_info['composite_max']:.6f}")
+                        st.write(f"Min/Max (subgraph): {kg_info['composite_min']:.6f} – {kg_info['composite_max']:.6f}")
                         st.write(f"Percentile: {kg_info['composite_percentile']:.1f}%")
                         st.write("*Weights: PageRank 50%, Betweenness 25%, Eigenvector 25%*")
 
                         st.markdown("---")
-                        st.markdown("**Individual Metrics - Whole Graph Context**")
+                        st.markdown("**Individual Metrics – MASH Subgraph Context**")
 
                         context_col1, context_col2, context_col3 = st.columns(3)
 
                         with context_col1:
                             st.write("**PageRank**")
-                            st.write(f"Min: {kg_info['pr_min']:.4f}")
-                            st.write(f"Max: {kg_info['pr_max']:.4f}")
+                            st.write(f"Min: {kg_info['pagerank_min']:.4f}")
+                            st.write(f"Max: {kg_info['pagerank_max']:.4f}")
                             st.write(f"Your node: {kg_info['pagerank']:.4f}")
-                            st.write(f"Percentile: {kg_info['pr_percentile']:.1f}%")
+                            st.write(f"Percentile: {kg_info['pagerank_percentile']:.1f}%")
 
                         with context_col2:
                             st.write("**Betweenness**")
@@ -600,33 +600,41 @@ else:
                         interpretation = interpret_centrality(
                             kg_info["pagerank"],
                             kg_info["betweenness"],
-                            kg_info["eigen"]
+                            kg_info["eigen"],
+                            pagerank_pct=kg_info.get("pagerank_percentile"),
+                            betweenness_pct=kg_info.get("bet_percentile"),
+                            eigen_pct=kg_info.get("eigen_percentile"),
+                            composite_pct=kg_info.get("composite_percentile"),
                         )
                         st.info(f"📍 {interpretation}")
 
-                        st.markdown("**Nodes in Cluster**")
-                        tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
+                        cluster_id = kg_info.get("cluster", None)
+                        if cluster_id is None or str(cluster_id).strip() == "" or str(cluster_id).lower() == "nan":
+                            st.warning("Cluster ID missing for this node; cannot display cluster neighbours.")
+                        else:
+                            st.markdown("**Nodes in Cluster**")
+                            tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
 
-                        with tab_genes:
-                            genes_df = get_cluster_genes(kg_info["cluster"], kg_data)
-                            if genes_df is not None:
-                                st.dataframe(genes_df, use_container_width=True, hide_index=True)
-                            else:
-                                st.write("No genes/proteins in this cluster")
+                            with tab_genes:
+                                genes_df = get_cluster_genes(cluster_id, kg_data)
+                                if genes_df is not None:
+                                    st.dataframe(genes_df, use_container_width=True, hide_index=True)
+                                else:
+                                    st.write("No genes/proteins in this cluster")
 
-                        with tab_drugs:
-                            drugs_df = get_cluster_drugs(kg_info["cluster"], kg_data)
-                            if drugs_df is not None:
-                                st.dataframe(drugs_df, use_container_width=True, hide_index=True)
-                            else:
-                                st.write("No drugs in this cluster")
+                            with tab_drugs:
+                                drugs_df = get_cluster_drugs(cluster_id, kg_data)
+                                if drugs_df is not None:
+                                    st.dataframe(drugs_df, use_container_width=True, hide_index=True)
+                                else:
+                                    st.write("No drugs in this cluster")
 
-                        with tab_diseases:
-                            diseases_df = get_cluster_diseases(kg_info["cluster"], kg_data)
-                            if diseases_df is not None:
-                                st.dataframe(diseases_df, use_container_width=True, hide_index=True)
-                            else:
-                                st.write("No diseases in this cluster")
+                            with tab_diseases:
+                                diseases_df = get_cluster_diseases(cluster_id, kg_data)
+                                if diseases_df is not None:
+                                    st.dataframe(diseases_df, use_container_width=True, hide_index=True)
+                                else:
+                                    st.write("No diseases in this cluster")
                     else:
                         st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
                 else:

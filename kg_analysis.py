@@ -1,408 +1,654 @@
 """
 Knowledge Graph Analysis Module
-Analyzes gene position in MASH subgraph with robust filtering
+
+Analyzes a gene's position in the MAFLD/MASH subgraph and provides:
+- Robust matching of gene/drug/disease names
+- Centrality metrics + empirically-derived percentile ranks (stable across graph rebuilds)
+- Cluster neighbours (genes, drugs, diseases) with precomputed percentiles for speed
+- Human-readable centrality interpretation
+
+Designed to be imported by streamlit_app.py.
 """
 
-import pandas as pd
-import numpy as np
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, List
+
+import re
+import numpy as np
+import pandas as pd
 
 
-def find_data_dir():
-    """Find data directory"""
+# =============================================================================
+# Optional legacy filesystem helpers (kept for backwards compatibility)
+# =============================================================================
+
+def find_data_dir() -> Optional[Path]:
+    """Best-effort locate a local data directory."""
     possible_dirs = [
         Path("meta-liver-data"),
         Path("meta_liver_data"),
         Path("data"),
+        Path("../data"),
         Path("../meta-liver-data"),
-        Path.home() / "meta-liver-data",
-        Path.home() / "meta_liver_data",
+        Path("../meta_liver_data"),
     ]
-    
-    for path in possible_dirs:
-        if path.exists():
-            return path
+    for d in possible_dirs:
+        if d.exists():
+            return d
     return None
 
 
-def find_subfolder(parent: Path, folder_pattern: str):
-    """Find subfolder (case-insensitive)"""
-    if not parent.exists():
+def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
+    """Find a subfolder with case-insensitive matching."""
+    if parent is None or not parent.exists():
         return None
-    
-    # Try exact match
     exact_path = parent / folder_pattern
     if exact_path.exists():
         return exact_path
-    
-    # Try case-insensitive
     for item in parent.iterdir():
         if item.is_dir() and item.name.lower() == folder_pattern.lower():
             return item
-    
     return None
 
 
-def find_file(directory: Path, filename_pattern: str):
-    """Find file in directory (case-insensitive)"""
-    if not directory.exists():
+def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
+    """Find a file in a directory (case-insensitive)."""
+    if directory is None or not directory.exists():
         return None
-    
-    # Try exact match first
     exact_path = directory / filename_pattern
     if exact_path.exists():
         return exact_path
-    
-    # Try case-insensitive search
-    for file in directory.rglob("*"):
-        if file.name.lower() == filename_pattern.lower():
-            return file
-        if filename_pattern.lower() in file.name.lower():
-            return file
-    
+    for item in directory.iterdir():
+        if item.is_file() and item.name.lower() == filename_pattern.lower():
+            return item
     return None
 
 
-def load_kg_data_from_dict(kg_dict):
-    """
-    Convert kg_dict (keyed by filestem) to standard format (keyed by 'nodes', 'drugs')
-    This handles the format returned by robust_data_loader.load_kg_data()
-    """
-    formatted = {}
-    
-    # Look for nodes dataframe
-    for key in ['MASH_subgraph_nodes', 'mash_subgraph_nodes', 'nodes']:
-        if key in kg_dict:
-            formatted['nodes'] = kg_dict[key]
-            break
-    
-    # Look for drugs dataframe
-    for key in ['MASH_subgraph_drugs', 'mash_subgraph_drugs', 'drugs']:
-        if key in kg_dict:
-            formatted['drugs'] = kg_dict[key]
-            break
-    
-    return formatted
+# =============================================================================
+# Internal utilities
+# =============================================================================
+
+_NAME_COL_CANDIDATES = ["Name", "Gene", "gene", "Symbol", "symbol", "node", "Node"]
+_CLUSTER_COL_CANDIDATES = ["Cluster", "cluster", "community", "Community"]
+
+_PAGERANK_COL_CANDIDATES = ["PageRank Score", "PageRank", "pagerank", "page_rank"]
+_BETWEENNESS_COL_CANDIDATES = ["Betweenness Score", "Betweenness", "betweenness"]
+_EIGEN_COL_CANDIDATES = ["Eigen Score", "Eigen", "eigen", "eigenvector", "Eigenvector"]
+
+_TYPE_COL_CANDIDATES = ["Type", "type", "node_type"]
 
 
-def get_gene_kg_info(gene_name, kg_data):
-    """Get knowledge graph information for a gene, including empirical percentile ranks and composite centrality"""
-    
-    # Handle both formats: dict keyed by 'nodes' or dict keyed by filestem
-    if isinstance(kg_data, dict):
-        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
-            kg_data = load_kg_data_from_dict(kg_data)
-    
-    if 'nodes' not in kg_data:
+def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    if df is None or df.empty:
         return None
-    
-    nodes_df = kg_data['nodes']
-    
-    # Exact match first (case-insensitive)
-    gene_match = nodes_df[nodes_df['Name'].str.lower() == gene_name.lower()]
-    
-    # If no exact match, try substring (but warn about it)
-    if gene_match.empty:
-        gene_match = nodes_df[nodes_df['Name'].str.contains(f"^{gene_name}$", case=False, na=False, regex=True)]
-    
-    if gene_match.empty:
-        return {
-            'found': False,
-            'message': f"'{gene_name}' not found in MASH subgraph"
-        }
-    
-    # If multiple matches, take the first (but this shouldn't happen with exact match)
-    gene_row = gene_match.iloc[0]
-    gene_idx = gene_match.index[0]
-    
-    # Get node values as Series for percentile computation
-    pr = nodes_df['PageRank Score']
-    bet = nodes_df['Betweenness Score']
-    eig = nodes_df['Eigen Score']
-    
-    # Get node values
-    pr_val = float(gene_row.get('PageRank Score', 0))
-    bet_val = float(gene_row.get('Betweenness Score', 0))
-    eigen_val = float(gene_row.get('Eigen Score', 0))
-    
-    # Compute empirical percentile ranks (0-100)
-    # Percentile = (number of values <= this value) / (total values) * 100
-    pr_percentile = 0.0
-    bet_percentile = 0.0
-    eigen_percentile = 0.0
-    
-    if 'PageRank Score' in nodes_df.columns:
-        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100
-    
-    if 'Betweenness Score' in nodes_df.columns:
-        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100
-    
-    if 'Eigen Score' in nodes_df.columns:
-        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100
-    
-    # Get min/max for display
-    pr_min = float(nodes_df['PageRank Score'].min()) if 'PageRank Score' in nodes_df.columns else 0
-    pr_max = float(nodes_df['PageRank Score'].max()) if 'PageRank Score' in nodes_df.columns else 0
-    
-    bet_min = float(nodes_df['Betweenness Score'].min()) if 'Betweenness Score' in nodes_df.columns else 0
-    bet_max = float(nodes_df['Betweenness Score'].max()) if 'Betweenness Score' in nodes_df.columns else 0
-    
-    eigen_min = float(nodes_df['Eigen Score'].min()) if 'Eigen Score' in nodes_df.columns else 0
-    eigen_max = float(nodes_df['Eigen Score'].max()) if 'Eigen Score' in nodes_df.columns else 0
-    
-    # Compute composite centrality using weighted geometric mean of percentiles
-    pr_pct_all = pr.rank(pct=True, method="average") * 100.0
-    bet_pct_all = bet.rank(pct=True, method="average") * 100.0
-    eig_pct_all = eig.rank(pct=True, method="average") * 100.0
-    
-    # Weighted geometric mean (rewards consistency across metrics)
-    EPS = 1e-9
+    cols = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        key = cand.lower()
+        if key in cols:
+            return cols[key]
+    return None
+
+
+def _to_num_series(s: pd.Series) -> pd.Series:
+    return pd.to_numeric(s, errors="coerce")
+
+
+def _normalise_name(x: Any) -> str:
+    """Normalise a node name for matching (gene symbols, drug names, diseases)."""
+    if x is None:
+        return ""
+    s = str(x).strip().upper()
+
+    # Trim common adornments: "TP53 (HUMAN)" -> "TP53"
+    s = re.sub(r"\s*\(.*?\)\s*$", "", s)
+
+    # Keep left side of "ENSG000001234.5" -> "ENSG000001234"
+    if "." in s:
+        left, right = s.rsplit(".", 1)
+        if right.isdigit() and len(left) >= 6:
+            s = left
+
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _normalise_name_alnum(x: Any) -> str:
+    """Stricter normalisation used as a fallback (removes punctuation)."""
+    s = _normalise_name(x)
+    s = re.sub(r"[^A-Z0-9]", "", s)
+    return s
+
+
+def _ensure_precomputed_nodes(nodes_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add cached numeric + percentile columns for centrality and a composite percentile.
+    This runs once per nodes dataframe (idempotent).
+    """
+    if nodes_df is None or nodes_df.empty:
+        return nodes_df
+
+    if "__kg_precomputed__" in nodes_df.attrs and nodes_df.attrs["__kg_precomputed__"]:
+        return nodes_df
+
+    name_col = _pick_col(nodes_df, _NAME_COL_CANDIDATES) or "Name"
+    if name_col not in nodes_df.columns:
+        nodes_df[name_col] = ""
+
+    nodes_df["__name_norm__"] = nodes_df[name_col].map(_normalise_name)
+    nodes_df["__name_norm_alnum__"] = nodes_df[name_col].map(_normalise_name_alnum)
+
+    pr_col = _pick_col(nodes_df, _PAGERANK_COL_CANDIDATES)
+    bet_col = _pick_col(nodes_df, _BETWEENNESS_COL_CANDIDATES)
+    eig_col = _pick_col(nodes_df, _EIGEN_COL_CANDIDATES)
+
+    # Numeric versions (NaN if missing)
+    nodes_df["__pagerank__"] = _to_num_series(nodes_df[pr_col]) if pr_col else np.nan
+    nodes_df["__betweenness__"] = _to_num_series(nodes_df[bet_col]) if bet_col else np.nan
+    nodes_df["__eigen__"] = _to_num_series(nodes_df[eig_col]) if eig_col else np.nan
+
+    # Percentiles computed on available values (NaN stays NaN)
+    def _pct_rank(v: pd.Series) -> pd.Series:
+        return v.rank(pct=True, method="average") * 100.0
+
+    nodes_df["__pagerank_pct__"] = _pct_rank(nodes_df["__pagerank__"])
+    nodes_df["__betweenness_pct__"] = _pct_rank(nodes_df["__betweenness__"])
+    nodes_df["__eigen_pct__"] = _pct_rank(nodes_df["__eigen__"])
+
+    # Composite based on percentile ranks (scale-invariant)
     w_pr, w_bet, w_eig = 0.5, 0.25, 0.25
-    
-    comp = (
-        (np.maximum(pr_pct_all / 100.0, EPS) ** w_pr) *
-        (np.maximum(bet_pct_all / 100.0, EPS) ** w_bet) *
-        (np.maximum(eig_pct_all / 100.0, EPS) ** w_eig)
-    )
-    
-    # Composite context + the node's composite percentile on whole graph
-    comp_min = float(np.nanmin(comp.values)) if len(comp) else None
-    comp_max = float(np.nanmax(comp.values)) if len(comp) else None
-    comp_pct_all = comp.rank(pct=True, method="average") * 100.0
-    comp_node = float(comp.loc[gene_idx]) if gene_idx in comp.index else None
-    comp_pct_node = float(comp_pct_all.loc[gene_idx]) if gene_idx in comp_pct_all.index else None
-    
-    # Extract metrics
-    info = {
-        'found': True,
-        'name': gene_row['Name'],
-        'type': gene_row.get('Type', 'Unknown'),
-        'cluster': gene_row.get('Cluster', 'Unknown'),
-        'pagerank': pr_val,
-        'betweenness': bet_val,
-        'eigen': eigen_val,
-        'pr_min': pr_min,
-        'pr_max': pr_max,
-        'pr_percentile': pr_percentile,
-        'bet_min': bet_min,
-        'bet_max': bet_max,
-        'bet_percentile': bet_percentile,
-        'eigen_min': eigen_min,
-        'eigen_max': eigen_max,
-        'eigen_percentile': eigen_percentile,
-        'composite': comp_node,
-        'composite_min': comp_min,
-        'composite_max': comp_max,
-        'composite_percentile': comp_pct_node
+    eps = 1e-12
+    prp = (nodes_df["__pagerank_pct__"] / 100.0).fillna(0.0).clip(lower=0.0)
+    betp = (nodes_df["__betweenness_pct__"] / 100.0).fillna(0.0).clip(lower=0.0)
+    eigp = (nodes_df["__eigen_pct__"] / 100.0).fillna(0.0).clip(lower=0.0)
+
+    comp = (np.maximum(prp, eps) ** w_pr) * (np.maximum(betp, eps) ** w_bet) * (np.maximum(eigp, eps) ** w_eig)
+    nodes_df["__composite__"] = comp
+    nodes_df["__composite_pct__"] = comp.rank(pct=True, method="average") * 100.0
+
+    nodes_df.attrs["__kg_precomputed__"] = True
+    nodes_df.attrs["__kg_name_col__"] = name_col
+    return nodes_df
+
+
+def _standardise_kg_dict(kg_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Accepts either:
+      - {'nodes': df, 'drugs': df, ...}
+      - {'MASH_subgraph_nodes': df, 'MASH_subgraph_drugs': df, ...}
+    and returns a normalised dict.
+    """
+    if not isinstance(kg_dict, dict):
+        return {}
+
+    # If already standardised
+    if "nodes" in kg_dict:
+        return kg_dict
+
+    lower_map = {str(k).lower(): k for k in kg_dict.keys()}
+
+    def _get(key_variants: List[str]) -> Optional[Any]:
+        for kv in key_variants:
+            if kv.lower() in lower_map:
+                return kg_dict[lower_map[kv.lower()]]
+        return None
+
+    nodes = _get(["mash_subgraph_nodes", "MASH_subgraph_nodes", "subgraph_nodes", "nodes"])
+    drugs = _get(["mash_subgraph_drugs", "MASH_subgraph_drugs", "subgraph_drugs", "drugs"])
+    diseases = _get(["mash_subgraph_diseases", "MASH_subgraph_diseases", "subgraph_diseases", "diseases"])
+
+    out: Dict[str, Any] = {}
+    if isinstance(nodes, pd.DataFrame):
+        out["nodes"] = nodes
+    if isinstance(drugs, pd.DataFrame):
+        out["drugs"] = drugs
+    if isinstance(diseases, pd.DataFrame):
+        out["diseases"] = diseases
+
+    return out
+
+
+def load_kg_data_from_dict(kg_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Public helper to normalise KG dict keys to {'nodes','drugs','diseases'}."""
+    return _standardise_kg_dict(kg_dict)
+
+
+def _match_single_node(nodes_df: pd.DataFrame, query: str) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
+    """
+    Return best match row for query. Matching strategy:
+      1) exact match on normalised name
+      2) exact match on strict alnum normalisation
+      3) contains match on normalised name (guarded)
+    """
+    meta: Dict[str, Any] = {"match_type": None, "n_matches": 0, "matched_name": None}
+
+    q1 = _normalise_name(query)
+    q2 = _normalise_name_alnum(query)
+
+    if q1 == "" and q2 == "":
+        return None, meta
+
+    df = nodes_df
+
+    # 1) Exact on __name_norm__
+    m = df[df["__name_norm__"] == q1]
+    if not m.empty:
+        row = m.iloc[0]
+        meta.update(
+            match_type="exact",
+            n_matches=int(len(m)),
+            matched_name=str(row.get(df.attrs.get("__kg_name_col__", "Name"), row.get("Name", ""))),
+        )
+        return row, meta
+
+    # 2) Exact on __name_norm_alnum__
+    m = df[df["__name_norm_alnum__"] == q2]
+    if not m.empty:
+        row = m.iloc[0]
+        meta.update(
+            match_type="exact_alnum",
+            n_matches=int(len(m)),
+            matched_name=str(row.get(df.attrs.get("__kg_name_col__", "Name"), row.get("Name", ""))),
+        )
+        return row, meta
+
+    # 3) Guarded contains (avoid very short queries)
+    if len(q1) >= 3:
+        m = df[df["__name_norm__"].str.contains(re.escape(q1), na=False)]
+        if not m.empty:
+            # Prefer the shortest name (usually the cleanest symbol)
+            name_col = df.attrs.get("__kg_name_col__", "Name")
+            m = m.assign(__len__=m[name_col].astype(str).str.len())
+            m = m.sort_values(["__len__"], ascending=True)
+            row = m.iloc[0]
+            meta.update(match_type="contains", n_matches=int(len(m)), matched_name=str(row.get(name_col, row.get("Name", ""))))
+            return row, meta
+
+    return None, meta
+
+
+# =============================================================================
+# Public API
+# =============================================================================
+
+def get_gene_kg_info(gene_name: str, kg_data: Any) -> Optional[Dict[str, Any]]:
+    """Get KG info for a gene, including centrality metrics and empirical percentiles."""
+    if not isinstance(kg_data, dict):
+        return None
+
+    kg_data = _standardise_kg_dict(kg_data)
+    nodes_df = kg_data.get("nodes")
+    if nodes_df is None or nodes_df.empty:
+        return None
+
+    nodes_df = _ensure_precomputed_nodes(nodes_df)
+
+    gene_row, match_meta = _match_single_node(nodes_df, gene_name)
+    if gene_row is None:
+        return None
+
+    name_col = nodes_df.attrs.get("__kg_name_col__", "Name")
+    cluster_col = _pick_col(nodes_df, _CLUSTER_COL_CANDIDATES) or "Cluster"
+    type_col = _pick_col(nodes_df, _TYPE_COL_CANDIDATES)
+
+    pr = float(gene_row["__pagerank__"]) if pd.notna(gene_row["__pagerank__"]) else 0.0
+    bet = float(gene_row["__betweenness__"]) if pd.notna(gene_row["__betweenness__"]) else 0.0
+    eig = float(gene_row["__eigen__"]) if pd.notna(gene_row["__eigen__"]) else 0.0
+
+    pr_pct = float(gene_row["__pagerank_pct__"]) if pd.notna(gene_row["__pagerank_pct__"]) else 0.0
+    bet_pct = float(gene_row["__betweenness_pct__"]) if pd.notna(gene_row["__betweenness_pct__"]) else 0.0
+    eig_pct = float(gene_row["__eigen_pct__"]) if pd.notna(gene_row["__eigen_pct__"]) else 0.0
+    comp = float(gene_row["__composite__"]) if pd.notna(gene_row["__composite__"]) else 0.0
+    comp_pct = float(gene_row["__composite_pct__"]) if pd.notna(gene_row["__composite_pct__"]) else 0.0
+
+    # Min/max context (ignore NaNs)
+    pr_min = float(nodes_df["__pagerank__"].min(skipna=True)) if nodes_df["__pagerank__"].notna().any() else 0.0
+    pr_max = float(nodes_df["__pagerank__"].max(skipna=True)) if nodes_df["__pagerank__"].notna().any() else 0.0
+    bet_min = float(nodes_df["__betweenness__"].min(skipna=True)) if nodes_df["__betweenness__"].notna().any() else 0.0
+    bet_max = float(nodes_df["__betweenness__"].max(skipna=True)) if nodes_df["__betweenness__"].notna().any() else 0.0
+    eig_min = float(nodes_df["__eigen__"].min(skipna=True)) if nodes_df["__eigen__"].notna().any() else 0.0
+    eig_max = float(nodes_df["__eigen__"].max(skipna=True)) if nodes_df["__eigen__"].notna().any() else 0.0
+    comp_min = float(nodes_df["__composite__"].min(skipna=True)) if nodes_df["__composite__"].notna().any() else 0.0
+    comp_max = float(nodes_df["__composite__"].max(skipna=True)) if nodes_df["__composite__"].notna().any() else 0.0
+
+    info: Dict[str, Any] = {
+        "name": str(gene_row.get(name_col, gene_name)),
+        "type": str(gene_row.get(type_col, "")) if type_col else str(gene_row.get("Type", "")),
+        "cluster": gene_row.get(cluster_col, None),
+
+        "pagerank": pr,
+        "pagerank_min": pr_min,
+        "pagerank_max": pr_max,
+        "pagerank_percentile": pr_pct,
+
+        "betweenness": bet,
+        "bet_min": bet_min,
+        "bet_max": bet_max,
+        "bet_percentile": bet_pct,
+
+        "eigen": eig,
+        "eigen_min": eig_min,
+        "eigen_max": eig_max,
+        "eigen_percentile": eig_pct,
+
+        "composite": comp,
+        "composite_min": comp_min,
+        "composite_max": comp_max,
+        "composite_percentile": comp_pct,
     }
-    
+
+    info.update(match_meta)
     return info
 
 
-def get_cluster_genes(cluster_id, kg_data):
-    """Get all genes/proteins in cluster, sorted by PageRank, with percentiles"""
-    
-    # Handle both formats
-    if isinstance(kg_data, dict):
-        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
-            kg_data = load_kg_data_from_dict(kg_data)
-    
-    if 'nodes' not in kg_data:
+def _cluster_filter(df: pd.DataFrame, cluster_id: Any) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    cluster_col = _pick_col(df, _CLUSTER_COL_CANDIDATES) or "Cluster"
+    if cluster_col not in df.columns:
+        return df.iloc[0:0]
+    cid = str(cluster_id).strip().lower()
+    return df[df[cluster_col].astype(str).str.strip().str.lower() == cid]
+
+
+def get_cluster_genes(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
+    """Get genes/proteins in a cluster, sorted by PageRank (desc), with percentiles."""
+    if not isinstance(kg_data, dict):
         return None
-    
-    nodes_df = kg_data['nodes']
-    
-    # Robust cluster matching (handle string/int mismatch)
-    cluster_id_str = str(cluster_id).lower()
-    
-    # Filter to cluster
-    cluster_mask = nodes_df['Cluster'].astype(str).str.lower() == cluster_id_str
-    genes = nodes_df[cluster_mask].copy()
-    
-    # Filter to genes/proteins (case-insensitive, flexible matching)
-    if 'Type' in genes.columns:
-        type_mask = genes['Type'].astype(str).str.lower().str.contains('gene|protein', na=False)
-        genes = genes[type_mask]
-    
+    kg_data = _standardise_kg_dict(kg_data)
+    nodes_df = kg_data.get("nodes")
+    if nodes_df is None or nodes_df.empty:
+        return None
+    nodes_df = _ensure_precomputed_nodes(nodes_df)
+
+    genes = _cluster_filter(nodes_df, cluster_id).copy()
     if genes.empty:
         return None
-    
-    # Sort by PageRank (descending)
-    genes = genes.sort_values('PageRank Score', ascending=False)
-    
-    # Format for display with percentiles
-    results = []
-    for _, row in genes.iterrows():
-        pr_val = float(row['PageRank Score'])
-        bet_val = float(row['Betweenness Score'])
-        eigen_val = float(row['Eigen Score'])
-        
-        # Compute percentiles
-        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100
-        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100
-        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100
-        
-        results.append({
-            'Name': row['Name'],
-            'PageRank': f"{pr_val:.4f}",
-            'PR %ile': f"{pr_percentile:.1f}%",
-            'Betweenness': f"{bet_val:.4f}",
-            'Bet %ile': f"{bet_percentile:.1f}%",
-            'Eigen': f"{eigen_val:.4f}",
-            'Eigen %ile': f"{eigen_percentile:.1f}%"
-        })
-    
-    return pd.DataFrame(results)
+
+    type_col = _pick_col(genes, _TYPE_COL_CANDIDATES)
+    if type_col and type_col in genes.columns:
+        genes = genes[genes[type_col].astype(str).str.lower().str.contains(r"gene|protein", na=False)]
+    if genes.empty:
+        return None
+
+    name_col = nodes_df.attrs.get("__kg_name_col__", "Name")
+    genes = genes.sort_values("__pagerank__", ascending=False)
+
+    def _fmt_num(x: Any) -> str:
+        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.4f}"
+
+    def _fmt_pct(x: Any) -> str:
+        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.1f}%"
+
+    out = pd.DataFrame({
+        "Name": genes[name_col].astype(str),
+        "PageRank": genes["__pagerank__"].map(_fmt_num),
+        "PR %ile": genes["__pagerank_pct__"].map(_fmt_pct),
+        "Betweenness": genes["__betweenness__"].map(_fmt_num),
+        "Bet %ile": genes["__betweenness_pct__"].map(_fmt_pct),
+        "Eigen": genes["__eigen__"].map(_fmt_num),
+        "Eigen %ile": genes["__eigen_pct__"].map(_fmt_pct),
+        "Composite %ile": genes["__composite_pct__"].map(_fmt_pct),
+    })
+
+    return out
 
 
-def get_cluster_drugs(cluster_id, kg_data):
-    """Get all drugs in cluster, sorted by PageRank, with percentiles"""
-    
-    # Handle both formats
-    if isinstance(kg_data, dict):
-        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
-            kg_data = load_kg_data_from_dict(kg_data)
-    
-    drugs = None
-    nodes_df = None
-    
-    # Try to use dedicated drugs dataframe first
-    if 'drugs' in kg_data and not kg_data['drugs'].empty:
-        drugs_df = kg_data['drugs']
-        cluster_id_str = str(cluster_id).lower()
-        cluster_mask = drugs_df['Cluster'].astype(str).str.lower() == cluster_id_str
-        drugs = drugs_df[cluster_mask].copy()
-    
-    # Fall back to filtering nodes table
+def get_cluster_drugs(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
+    """Get drugs in a cluster, sorted by PageRank (desc), with percentiles (relative to nodes)."""
+    if not isinstance(kg_data, dict):
+        return None
+    kg_data = _standardise_kg_dict(kg_data)
+    nodes_df = kg_data.get("nodes")
+    if nodes_df is None or nodes_df.empty:
+        nodes_df = None
+    else:
+        nodes_df = _ensure_precomputed_nodes(nodes_df)
+
+    drugs_df = kg_data.get("drugs")
+    if isinstance(drugs_df, pd.DataFrame) and not drugs_df.empty:
+        drugs = _cluster_filter(drugs_df, cluster_id).copy()
+    else:
+        drugs = None
+
+    # Fallback to nodes table if no dedicated drugs DF
     if drugs is None or drugs.empty:
-        if 'nodes' not in kg_data:
+        if nodes_df is None:
             return None
-        
-        nodes_df = kg_data['nodes']
-        cluster_id_str = str(cluster_id).lower()
-        
-        # Filter to cluster
-        cluster_mask = nodes_df['Cluster'].astype(str).str.lower() == cluster_id_str
-        drugs = nodes_df[cluster_mask].copy()
-        
-        # Filter to drugs (case-insensitive, exact match)
-        if 'Type' in drugs.columns:
-            type_mask = drugs['Type'].astype(str).str.lower() == 'drug'
-            drugs = drugs[type_mask]
-    
-    if drugs.empty:
+        drugs = _cluster_filter(nodes_df, cluster_id).copy()
+        type_col = _pick_col(drugs, _TYPE_COL_CANDIDATES)
+        if type_col and type_col in drugs.columns:
+            drugs = drugs[drugs[type_col].astype(str).str.lower().str.contains("drug", na=False)]
+        if drugs.empty:
+            return None
+
+    # Ensure name column exists
+    name_col = _pick_col(drugs, _NAME_COL_CANDIDATES) or "Name"
+    if name_col not in drugs.columns:
         return None
-    
-    # Get full nodes_df for percentile calculation if not already set
-    if nodes_df is None and 'nodes' in kg_data:
-        nodes_df = kg_data['nodes']
-    
-    # Sort by PageRank (descending)
-    drugs = drugs.sort_values('PageRank Score', ascending=False)
-    
-    # Format for display with percentiles
-    results = []
-    for _, row in drugs.iterrows():
-        pr_val = float(row['PageRank Score'])
-        bet_val = float(row['Betweenness Score'])
-        eigen_val = float(row['Eigen Score'])
-        
-        # Compute percentiles
-        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100 if nodes_df is not None else 0
-        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100 if nodes_df is not None else 0
-        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100 if nodes_df is not None else 0
-        
-        results.append({
-            'Name': row['Name'],
-            'PageRank': f"{pr_val:.4f}",
-            'PR %ile': f"{pr_percentile:.1f}%",
-            'Betweenness': f"{bet_val:.4f}",
-            'Bet %ile': f"{bet_percentile:.1f}%",
-            'Eigen': f"{eigen_val:.4f}",
-            'Eigen %ile': f"{eigen_percentile:.1f}%"
-        })
-    
-    return pd.DataFrame(results)
+
+    # Map percentiles from nodes (if possible)
+    pr_map = bet_map = eig_map = comp_map = None
+    if nodes_df is not None:
+        pr_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank__"]))
+        bet_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness__"]))
+        eig_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen__"]))
+        prp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank_pct__"]))
+        betp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness_pct__"]))
+        eigp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen_pct__"]))
+        comp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__composite_pct__"]))
+    else:
+        prp_map = betp_map = eigp_map = None
+
+    drugs["__name_norm__"] = drugs[name_col].map(_normalise_name)
+    # If dedicated drugs DF has metrics, use them; else use node-mapped metrics
+    pr_col = _pick_col(drugs, _PAGERANK_COL_CANDIDATES)
+    bet_col = _pick_col(drugs, _BETWEENNESS_COL_CANDIDATES)
+    eig_col = _pick_col(drugs, _EIGEN_COL_CANDIDATES)
+
+    if pr_col:
+        drugs["__pagerank__"] = _to_num_series(drugs[pr_col])
+    elif pr_map is not None:
+        drugs["__pagerank__"] = drugs["__name_norm__"].map(pr_map)
+    else:
+        drugs["__pagerank__"] = np.nan
+
+    if bet_col:
+        drugs["__betweenness__"] = _to_num_series(drugs[bet_col])
+    elif bet_map is not None:
+        drugs["__betweenness__"] = drugs["__name_norm__"].map(bet_map)
+    else:
+        drugs["__betweenness__"] = np.nan
+
+    if eig_col:
+        drugs["__eigen__"] = _to_num_series(drugs[eig_col])
+    elif eig_map is not None:
+        drugs["__eigen__"] = drugs["__name_norm__"].map(eig_map)
+    else:
+        drugs["__eigen__"] = np.nan
+
+    if prp_map is not None:
+        drugs["__pagerank_pct__"] = drugs["__name_norm__"].map(prp_map)
+        drugs["__betweenness_pct__"] = drugs["__name_norm__"].map(betp_map)
+        drugs["__eigen_pct__"] = drugs["__name_norm__"].map(eigp_map)
+        drugs["__composite_pct__"] = drugs["__name_norm__"].map(comp_map)
+    else:
+        # Compute percentiles within drugs list (less comparable, but better than nothing)
+        drugs["__pagerank_pct__"] = drugs["__pagerank__"].rank(pct=True) * 100.0
+        drugs["__betweenness_pct__"] = drugs["__betweenness__"].rank(pct=True) * 100.0
+        drugs["__eigen_pct__"] = drugs["__eigen__"].rank(pct=True) * 100.0
+        drugs["__composite_pct__"] = np.nan
+
+    drugs = drugs.sort_values("__pagerank__", ascending=False)
+
+    def _fmt_num(x: Any) -> str:
+        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.4f}"
+
+    def _fmt_pct(x: Any) -> str:
+        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.1f}%"
+
+    out = pd.DataFrame({
+        "Name": drugs[name_col].astype(str),
+        "PageRank": drugs["__pagerank__"].map(_fmt_num),
+        "PR %ile": drugs["__pagerank_pct__"].map(_fmt_pct),
+        "Betweenness": drugs["__betweenness__"].map(_fmt_num),
+        "Bet %ile": drugs["__betweenness_pct__"].map(_fmt_pct),
+        "Eigen": drugs["__eigen__"].map(_fmt_num),
+        "Eigen %ile": drugs["__eigen_pct__"].map(_fmt_pct),
+        "Composite %ile": drugs["__composite_pct__"].map(_fmt_pct),
+    })
+
+    return out
 
 
-def get_cluster_diseases(cluster_id, kg_data):
-    """Get all diseases in cluster, sorted by PageRank, with percentiles"""
-    
-    # Handle both formats
-    if isinstance(kg_data, dict):
-        if 'nodes' not in kg_data and 'MASH_subgraph_nodes' in kg_data:
-            kg_data = load_kg_data_from_dict(kg_data)
-    
-    if 'nodes' not in kg_data:
+def get_cluster_diseases(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
+    """Get diseases in a cluster, sorted by PageRank (desc), with percentiles (relative to nodes)."""
+    if not isinstance(kg_data, dict):
         return None
-    
-    nodes_df = kg_data['nodes']
-    cluster_id_str = str(cluster_id).lower()
-    
-    # Filter to cluster
-    cluster_mask = nodes_df['Cluster'].astype(str).str.lower() == cluster_id_str
-    diseases = nodes_df[cluster_mask].copy()
-    
-    # Filter to diseases (case-insensitive, exact match)
-    if 'Type' in diseases.columns:
-        type_mask = diseases['Type'].astype(str).str.lower() == 'disease'
-        diseases = diseases[type_mask]
-    
-    if diseases.empty:
+    kg_data = _standardise_kg_dict(kg_data)
+    nodes_df = kg_data.get("nodes")
+    if nodes_df is None or nodes_df.empty:
+        nodes_df = None
+    else:
+        nodes_df = _ensure_precomputed_nodes(nodes_df)
+
+    diseases_df = kg_data.get("diseases")
+    if isinstance(diseases_df, pd.DataFrame) and not diseases_df.empty:
+        dis = _cluster_filter(diseases_df, cluster_id).copy()
+    else:
+        dis = None
+
+    if dis is None or dis.empty:
+        if nodes_df is None:
+            return None
+        dis = _cluster_filter(nodes_df, cluster_id).copy()
+        type_col = _pick_col(dis, _TYPE_COL_CANDIDATES)
+        if type_col and type_col in dis.columns:
+            dis = dis[dis[type_col].astype(str).str.lower().str.contains("disease", na=False)]
+        if dis.empty:
+            return None
+
+    name_col = _pick_col(dis, _NAME_COL_CANDIDATES) or "Name"
+    if name_col not in dis.columns:
         return None
-    
-    # Sort by PageRank (descending)
-    diseases = diseases.sort_values('PageRank Score', ascending=False)
-    
-    # Format for display with percentiles
-    results = []
-    for _, row in diseases.iterrows():
-        pr_val = float(row['PageRank Score'])
-        bet_val = float(row['Betweenness Score'])
-        eigen_val = float(row['Eigen Score'])
-        
-        # Compute percentiles
-        pr_percentile = (nodes_df['PageRank Score'] <= pr_val).sum() / len(nodes_df) * 100
-        bet_percentile = (nodes_df['Betweenness Score'] <= bet_val).sum() / len(nodes_df) * 100
-        eigen_percentile = (nodes_df['Eigen Score'] <= eigen_val).sum() / len(nodes_df) * 100
-        
-        results.append({
-            'Name': row['Name'],
-            'PageRank': f"{pr_val:.4f}",
-            'PR %ile': f"{pr_percentile:.1f}%",
-            'Betweenness': f"{bet_val:.4f}",
-            'Bet %ile': f"{bet_percentile:.1f}%",
-            'Eigen': f"{eigen_val:.4f}",
-            'Eigen %ile': f"{eigen_percentile:.1f}%"
-        })
-    
-    return pd.DataFrame(results)
+
+    # Percentile mapping from nodes if possible
+    if nodes_df is not None:
+        pr_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank__"]))
+        bet_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness__"]))
+        eig_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen__"]))
+        prp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank_pct__"]))
+        betp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness_pct__"]))
+        eigp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen_pct__"]))
+        comp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__composite_pct__"]))
+    else:
+        pr_map = bet_map = eig_map = prp_map = betp_map = eigp_map = comp_map = None
+
+    dis["__name_norm__"] = dis[name_col].map(_normalise_name)
+
+    pr_col = _pick_col(dis, _PAGERANK_COL_CANDIDATES)
+    bet_col = _pick_col(dis, _BETWEENNESS_COL_CANDIDATES)
+    eig_col = _pick_col(dis, _EIGEN_COL_CANDIDATES)
+
+    dis["__pagerank__"] = _to_num_series(dis[pr_col]) if pr_col else (dis["__name_norm__"].map(pr_map) if pr_map else np.nan)
+    dis["__betweenness__"] = _to_num_series(dis[bet_col]) if bet_col else (dis["__name_norm__"].map(bet_map) if bet_map else np.nan)
+    dis["__eigen__"] = _to_num_series(dis[eig_col]) if eig_col else (dis["__name_norm__"].map(eig_map) if eig_map else np.nan)
+
+    if prp_map is not None:
+        dis["__pagerank_pct__"] = dis["__name_norm__"].map(prp_map)
+        dis["__betweenness_pct__"] = dis["__name_norm__"].map(betp_map)
+        dis["__eigen_pct__"] = dis["__name_norm__"].map(eigp_map)
+        dis["__composite_pct__"] = dis["__name_norm__"].map(comp_map)
+    else:
+        dis["__pagerank_pct__"] = dis["__pagerank__"].rank(pct=True) * 100.0
+        dis["__betweenness_pct__"] = dis["__betweenness__"].rank(pct=True) * 100.0
+        dis["__eigen_pct__"] = dis["__eigen__"].rank(pct=True) * 100.0
+        dis["__composite_pct__"] = np.nan
+
+    dis = dis.sort_values("__pagerank__", ascending=False)
+
+    def _fmt_num(x: Any) -> str:
+        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.4f}"
+
+    def _fmt_pct(x: Any) -> str:
+        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.1f}%"
+
+    out = pd.DataFrame({
+        "Name": dis[name_col].astype(str),
+        "PageRank": dis["__pagerank__"].map(_fmt_num),
+        "PR %ile": dis["__pagerank_pct__"].map(_fmt_pct),
+        "Betweenness": dis["__betweenness__"].map(_fmt_num),
+        "Bet %ile": dis["__betweenness_pct__"].map(_fmt_pct),
+        "Eigen": dis["__eigen__"].map(_fmt_num),
+        "Eigen %ile": dis["__eigen_pct__"].map(_fmt_pct),
+        "Composite %ile": dis["__composite_pct__"].map(_fmt_pct),
+    })
+
+    return out
 
 
-def interpret_centrality(pagerank, betweenness, eigen):
-    """Interpret centrality scores"""
-    
-    interpretations = []
-    
-    if pagerank > 0.01:
-        interpretations.append("High PageRank (central in network)")
-    elif pagerank > 0.001:
-        interpretations.append("Moderate PageRank")
-    else:
-        interpretations.append("Low PageRank (peripheral)")
-    
-    if betweenness > 0.01:
-        interpretations.append("High Betweenness (bridges clusters)")
-    elif betweenness > 0.001:
-        interpretations.append("Moderate Betweenness")
-    else:
-        interpretations.append("Low Betweenness")
-    
-    if eigen > 0.01:
-        interpretations.append("High Eigen centrality (connected to hubs)")
-    elif eigen > 0.001:
-        interpretations.append("Moderate Eigen centrality")
-    else:
-        interpretations.append("Low Eigen centrality")
-    
-    return " • ".join(interpretations)
+def interpret_centrality(
+    pagerank: float,
+    betweenness: float,
+    eigen: float,
+    pagerank_pct: Optional[float] = None,
+    betweenness_pct: Optional[float] = None,
+    eigen_pct: Optional[float] = None,
+    composite_pct: Optional[float] = None
+) -> str:
+    """
+    Interpret centrality.
+
+    If percentiles are provided, interpretation is percentile-based (recommended).
+    If not, falls back to conservative raw-threshold heuristics.
+    """
+
+    def _bucket(p: Optional[float]) -> Optional[str]:
+        if p is None or (isinstance(p, float) and np.isnan(p)):
+            return None
+        p = float(p)
+        if p >= 95:
+            return "top 5%"
+        if p >= 90:
+            return "top 10%"
+        if p >= 75:
+            return "top 25%"
+        if p >= 50:
+            return "top half"
+        if p >= 25:
+            return "bottom half"
+        return "bottom quartile"
+
+    if pagerank_pct is not None or betweenness_pct is not None or eigen_pct is not None or composite_pct is not None:
+        pr_b = _bucket(pagerank_pct)
+        bet_b = _bucket(betweenness_pct)
+        eig_b = _bucket(eigen_pct)
+        comp_b = _bucket(composite_pct)
+
+        parts: List[str] = []
+        if comp_b:
+            parts.append(f"Composite centrality: {comp_b}")
+        if pr_b:
+            parts.append(f"PageRank: {pr_b}")
+        if bet_b:
+            parts.append(f"Betweenness: {bet_b}")
+        if eig_b:
+            parts.append(f"Eigenvector: {eig_b}")
+
+        if parts:
+            return " · ".join(parts)
+        return "Centrality percentiles unavailable for interpretation."
+
+    # Raw fallback (less stable across graph size/normalisation)
+    hub_like = (pagerank is not None and pagerank > 0.01) or (eigen is not None and eigen > 0.01)
+    bridge_like = (betweenness is not None and betweenness > 0.05)
+
+    if hub_like and bridge_like:
+        return "Likely a hub-bridge: influential and also connects parts of the network."
+    if hub_like:
+        return "Likely a hub: relatively influential within the network."
+    if bridge_like:
+        return "Likely a bridge: may sit on paths connecting network regions."
+    return "Likely peripheral: lower influence and fewer connecting paths."
