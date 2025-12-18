@@ -15,6 +15,7 @@ STUDIES = {
     'GSE212837_Human_snRNAseq': 'GSE212837\n(Human snRNA)',
     'GSE189600_Human_snRNAseq': 'GSE189600\n(Human snRNA)',
     'GSE166504_Mouse_scRNAseq': 'GSE166504\n(Mouse scRNA)',
+    'GSE210501_Mouse_scRNAseq': 'GSE210501\n(Mouse scRNA)',
 }
 
 # ============================================================================

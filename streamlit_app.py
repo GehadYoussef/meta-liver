@@ -163,22 +163,32 @@ def compute_consistency_score(gene_name, studies_data):
     
     # Direction Consistency: How often is the direction the same?
     direction_agreement = max(directions.count('MAFLD'), directions.count('Healthy')) / len(directions) if directions else 0
-    
-    # Compute evidence score components using oriented AUC
-    # Strength: median oriented AUC rescaled to [0,1] where 0.5->0 and 1.0->1
+
+    # ------------------------------------------------------------------------
+    # PATCH: make evidence strength reflect discriminative power regardless
+    # of which class is labelled "positive", and weight by valid AUC count
+    # ------------------------------------------------------------------------
+    n_auc = len(auc_oriented_vals)
+
     median_auc_oriented = np.median(auc_oriented_vals) if auc_oriented_vals else 0.5
-    strength = max(0.0, (median_auc_oriented - 0.5) / 0.5)
-    
-    # Stability: 1 - IQR scaled to AUC range (0.5)
-    if len(auc_oriented_vals) > 1:
-        iqr = np.subtract(*np.percentile(auc_oriented_vals, [75, 25]))
+
+    # Discrimination irrespective of orientation (e.g. 0.487 -> 0.513)
+    auc_disc_vals = [max(a, 1 - a) for a in auc_oriented_vals]
+    median_auc_discriminative = np.median(auc_disc_vals) if auc_disc_vals else 0.5
+
+    # Strength: median discriminative AUC rescaled to [0,1] where 0.5->0 and 1.0->1
+    strength = max(0.0, (median_auc_discriminative - 0.5) / 0.5)
+
+    # Stability: 1 - IQR scaled to AUC range (0.5) on discriminative AUCs
+    if len(auc_disc_vals) > 1:
+        iqr = np.subtract(*np.percentile(auc_disc_vals, [75, 25]))
         stability = max(0.0, 1.0 - (iqr / 0.5))
     else:
         stability = 1.0
-    
-    # Sample weight: saturating weight so 1-2 studies don't look overly "certain"
-    n_weight = 1.0 - np.exp(-found_count / 3.0)
-    
+
+    # Sample weight: use number of valid AUCs (not just "found in study")
+    n_weight = 1.0 - np.exp(-n_auc / 3.0)
+
     # Composite evidence score
     evidence_score = strength * stability * direction_agreement * n_weight
     
