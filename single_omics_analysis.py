@@ -111,22 +111,18 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
 
 
 def _build_score_help() -> Dict[str, str]:
-    """
-    One-sentence explanations surfaced in the Streamlit UI.
-    Keep these short and non-technical.
-    """
+    """One-sentence explanations surfaced in the Streamlit UI."""
     return {
-        "Evidence Score": "Overall evidence (0–100%) combining discriminative AUROC, cross-study stability, direction agreement, and how many studies have valid AUROC.",
-        "Direction Agreement": "How consistently the gene is up in MAFLD vs up in Healthy across studies (1.0 means all studies agree).",
-        "Median AUC (disc)": "Median discriminative AUROC across studies, where AUC < 0.5 is treated as label-flipped signal via max(AUC, 1−AUC).",
-        "Studies Found": "How many studies contained the gene (even if AUROC is missing).",
-        "Strength": "Scaled discriminative performance: 0 means no better than random (AUC-disc=0.5), 1 means perfect separation (AUC-disc=1.0).",
-        "Stability": "Cross-study consistency of AUC-disc: 1 means very consistent, lower values mean high between-study spread (IQR).",
-        "Study Weight": "More studies with valid AUROC increase confidence; this is a smooth weight that grows with n_auc.",
-        "Valid AUROC (n_auc)": "Number of studies contributing valid AUROC to the score.",
-        "Median AUC (raw)": "Median AUROC as reported in the study tables (can be <0.5 if the labels are flipped).",
-        "Median AUC (oriented)": "Median AUROC after orienting so higher values correspond to MAFLD as the ‘positive’ side (for diagnostics).",
-        "disc_full": "Reference ‘good signal’ line: AUC-disc=0.65 corresponds to a moderate discriminative signal.",
+        "Evidence Score": "Overall evidence across studies (Strength × Stability × Direction Agreement × Study Weight).",
+        "Direction Agreement": "Fraction of studies where the gene’s direction (MAFLD vs Healthy) matches the majority.",
+        "Median AUC (disc)": "Median discriminative AUC across studies: AUC-disc = max(AUC, 1−AUC).",
+        "Studies Found": "Number of studies where the gene is present (even if AUROC is missing).",
+        "Strength": "How far the median AUC-disc is above 0.5 (0=no signal; 1=perfect).",
+        "Stability": "Cross-study consistency of AUC-disc (1=very consistent; 0=very variable).",
+        "Study Weight": "Downweights scores supported by very few AUROC values (increases with n_auc).",
+        "Valid AUROC (n_auc)": "Number of studies with a usable AUROC value for this gene.",
+        "Median AUC (raw)": "Median of the raw AUROC values as stored in the study tables (diagnostic).",
+        "Median AUC (oriented)": "Median AUROC after aligning direction so MAFLD is treated as ‘positive’ (diagnostic).",
         "AUC-disc IQR": "Interquartile range of AUC-disc across studies (lower = more stable).",
     }
 
@@ -174,23 +170,25 @@ def compute_consistency_score(
         if auc is None:
             continue
 
-        if not (0.0 <= auc <= 1.0):
+        if not (0.0 <= float(auc) <= 1.0):
             continue
 
-        auc_values.append(float(auc))
+        auc_raw = float(auc)
+        auc_values.append(auc_raw)
 
-        # Discriminative AUC (orientation-invariant) MUST be from raw auc
-        auc_disc_vals.append(float(max(auc, 1.0 - auc)))
+        # Discriminative AUC (orientation-invariant)
+        auc_disc = float(max(auc_raw, 1.0 - auc_raw))
+        auc_disc_vals.append(auc_disc)
 
         # Oriented AUC (diagnostic): align towards MAFLD as "positive"
         if direction == "MAFLD":
-            auc_oriented = float(auc)
+            auc_oriented = auc_raw
         elif direction == "Healthy":
-            auc_oriented = float(1.0 - auc)
+            auc_oriented = float(1.0 - auc_raw)
         else:
-            auc_oriented = float(auc)
+            auc_oriented = auc_raw
 
-        if 0.0 <= auc_oriented <= 1.0:
+        if 0.0 <= float(auc_oriented) <= 1.0:
             auc_oriented_vals.append(float(auc_oriented))
 
     if found_count == 0:
@@ -201,7 +199,6 @@ def compute_consistency_score(
     total_dir = len(directions)
 
     direction_agreement = (max(mafld_n, healthy_n) / total_dir) if total_dir else 0.0
-    consensus_direction = None
     if total_dir:
         if mafld_n > healthy_n:
             consensus_direction = "MAFLD"
@@ -209,6 +206,8 @@ def compute_consistency_score(
             consensus_direction = "Healthy"
         else:
             consensus_direction = "Mixed"
+    else:
+        consensus_direction = None
 
     n_auc = len(auc_disc_vals)
 
@@ -261,7 +260,6 @@ def compute_consistency_score(
         "found_count": int(found_count),
         "n_auc": int(n_auc),
         "interpretation": interpretation,
-        "disc_full": 0.65,
         "score_help": _build_score_help(),
     }
 
@@ -506,7 +504,10 @@ def create_auc_logfc_scatter(
     return fig
 
 
-def create_results_table(gene_name: str, studies_data: Optional[Dict[str, pd.DataFrame]] = None) -> Optional[pd.DataFrame]:
+def create_results_table(
+    gene_name: str,
+    studies_data: Optional[Dict[str, pd.DataFrame]] = None
+) -> Optional[pd.DataFrame]:
     """
     Per-study table including:
       - AUC_raw, AUC_disc, AUC_oriented
