@@ -9,8 +9,21 @@ import numpy as np
 import plotly.graph_objects as go
 from pathlib import Path
 from robust_data_loader import load_single_omics_studies, load_kg_data, load_ppi_data
-from kg_analysis import get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
-from wgcna_ppi_analysis import load_wgcna_module_data, get_gene_module, get_module_genes, get_coexpressed_partners, find_ppi_interactors, get_network_stats
+from kg_analysis import (
+    get_gene_kg_info,
+    get_cluster_genes,
+    get_cluster_drugs,
+    get_cluster_diseases,
+    interpret_centrality
+)
+from wgcna_ppi_analysis import (
+    load_wgcna_module_data,
+    get_gene_module,
+    get_module_genes,
+    get_coexpressed_partners,
+    find_ppi_interactors,
+    get_network_stats
+)
 
 # ============================================================================
 # CONFIG
@@ -58,7 +71,7 @@ def find_gene_in_study(gene_name, study_df):
     Returns (matched_row, gene_col_name) or (None, None) if not found.
     Exact match preferred over substring match.
     """
-    
+
     # Determine gene column name
     gene_col = None
     if 'Gene' in study_df.columns:
@@ -67,23 +80,23 @@ def find_gene_in_study(gene_name, study_df):
         gene_col = 'gene'
     else:
         return None, None
-    
+
     # Try exact match first (case-insensitive)
     exact_match = study_df[study_df[gene_col].str.lower() == gene_name.lower()]
     if not exact_match.empty:
         return exact_match.iloc[0], gene_col
-    
+
     # Fall back to substring match only if no exact match
     substring_match = study_df[study_df[gene_col].str.contains(gene_name, case=False, na=False)]
     if not substring_match.empty:
         return substring_match.iloc[0], gene_col
-    
+
     return None, None
 
 
 def extract_metrics_from_row(row):
     """Extract AUC, logFC, and direction from a row"""
-    
+
     auc = None
     for col in ['AUC', 'auc', 'AUC_score']:
         if col in row.index:
@@ -92,7 +105,7 @@ def extract_metrics_from_row(row):
                 break
             except:
                 pass
-    
+
     lfc = None
     for col in ['avg_logFC', 'avg_LFC', 'logFC', 'log2FC', 'avg_log2FC']:
         if col in row.index:
@@ -101,7 +114,7 @@ def extract_metrics_from_row(row):
                 break
             except:
                 pass
-    
+
     # Determine direction (unified logic)
     direction = None
     if 'direction' in row.index:
@@ -114,7 +127,7 @@ def extract_metrics_from_row(row):
         # Infer from logFC if direction column missing
         if lfc is not None:
             direction = 'MAFLD' if lfc > 0 else 'Healthy'
-    
+
     return auc, lfc, direction
 
 
@@ -127,24 +140,24 @@ def compute_consistency_score(gene_name, studies_data):
     Compute consistency score using oriented AUC and composite evidence score.
     Direction is determined by explicit 'direction' column OR inferred from logFC.
     """
-    
+
     auc_values = []
     auc_oriented_vals = []
     directions = []
     found_count = 0
-    
+
     for study_name, df in studies_data.items():
         row, gene_col = find_gene_in_study(gene_name, df)
-        
+
         if row is None:
             continue
-        
+
         found_count += 1
         auc, lfc, direction = extract_metrics_from_row(row)
-        
+
         if auc is not None:
             auc_values.append(auc)
-            
+
             # Orient AUC so that >0.5 always supports the displayed direction
             if direction == "MAFLD":
                 auc_oriented = auc
@@ -152,15 +165,15 @@ def compute_consistency_score(gene_name, studies_data):
                 auc_oriented = 1 - auc  # Flip if direction is opposite
             else:
                 auc_oriented = auc  # No direction, use raw AUC
-            
+
             auc_oriented_vals.append(auc_oriented)
-        
+
         if direction is not None:
             directions.append(direction)
-    
+
     if found_count == 0:
         return None
-    
+
     # Direction Consistency: How often is the direction the same?
     direction_agreement = max(directions.count('MAFLD'), directions.count('Healthy')) / len(directions) if directions else 0
 
@@ -191,7 +204,7 @@ def compute_consistency_score(gene_name, studies_data):
 
     # Composite evidence score
     evidence_score = strength * stability * direction_agreement * n_weight
-    
+
     # Conditional interpretation based on components
     if strength > 0.7 and stability > 0.7 and direction_agreement > 0.7:
         interpretation = "Highly consistent: strong, stable, and directionally aligned"
@@ -203,12 +216,14 @@ def compute_consistency_score(gene_name, studies_data):
         interpretation = "Stable and directionally aligned, but weak signal"
     else:
         interpretation = "Weak or inconsistent evidence"
-    
+
     return {
         'auc_values': auc_values,
         'auc_oriented_vals': auc_oriented_vals,
         'auc_median': np.median(auc_values) if auc_values else 0,
         'auc_median_oriented': median_auc_oriented,
+        'auc_median_discriminative': median_auc_discriminative,
+        'n_auc': n_auc,
         'strength': strength,
         'stability': stability,
         'direction_agreement': direction_agreement,
@@ -224,20 +239,20 @@ def compute_consistency_score(gene_name, studies_data):
 
 def create_lollipop_plot(gene_name, studies_data):
     """Create horizontal lollipop plot with direction cues (triangle markers)"""
-    
+
     plot_data = []
-    
+
     for study_name, df in studies_data.items():
         row, gene_col = find_gene_in_study(gene_name, df)
-        
+
         if row is None:
             continue
-        
+
         auc, lfc, direction = extract_metrics_from_row(row)
-        
+
         if auc is None:
             continue
-        
+
         # Determine marker symbol
         if direction == 'MAFLD':
             symbol = 'triangle-up'
@@ -248,11 +263,11 @@ def create_lollipop_plot(gene_name, studies_data):
         else:
             symbol = 'circle'
             color = '#999999'
-        
+
         # Dot size based on logFC magnitude (subtle)
         size = 10 + abs(lfc if lfc else 0) * 1.5
         size = min(size, 16)  # Cap at 16
-        
+
         plot_data.append({
             'study': study_name,
             'auc': auc,
@@ -262,15 +277,15 @@ def create_lollipop_plot(gene_name, studies_data):
             'color': color,
             'size': size
         })
-    
+
     if not plot_data:
         return None
-    
+
     # Sort by AUC for better visualization
     plot_data = sorted(plot_data, key=lambda x: x['auc'])
-    
+
     fig = go.Figure()
-    
+
     # Add lollipop lines (subtle gray)
     for item in plot_data:
         fig.add_trace(go.Scatter(
@@ -281,7 +296,7 @@ def create_lollipop_plot(gene_name, studies_data):
             showlegend=False,
             hoverinfo='skip'
         ))
-    
+
     # Add dots with direction symbols
     for item in plot_data:
         fig.add_trace(go.Scatter(
@@ -298,7 +313,7 @@ def create_lollipop_plot(gene_name, studies_data):
             hoverinfo='text',
             showlegend=False
         ))
-    
+
     fig.update_layout(
         title=dict(text="AUROC Across Studies", font=dict(size=14, color='#000000')),
         xaxis_title=dict(text="AUROC", font=dict(size=12, color='#000000')),
@@ -318,7 +333,7 @@ def create_lollipop_plot(gene_name, studies_data):
         plot_bgcolor='#fafafa',
         paper_bgcolor='white'
     )
-    
+
     return fig
 
 # ============================================================================
@@ -327,20 +342,20 @@ def create_lollipop_plot(gene_name, studies_data):
 
 def create_auc_logfc_scatter(gene_name, studies_data):
     """Create AUC vs logFC scatter plot"""
-    
+
     plot_data = []
-    
+
     for study_name, df in studies_data.items():
         row, gene_col = find_gene_in_study(gene_name, df)
-        
+
         if row is None:
             continue
-        
+
         auc, lfc, direction = extract_metrics_from_row(row)
-        
+
         if auc is None or lfc is None:
             continue
-        
+
         # Determine marker symbol
         if direction == 'MAFLD':
             symbol = 'triangle-up'
@@ -348,7 +363,7 @@ def create_auc_logfc_scatter(gene_name, studies_data):
             symbol = 'triangle-down'
         else:
             symbol = 'circle'
-        
+
         plot_data.append({
             'study': study_name,
             'auc': auc,
@@ -356,12 +371,12 @@ def create_auc_logfc_scatter(gene_name, studies_data):
             'direction': direction,
             'symbol': symbol
         })
-    
+
     if len(plot_data) < 2:
         return None
-    
+
     fig = go.Figure()
-    
+
     # Add points with direction symbols
     for item in plot_data:
         fig.add_trace(go.Scatter(
@@ -378,11 +393,11 @@ def create_auc_logfc_scatter(gene_name, studies_data):
             hoverinfo='text',
             showlegend=False
         ))
-    
+
     # Add reference lines only (no quadrant backgrounds)
     fig.add_hline(y=0, line_dash="dash", line_color="#999999", line_width=1.5)
     fig.add_vline(x=0.5, line_dash="dash", line_color="#999999", line_width=1.5)
-    
+
     fig.update_layout(
         title=dict(text="Concordance: AUC vs logFC", font=dict(size=14, color='#000000')),
         xaxis_title=dict(text="AUROC", font=dict(size=12, color='#000000')),
@@ -406,7 +421,7 @@ def create_auc_logfc_scatter(gene_name, studies_data):
         plot_bgcolor='#fafafa',
         paper_bgcolor='white'
     )
-    
+
     return fig
 
 # ============================================================================
@@ -415,27 +430,27 @@ def create_auc_logfc_scatter(gene_name, studies_data):
 
 def create_results_table(gene_name, studies_data):
     """Create results table"""
-    
+
     results = []
-    
+
     for study_name, df in studies_data.items():
         row, gene_col = find_gene_in_study(gene_name, df)
-        
+
         if row is None:
             continue
-        
+
         auc, lfc, direction = extract_metrics_from_row(row)
-        
+
         results.append({
             'Study': study_name,
             'AUC': f"{auc:.3f}" if auc else "N/A",
             'logFC': f"{lfc:.3f}" if lfc else "N/A",
             'Direction': direction if direction else "Unknown"
         })
-    
+
     if not results:
         return None
-    
+
     return pd.DataFrame(results)
 
 # ============================================================================
@@ -453,17 +468,17 @@ if data_loaded:
                 st.write(f"• {study_name}")
     else:
         st.sidebar.warning("⚠ No single-omics studies found")
-    
+
     if kg_data:
         st.sidebar.success(f"✓ Knowledge graph loaded")
     else:
         st.sidebar.warning("⚠ Knowledge graph not available")
-    
+
     if wgcna_module_data:
         st.sidebar.success(f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)")
     else:
         st.sidebar.warning("⚠ WGCNA modules not available")
-    
+
     if ppi_data:
         st.sidebar.success(f"✓ PPI networks loaded")
     else:
@@ -476,15 +491,15 @@ st.sidebar.markdown("---")
 if not search_query:
     st.title("🔬 Meta Liver")
     st.markdown("*Hypothesis Engine for Liver Genomics*")
-    
+
     st.markdown("""
     ## Single-Omics Analysis
-    
+
     Search for a gene to see:
     - **Consistency Score** - How consistent is the signal?
     - **Forest Plot** - AUC across studies
     - **Results Table** - Detailed metrics
-    
+
     ### Try searching for:
     - SAA1
     - TP53
@@ -494,58 +509,65 @@ if not search_query:
 
 else:
     st.title(f"🔬 {search_query}")
-    
+
     if not single_omics_data:
         st.error("No studies data found!")
     else:
         consistency = compute_consistency_score(search_query, single_omics_data)
-        
+
         if consistency is None:
             st.warning(f"Gene '{search_query}' not found in any study")
         else:
             # Create three main tabs
-            tab_omics, tab_kg, tab_coexpr = st.tabs(["Single-Omics Evidence", "MAFLD Knowledge Graph", "Co-expression and PPI Networks"])
-            
+            tab_omics, tab_kg, tab_coexpr = st.tabs(
+                ["Single-Omics Evidence", "MAFLD Knowledge Graph", "Co-expression and PPI Networks"]
+            )
+
             # ================================================================
             # TAB 1: SINGLE-OMICS EVIDENCE
             # ================================================================
-            
+
             with tab_omics:
                 st.markdown("""
-                This tab summarises gene-level evidence across the single-omics data sets. 
-                For the selected gene, we report study-specific AUROC values and differential expression 
-                direction (logFC), together with an overall consistency score reflecting how reproducibly 
-                the signal is observed across cohorts. Visualisations highlight between-study agreement 
-                and potential outliers, and the detailed table provides the underlying per-study statistics 
+                This tab summarises gene-level evidence across the single-omics data sets.
+                For the selected gene, we report study-specific AUROC values and differential expression
+                direction (logFC), together with an overall consistency score reflecting how reproducibly
+                the signal is observed across cohorts. Visualisations highlight between-study agreement
+                and potential outliers, and the detailed table provides the underlying per-study statistics
                 used in downstream interpretation.
                 """)
-                
+
                 st.markdown("---")
-                
-                # Metrics: Separate AUROC and Direction Consistency
-                col1, col2, col3, col4 = st.columns(4)
-                
+
+                # Metrics
+                col1, col2, col3, col4, col5 = st.columns(5)
+
                 with col1:
                     st.metric("Evidence Score", f"{consistency['evidence_score']:.1%}")
-                
+
                 with col2:
                     st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
-                
+
                 with col3:
-                    st.metric("Median AUC", f"{consistency['auc_median']:.3f}")
-                
+                    st.metric("Median AUC (raw)", f"{consistency['auc_median']:.3f}")
+
                 with col4:
+                    st.metric("Median AUC (disc)", f"{consistency['auc_median_discriminative']:.3f}")
+
+                with col5:
                     st.metric("Studies Found", f"{consistency['found_count']}")
-                
+
+                st.caption(f"AUC available in {consistency['n_auc']} of {consistency['found_count']} found studies.")
+
                 # Conditional Interpretation
                 st.info(f"📊 **{consistency['interpretation']}**")
-                
+
                 # Lollipop plot
                 st.markdown("**AUROC Across Studies**")
                 fig = create_lollipop_plot(search_query, single_omics_data)
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
-                
+
                 # AUC vs logFC scatter
                 st.markdown("**Concordance: AUC vs logFC**")
                 fig_scatter = create_auc_logfc_scatter(search_query, single_omics_data)
@@ -553,43 +575,43 @@ else:
                     st.plotly_chart(fig_scatter, use_container_width=True)
                 else:
                     st.info("Not enough data for concordance plot")
-                
+
                 # Results table
                 st.markdown("**Detailed Results**")
                 results_df = create_results_table(search_query, single_omics_data)
                 if results_df is not None:
                     st.dataframe(results_df, use_container_width=True, hide_index=True)
-            
+
             # ================================================================
             # TAB 2: MAFLD KNOWLEDGE GRAPH
             # ================================================================
-            
+
             with tab_kg:
                 st.markdown("""
-                This tab places the selected gene in its network context within the MAFLD MASH subgraph. 
-                We report whether the gene is present in the subgraph, its assigned cluster, and centrality 
-                metrics (PageRank, betweenness, eigenvector) to indicate whether it behaves as a hub or a 
-                peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations, 
-                enabling rapid hypothesis generation about mechanistic neighbours and therapeutically relevant 
+                This tab places the selected gene in its network context within the MAFLD MASH subgraph.
+                We report whether the gene is present in the subgraph, its assigned cluster, and centrality
+                metrics (PageRank, betweenness, eigenvector) to indicate whether it behaves as a hub or a
+                peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations,
+                enabling rapid hypothesis generation about mechanistic neighbours and therapeutically relevant
                 connections.
                 """)
-                
+
                 st.markdown("---")
-                
+
                 if kg_data:
                     kg_info = get_gene_kg_info(search_query, kg_data)
-                    
+
                     if kg_info and kg_info['found']:
                         # Gene's position in subgraph
                         col1, col2, col3 = st.columns(3)
-                        
+
                         with col1:
                             st.metric("Cluster", kg_info['cluster'])
                         with col2:
                             st.metric("PageRank", f"{kg_info['pagerank']:.4f}")
                         with col3:
                             st.metric("Betweenness", f"{kg_info['betweenness']:.4f}")
-                        
+
                         # Add Eigenvector centrality
                         col4, col5, col6 = st.columns(3)
                         with col4:
@@ -598,48 +620,48 @@ else:
                             st.metric("Composite", f"{kg_info['composite']:.6f}")
                         with col6:
                             st.write("")  # Spacer
-                        
+
                         st.markdown("---")
-                        
+
                         # Show min/max context for all metrics (whole graph)
                         st.markdown("**Centrality Metrics - Whole Graph Context**")
-                        
+
                         # Composite centrality section
                         st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
                         st.write(f"Composite score: {kg_info['composite']:.6f}")
                         st.write(f"Min/Max (whole graph): {kg_info['composite_min']:.6f} – {kg_info['composite_max']:.6f}")
                         st.write(f"Percentile: {kg_info['composite_percentile']:.1f}%")
                         st.write("*Weights: PageRank 50%, Betweenness 25%, Eigenvector 25%*")
-                        
+
                         st.markdown("---")
-                        
+
                         st.markdown("**Individual Metrics - Whole Graph Context**")
-                        
+
                         context_col1, context_col2, context_col3 = st.columns(3)
-                        
+
                         with context_col1:
                             st.write(f"**PageRank**")
                             st.write(f"Min: {kg_info['pr_min']:.4f}")
                             st.write(f"Max: {kg_info['pr_max']:.4f}")
                             st.write(f"Your node: {kg_info['pagerank']:.4f}")
                             st.write(f"Percentile: {kg_info['pr_percentile']:.1f}%")
-                        
+
                         with context_col2:
                             st.write(f"**Betweenness**")
                             st.write(f"Min: {kg_info['bet_min']:.4f}")
                             st.write(f"Max: {kg_info['bet_max']:.4f}")
                             st.write(f"Your node: {kg_info['betweenness']:.4f}")
                             st.write(f"Percentile: {kg_info['bet_percentile']:.1f}%")
-                        
+
                         with context_col3:
                             st.write(f"**Eigenvector**")
                             st.write(f"Min: {kg_info['eigen_min']:.4f}")
                             st.write(f"Max: {kg_info['eigen_max']:.4f}")
                             st.write(f"Your node: {kg_info['eigen']:.4f}")
                             st.write(f"Percentile: {kg_info['eigen_percentile']:.1f}%")
-                        
+
                         st.markdown("---")
-                        
+
                         # Interpretation
                         interpretation = interpret_centrality(
                             kg_info['pagerank'],
@@ -647,26 +669,26 @@ else:
                             kg_info['eigen']
                         )
                         st.info(f"📍 {interpretation}")
-                        
+
                         # Nodes in same cluster - three tabs
                         st.markdown("**Nodes in Cluster**")
-                        
+
                         tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
-                        
+
                         with tab_genes:
                             genes_df = get_cluster_genes(kg_info['cluster'], kg_data)
                             if genes_df is not None:
                                 st.dataframe(genes_df, use_container_width=True, hide_index=True)
                             else:
                                 st.write("No genes/proteins in this cluster")
-                        
+
                         with tab_drugs:
                             drugs_df = get_cluster_drugs(kg_info['cluster'], kg_data)
                             if drugs_df is not None:
                                 st.dataframe(drugs_df, use_container_width=True, hide_index=True)
                             else:
                                 st.write("No drugs in this cluster")
-                        
+
                         with tab_diseases:
                             diseases_df = get_cluster_diseases(kg_info['cluster'], kg_data)
                             if diseases_df is not None:
@@ -677,36 +699,36 @@ else:
                         st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
                 else:
                     st.warning("⚠ Knowledge graph data not loaded")
-            
+
             # ================================================================
             # TAB 3: CO-EXPRESSION AND PPI NETWORKS
             # ================================================================
-            
+
             with tab_coexpr:
                 st.markdown("""
-                This tab summarises the gene's systems-level context from WGCNA module membership 
-                and protein–protein interaction (PPI) networks. We report the WGCNA module assignment 
-                (and key module statistics where available) and highlight the most strongly co-expressed 
-                partners to indicate shared regulation. We then place the gene in the PPI network to show 
-                direct interactors and local network properties, supporting prioritisation of plausible 
+                This tab summarises the gene's systems-level context from WGCNA module membership
+                and protein–protein interaction (PPI) networks. We report the WGCNA module assignment
+                (and key module statistics where available) and highlight the most strongly co-expressed
+                partners to indicate shared regulation. We then place the gene in the PPI network to show
+                direct interactors and local network properties, supporting prioritisation of plausible
                 mechanisms and helping to distinguish co-expression structure from physical interaction evidence.
                 """)
-                
+
                 st.markdown("---")
-                
+
                 # WGCNA Section
                 st.markdown("**WGCNA Co-expression Module**")
-                
+
                 if wgcna_module_data:
                     # Get gene's module assignment
                     gene_module_info = get_gene_module(search_query, wgcna_module_data)
-                    
+
                     if gene_module_info:
                         st.markdown(f"**Module Assignment:** {gene_module_info['module']}")
-                        
+
                         # Get other genes in the same module
                         module_genes = get_module_genes(gene_module_info['module'], wgcna_module_data)
-                        
+
                         if module_genes is not None:
                             st.markdown(f"Top genes in module {gene_module_info['module']}:")
                             st.dataframe(module_genes.head(15), use_container_width=True)
@@ -716,27 +738,27 @@ else:
                         st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
                 else:
                     st.info("⚠ WGCNA module data not available")
-                
+
                 st.markdown("---")
-                
+
                 # PPI Section
                 st.markdown("**Protein-Protein Interaction Network**")
-                
+
                 if ppi_data:
                     # Get PPI interactors
                     ppi_df = find_ppi_interactors(search_query, ppi_data)
-                    
+
                     if ppi_df is not None:
                         # Get network stats
                         net_stats = get_network_stats(search_query, ppi_data)
-                        
+
                         if net_stats:
                             col1, col2 = st.columns(2)
                             with col1:
                                 st.metric("Direct Interactors", net_stats['degree'])
                             with col2:
                                 st.write(f"**Network Property:** {net_stats['description']}")
-                        
+
                         st.markdown(f"Direct interaction partners of {search_query}:")
                         st.dataframe(ppi_df, use_container_width=True, hide_index=True)
                     else:
@@ -745,4 +767,7 @@ else:
                     st.info("⚠ PPI network data not available")
 
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | Co-expression and PPI Networks</p></div>", unsafe_allow_html=True)
+st.markdown(
+    "<div style='text-align: center; color: gray; font-size: 11px;'><p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | Co-expression and PPI Networks</p></div>",
+    unsafe_allow_html=True
+)
