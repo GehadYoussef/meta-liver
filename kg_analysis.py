@@ -3,8 +3,8 @@ Knowledge Graph Analysis Module
 
 Analyzes a gene's position in the MAFLD/MASH subgraph and provides:
 - Robust matching of gene/drug/disease names
-- Centrality metrics + empirically-derived percentile ranks (stable across graph rebuilds)
-- Cluster neighbours (genes, drugs, diseases) with precomputed percentiles for speed
+- Centrality metrics + empirically-derived percentile ranks
+- Cluster neighbours (genes, drugs, diseases) with percentiles for speed
 - Human-readable centrality interpretation
 
 Designed to be imported by streamlit_app.py.
@@ -122,10 +122,71 @@ def _normalise_name_alnum(x: Any) -> str:
     return s
 
 
+def _pct_rank(v: pd.Series) -> pd.Series:
+    """
+    Percentile rank in [0,100]. NaNs stay NaN.
+    If all values are NaN, returns all NaN.
+    """
+    if v is None:
+        return pd.Series(np.nan, index=None)
+    if not isinstance(v, pd.Series):
+        v = pd.Series(v)
+    if not v.notna().any():
+        return pd.Series(np.nan, index=v.index)
+    return v.rank(pct=True, method="average") * 100.0
+
+
+def _weighted_geomean_of_percentiles(
+    pr_pct: pd.Series,
+    bet_pct: pd.Series,
+    eig_pct: pd.Series,
+    w_pr: float = 0.5,
+    w_bet: float = 0.25,
+    w_eig: float = 0.25,
+) -> pd.Series:
+    """
+    Composite centrality computed as a weighted geometric mean of available percentiles.
+
+    Key fix vs prior version:
+      - Missing percentiles do NOT get coerced to 0.
+      - We renormalise weights per-row over available components.
+      - If all components missing -> composite is NaN.
+
+    Returns composite in [0,1] (not a percentile). You can then percentile-rank it.
+    """
+    eps = 1e-12
+
+    prp = (pr_pct / 100.0)
+    betp = (bet_pct / 100.0)
+    eigp = (eig_pct / 100.0)
+
+    # valid masks
+    v_pr = prp.notna()
+    v_bet = betp.notna()
+    v_eig = eigp.notna()
+
+    # weight sum per row (renormalise to available components)
+    wsum = (w_pr * v_pr.astype(float)) + (w_bet * v_bet.astype(float)) + (w_eig * v_eig.astype(float))
+
+    # log-space mean to avoid underflow
+    log_pr = np.log(np.maximum(prp.fillna(1.0).astype(float), eps))
+    log_bet = np.log(np.maximum(betp.fillna(1.0).astype(float), eps))
+    log_eig = np.log(np.maximum(eigp.fillna(1.0).astype(float), eps))
+
+    num = (w_pr * v_pr.astype(float) * log_pr) + (w_bet * v_bet.astype(float) * log_bet) + (w_eig * v_eig.astype(float) * log_eig)
+
+    comp = np.exp(np.where(wsum.values > 0, (num / wsum).values, np.nan))
+    return pd.Series(comp, index=pr_pct.index, dtype=float)
+
+
 def _ensure_precomputed_nodes(nodes_df: pd.DataFrame) -> pd.DataFrame:
     """
     Add cached numeric + percentile columns for centrality and a composite percentile.
     This runs once per nodes dataframe (idempotent).
+
+    Fixes:
+      - Preserve missing metrics as NaN (do NOT coerce to 0.0)
+      - Composite is computed from available percentiles with per-row weight renormalisation
     """
     if nodes_df is None or nodes_df.empty:
         return nodes_df
@@ -145,28 +206,26 @@ def _ensure_precomputed_nodes(nodes_df: pd.DataFrame) -> pd.DataFrame:
     eig_col = _pick_col(nodes_df, _EIGEN_COL_CANDIDATES)
 
     # Numeric versions (NaN if missing)
-    nodes_df["__pagerank__"] = _to_num_series(nodes_df[pr_col]) if pr_col else np.nan
-    nodes_df["__betweenness__"] = _to_num_series(nodes_df[bet_col]) if bet_col else np.nan
-    nodes_df["__eigen__"] = _to_num_series(nodes_df[eig_col]) if eig_col else np.nan
+    nodes_df["__pagerank__"] = _to_num_series(nodes_df[pr_col]) if pr_col else pd.Series(np.nan, index=nodes_df.index)
+    nodes_df["__betweenness__"] = _to_num_series(nodes_df[bet_col]) if bet_col else pd.Series(np.nan, index=nodes_df.index)
+    nodes_df["__eigen__"] = _to_num_series(nodes_df[eig_col]) if eig_col else pd.Series(np.nan, index=nodes_df.index)
 
     # Percentiles computed on available values (NaN stays NaN)
-    def _pct_rank(v: pd.Series) -> pd.Series:
-        return v.rank(pct=True, method="average") * 100.0
-
     nodes_df["__pagerank_pct__"] = _pct_rank(nodes_df["__pagerank__"])
     nodes_df["__betweenness_pct__"] = _pct_rank(nodes_df["__betweenness__"])
     nodes_df["__eigen_pct__"] = _pct_rank(nodes_df["__eigen__"])
 
-    # Composite based on percentile ranks (scale-invariant)
-    w_pr, w_bet, w_eig = 0.5, 0.25, 0.25
-    eps = 1e-12
-    prp = (nodes_df["__pagerank_pct__"] / 100.0).fillna(0.0).clip(lower=0.0)
-    betp = (nodes_df["__betweenness_pct__"] / 100.0).fillna(0.0).clip(lower=0.0)
-    eigp = (nodes_df["__eigen_pct__"] / 100.0).fillna(0.0).clip(lower=0.0)
-
-    comp = (np.maximum(prp, eps) ** w_pr) * (np.maximum(betp, eps) ** w_bet) * (np.maximum(eigp, eps) ** w_eig)
+    # Composite based on percentile ranks (scale-invariant, robust to missing)
+    comp = _weighted_geomean_of_percentiles(
+        nodes_df["__pagerank_pct__"],
+        nodes_df["__betweenness_pct__"],
+        nodes_df["__eigen_pct__"],
+        w_pr=0.5,
+        w_bet=0.25,
+        w_eig=0.25,
+    )
     nodes_df["__composite__"] = comp
-    nodes_df["__composite_pct__"] = comp.rank(pct=True, method="average") * 100.0
+    nodes_df["__composite_pct__"] = _pct_rank(nodes_df["__composite__"])
 
     nodes_df.attrs["__kg_precomputed__"] = True
     nodes_df.attrs["__kg_name_col__"] = name_col
@@ -183,7 +242,6 @@ def _standardise_kg_dict(kg_dict: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(kg_dict, dict):
         return {}
 
-    # If already standardised
     if "nodes" in kg_dict:
         return kg_dict
 
@@ -258,12 +316,15 @@ def _match_single_node(nodes_df: pd.DataFrame, query: str) -> Tuple[Optional[pd.
     if len(q1) >= 3:
         m = df[df["__name_norm__"].str.contains(re.escape(q1), na=False)]
         if not m.empty:
-            # Prefer the shortest name (usually the cleanest symbol)
             name_col = df.attrs.get("__kg_name_col__", "Name")
             m = m.assign(__len__=m[name_col].astype(str).str.len())
             m = m.sort_values(["__len__"], ascending=True)
             row = m.iloc[0]
-            meta.update(match_type="contains", n_matches=int(len(m)), matched_name=str(row.get(name_col, row.get("Name", ""))))
+            meta.update(
+                match_type="contains",
+                n_matches=int(len(m)),
+                matched_name=str(row.get(name_col, row.get("Name", ""))),
+            )
             return row, meta
 
     return None, meta
@@ -293,25 +354,26 @@ def get_gene_kg_info(gene_name: str, kg_data: Any) -> Optional[Dict[str, Any]]:
     cluster_col = _pick_col(nodes_df, _CLUSTER_COL_CANDIDATES) or "Cluster"
     type_col = _pick_col(nodes_df, _TYPE_COL_CANDIDATES)
 
-    pr = float(gene_row["__pagerank__"]) if pd.notna(gene_row["__pagerank__"]) else 0.0
-    bet = float(gene_row["__betweenness__"]) if pd.notna(gene_row["__betweenness__"]) else 0.0
-    eig = float(gene_row["__eigen__"]) if pd.notna(gene_row["__eigen__"]) else 0.0
+    # Preserve missingness as NaN (UI can render N/A)
+    pr = float(gene_row["__pagerank__"]) if pd.notna(gene_row["__pagerank__"]) else np.nan
+    bet = float(gene_row["__betweenness__"]) if pd.notna(gene_row["__betweenness__"]) else np.nan
+    eig = float(gene_row["__eigen__"]) if pd.notna(gene_row["__eigen__"]) else np.nan
 
-    pr_pct = float(gene_row["__pagerank_pct__"]) if pd.notna(gene_row["__pagerank_pct__"]) else 0.0
-    bet_pct = float(gene_row["__betweenness_pct__"]) if pd.notna(gene_row["__betweenness_pct__"]) else 0.0
-    eig_pct = float(gene_row["__eigen_pct__"]) if pd.notna(gene_row["__eigen_pct__"]) else 0.0
-    comp = float(gene_row["__composite__"]) if pd.notna(gene_row["__composite__"]) else 0.0
-    comp_pct = float(gene_row["__composite_pct__"]) if pd.notna(gene_row["__composite_pct__"]) else 0.0
+    pr_pct = float(gene_row["__pagerank_pct__"]) if pd.notna(gene_row["__pagerank_pct__"]) else np.nan
+    bet_pct = float(gene_row["__betweenness_pct__"]) if pd.notna(gene_row["__betweenness_pct__"]) else np.nan
+    eig_pct = float(gene_row["__eigen_pct__"]) if pd.notna(gene_row["__eigen_pct__"]) else np.nan
+    comp = float(gene_row["__composite__"]) if pd.notna(gene_row["__composite__"]) else np.nan
+    comp_pct = float(gene_row["__composite_pct__"]) if pd.notna(gene_row["__composite_pct__"]) else np.nan
 
-    # Min/max context (ignore NaNs)
-    pr_min = float(nodes_df["__pagerank__"].min(skipna=True)) if nodes_df["__pagerank__"].notna().any() else 0.0
-    pr_max = float(nodes_df["__pagerank__"].max(skipna=True)) if nodes_df["__pagerank__"].notna().any() else 0.0
-    bet_min = float(nodes_df["__betweenness__"].min(skipna=True)) if nodes_df["__betweenness__"].notna().any() else 0.0
-    bet_max = float(nodes_df["__betweenness__"].max(skipna=True)) if nodes_df["__betweenness__"].notna().any() else 0.0
-    eig_min = float(nodes_df["__eigen__"].min(skipna=True)) if nodes_df["__eigen__"].notna().any() else 0.0
-    eig_max = float(nodes_df["__eigen__"].max(skipna=True)) if nodes_df["__eigen__"].notna().any() else 0.0
-    comp_min = float(nodes_df["__composite__"].min(skipna=True)) if nodes_df["__composite__"].notna().any() else 0.0
-    comp_max = float(nodes_df["__composite__"].max(skipna=True)) if nodes_df["__composite__"].notna().any() else 0.0
+    # Min/max context (ignore NaNs; if no values, report NaN)
+    pr_min = float(nodes_df["__pagerank__"].min(skipna=True)) if nodes_df["__pagerank__"].notna().any() else np.nan
+    pr_max = float(nodes_df["__pagerank__"].max(skipna=True)) if nodes_df["__pagerank__"].notna().any() else np.nan
+    bet_min = float(nodes_df["__betweenness__"].min(skipna=True)) if nodes_df["__betweenness__"].notna().any() else np.nan
+    bet_max = float(nodes_df["__betweenness__"].max(skipna=True)) if nodes_df["__betweenness__"].notna().any() else np.nan
+    eig_min = float(nodes_df["__eigen__"].min(skipna=True)) if nodes_df["__eigen__"].notna().any() else np.nan
+    eig_max = float(nodes_df["__eigen__"].max(skipna=True)) if nodes_df["__eigen__"].notna().any() else np.nan
+    comp_min = float(nodes_df["__composite__"].min(skipna=True)) if nodes_df["__composite__"].notna().any() else np.nan
+    comp_max = float(nodes_df["__composite__"].max(skipna=True)) if nodes_df["__composite__"].notna().any() else np.nan
 
     info: Dict[str, Any] = {
         "name": str(gene_row.get(name_col, gene_name)),
@@ -353,6 +415,29 @@ def _cluster_filter(df: pd.DataFrame, cluster_id: Any) -> pd.DataFrame:
     return df[df[cluster_col].astype(str).str.strip().str.lower() == cid]
 
 
+def _fmt_num_for_table(x: Any) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "N/A"
+    try:
+        v = float(x)
+        if abs(v) >= 1e6:
+            return f"{v:,.2f}"
+        if abs(v) >= 1e4:
+            return f"{v:,.3f}"
+        return f"{v:.4f}"
+    except Exception:
+        return "N/A"
+
+
+def _fmt_pct_for_table(x: Any) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "N/A"
+    try:
+        return f"{float(x):.1f}%"
+    except Exception:
+        return "N/A"
+
+
 def get_cluster_genes(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
     """Get genes/proteins in a cluster, sorted by PageRank (desc), with percentiles."""
     if not isinstance(kg_data, dict):
@@ -376,36 +461,31 @@ def get_cluster_genes(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
     name_col = nodes_df.attrs.get("__kg_name_col__", "Name")
     genes = genes.sort_values("__pagerank__", ascending=False)
 
-    def _fmt_num(x: Any) -> str:
-        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.4f}"
-
-    def _fmt_pct(x: Any) -> str:
-        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.1f}%"
-
     out = pd.DataFrame({
         "Name": genes[name_col].astype(str),
-        "PageRank": genes["__pagerank__"].map(_fmt_num),
-        "PR %ile": genes["__pagerank_pct__"].map(_fmt_pct),
-        "Betweenness": genes["__betweenness__"].map(_fmt_num),
-        "Bet %ile": genes["__betweenness_pct__"].map(_fmt_pct),
-        "Eigen": genes["__eigen__"].map(_fmt_num),
-        "Eigen %ile": genes["__eigen_pct__"].map(_fmt_pct),
-        "Composite %ile": genes["__composite_pct__"].map(_fmt_pct),
+        "PageRank": genes["__pagerank__"].map(_fmt_num_for_table),
+        "PR %ile": genes["__pagerank_pct__"].map(_fmt_pct_for_table),
+        "Betweenness": genes["__betweenness__"].map(_fmt_num_for_table),
+        "Bet %ile": genes["__betweenness_pct__"].map(_fmt_pct_for_table),
+        "Eigen": genes["__eigen__"].map(_fmt_num_for_table),
+        "Eigen %ile": genes["__eigen_pct__"].map(_fmt_pct_for_table),
+        "Composite %ile": genes["__composite_pct__"].map(_fmt_pct_for_table),
     })
 
     return out
 
 
 def get_cluster_drugs(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
-    """Get drugs in a cluster, sorted by PageRank (desc), with percentiles (relative to nodes)."""
+    """Get drugs in a cluster, sorted by PageRank (desc), with percentiles (relative to nodes where possible)."""
     if not isinstance(kg_data, dict):
         return None
     kg_data = _standardise_kg_dict(kg_data)
+
     nodes_df = kg_data.get("nodes")
-    if nodes_df is None or nodes_df.empty:
-        nodes_df = None
-    else:
+    if isinstance(nodes_df, pd.DataFrame) and not nodes_df.empty:
         nodes_df = _ensure_precomputed_nodes(nodes_df)
+    else:
+        nodes_df = None
 
     drugs_df = kg_data.get("drugs")
     if isinstance(drugs_df, pd.DataFrame) and not drugs_df.empty:
@@ -424,95 +504,74 @@ def get_cluster_drugs(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
         if drugs.empty:
             return None
 
-    # Ensure name column exists
     name_col = _pick_col(drugs, _NAME_COL_CANDIDATES) or "Name"
     if name_col not in drugs.columns:
         return None
 
-    # Map percentiles from nodes (if possible)
-    pr_map = bet_map = eig_map = comp_map = None
-    if nodes_df is not None:
-        pr_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank__"]))
-        bet_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness__"]))
-        eig_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen__"]))
-        prp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank_pct__"]))
-        betp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness_pct__"]))
-        eigp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen_pct__"]))
-        comp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__composite_pct__"]))
-    else:
-        prp_map = betp_map = eigp_map = None
-
     drugs["__name_norm__"] = drugs[name_col].map(_normalise_name)
-    # If dedicated drugs DF has metrics, use them; else use node-mapped metrics
+
     pr_col = _pick_col(drugs, _PAGERANK_COL_CANDIDATES)
     bet_col = _pick_col(drugs, _BETWEENNESS_COL_CANDIDATES)
     eig_col = _pick_col(drugs, _EIGEN_COL_CANDIDATES)
 
     if pr_col:
         drugs["__pagerank__"] = _to_num_series(drugs[pr_col])
-    elif pr_map is not None:
-        drugs["__pagerank__"] = drugs["__name_norm__"].map(pr_map)
     else:
-        drugs["__pagerank__"] = np.nan
+        drugs["__pagerank__"] = pd.Series(np.nan, index=drugs.index)
 
     if bet_col:
         drugs["__betweenness__"] = _to_num_series(drugs[bet_col])
-    elif bet_map is not None:
-        drugs["__betweenness__"] = drugs["__name_norm__"].map(bet_map)
     else:
-        drugs["__betweenness__"] = np.nan
+        drugs["__betweenness__"] = pd.Series(np.nan, index=drugs.index)
 
     if eig_col:
         drugs["__eigen__"] = _to_num_series(drugs[eig_col])
-    elif eig_map is not None:
-        drugs["__eigen__"] = drugs["__name_norm__"].map(eig_map)
     else:
-        drugs["__eigen__"] = np.nan
+        drugs["__eigen__"] = pd.Series(np.nan, index=drugs.index)
 
-    if prp_map is not None:
+    # Percentiles: map from nodes if possible; otherwise within-drugs percentiles
+    if nodes_df is not None:
+        prp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank_pct__"]))
+        betp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness_pct__"]))
+        eigp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen_pct__"]))
+        comp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__composite_pct__"]))
+
         drugs["__pagerank_pct__"] = drugs["__name_norm__"].map(prp_map)
         drugs["__betweenness_pct__"] = drugs["__name_norm__"].map(betp_map)
         drugs["__eigen_pct__"] = drugs["__name_norm__"].map(eigp_map)
         drugs["__composite_pct__"] = drugs["__name_norm__"].map(comp_map)
     else:
-        # Compute percentiles within drugs list (less comparable, but better than nothing)
-        drugs["__pagerank_pct__"] = drugs["__pagerank__"].rank(pct=True) * 100.0
-        drugs["__betweenness_pct__"] = drugs["__betweenness__"].rank(pct=True) * 100.0
-        drugs["__eigen_pct__"] = drugs["__eigen__"].rank(pct=True) * 100.0
-        drugs["__composite_pct__"] = np.nan
+        drugs["__pagerank_pct__"] = _pct_rank(drugs["__pagerank__"])
+        drugs["__betweenness_pct__"] = _pct_rank(drugs["__betweenness__"])
+        drugs["__eigen_pct__"] = _pct_rank(drugs["__eigen__"])
+        drugs["__composite_pct__"] = pd.Series(np.nan, index=drugs.index)
 
     drugs = drugs.sort_values("__pagerank__", ascending=False)
 
-    def _fmt_num(x: Any) -> str:
-        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.4f}"
-
-    def _fmt_pct(x: Any) -> str:
-        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.1f}%"
-
     out = pd.DataFrame({
         "Name": drugs[name_col].astype(str),
-        "PageRank": drugs["__pagerank__"].map(_fmt_num),
-        "PR %ile": drugs["__pagerank_pct__"].map(_fmt_pct),
-        "Betweenness": drugs["__betweenness__"].map(_fmt_num),
-        "Bet %ile": drugs["__betweenness_pct__"].map(_fmt_pct),
-        "Eigen": drugs["__eigen__"].map(_fmt_num),
-        "Eigen %ile": drugs["__eigen_pct__"].map(_fmt_pct),
-        "Composite %ile": drugs["__composite_pct__"].map(_fmt_pct),
+        "PageRank": drugs["__pagerank__"].map(_fmt_num_for_table),
+        "PR %ile": drugs["__pagerank_pct__"].map(_fmt_pct_for_table),
+        "Betweenness": drugs["__betweenness__"].map(_fmt_num_for_table),
+        "Bet %ile": drugs["__betweenness_pct__"].map(_fmt_pct_for_table),
+        "Eigen": drugs["__eigen__"].map(_fmt_num_for_table),
+        "Eigen %ile": drugs["__eigen_pct__"].map(_fmt_pct_for_table),
+        "Composite %ile": drugs["__composite_pct__"].map(_fmt_pct_for_table),
     })
-
     return out
 
 
 def get_cluster_diseases(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame]:
-    """Get diseases in a cluster, sorted by PageRank (desc), with percentiles (relative to nodes)."""
+    """Get diseases in a cluster, sorted by PageRank (desc), with percentiles (relative to nodes where possible)."""
     if not isinstance(kg_data, dict):
         return None
     kg_data = _standardise_kg_dict(kg_data)
+
     nodes_df = kg_data.get("nodes")
-    if nodes_df is None or nodes_df.empty:
-        nodes_df = None
-    else:
+    if isinstance(nodes_df, pd.DataFrame) and not nodes_df.empty:
         nodes_df = _ensure_precomputed_nodes(nodes_df)
+    else:
+        nodes_df = None
 
     diseases_df = kg_data.get("diseases")
     if isinstance(diseases_df, pd.DataFrame) and not diseases_df.empty:
@@ -534,58 +593,44 @@ def get_cluster_diseases(cluster_id: Any, kg_data: Any) -> Optional[pd.DataFrame
     if name_col not in dis.columns:
         return None
 
-    # Percentile mapping from nodes if possible
-    if nodes_df is not None:
-        pr_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank__"]))
-        bet_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness__"]))
-        eig_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen__"]))
-        prp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank_pct__"]))
-        betp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness_pct__"]))
-        eigp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen_pct__"]))
-        comp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__composite_pct__"]))
-    else:
-        pr_map = bet_map = eig_map = prp_map = betp_map = eigp_map = comp_map = None
-
     dis["__name_norm__"] = dis[name_col].map(_normalise_name)
 
     pr_col = _pick_col(dis, _PAGERANK_COL_CANDIDATES)
     bet_col = _pick_col(dis, _BETWEENNESS_COL_CANDIDATES)
     eig_col = _pick_col(dis, _EIGEN_COL_CANDIDATES)
 
-    dis["__pagerank__"] = _to_num_series(dis[pr_col]) if pr_col else (dis["__name_norm__"].map(pr_map) if pr_map else np.nan)
-    dis["__betweenness__"] = _to_num_series(dis[bet_col]) if bet_col else (dis["__name_norm__"].map(bet_map) if bet_map else np.nan)
-    dis["__eigen__"] = _to_num_series(dis[eig_col]) if eig_col else (dis["__name_norm__"].map(eig_map) if eig_map else np.nan)
+    dis["__pagerank__"] = _to_num_series(dis[pr_col]) if pr_col else pd.Series(np.nan, index=dis.index)
+    dis["__betweenness__"] = _to_num_series(dis[bet_col]) if bet_col else pd.Series(np.nan, index=dis.index)
+    dis["__eigen__"] = _to_num_series(dis[eig_col]) if eig_col else pd.Series(np.nan, index=dis.index)
 
-    if prp_map is not None:
+    if nodes_df is not None:
+        prp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__pagerank_pct__"]))
+        betp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__betweenness_pct__"]))
+        eigp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__eigen_pct__"]))
+        comp_map = dict(zip(nodes_df["__name_norm__"], nodes_df["__composite_pct__"]))
+
         dis["__pagerank_pct__"] = dis["__name_norm__"].map(prp_map)
         dis["__betweenness_pct__"] = dis["__name_norm__"].map(betp_map)
         dis["__eigen_pct__"] = dis["__name_norm__"].map(eigp_map)
         dis["__composite_pct__"] = dis["__name_norm__"].map(comp_map)
     else:
-        dis["__pagerank_pct__"] = dis["__pagerank__"].rank(pct=True) * 100.0
-        dis["__betweenness_pct__"] = dis["__betweenness__"].rank(pct=True) * 100.0
-        dis["__eigen_pct__"] = dis["__eigen__"].rank(pct=True) * 100.0
-        dis["__composite_pct__"] = np.nan
+        dis["__pagerank_pct__"] = _pct_rank(dis["__pagerank__"])
+        dis["__betweenness_pct__"] = _pct_rank(dis["__betweenness__"])
+        dis["__eigen_pct__"] = _pct_rank(dis["__eigen__"])
+        dis["__composite_pct__"] = pd.Series(np.nan, index=dis.index)
 
     dis = dis.sort_values("__pagerank__", ascending=False)
 
-    def _fmt_num(x: Any) -> str:
-        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.4f}"
-
-    def _fmt_pct(x: Any) -> str:
-        return "N/A" if x is None or (isinstance(x, float) and np.isnan(x)) else f"{float(x):.1f}%"
-
     out = pd.DataFrame({
         "Name": dis[name_col].astype(str),
-        "PageRank": dis["__pagerank__"].map(_fmt_num),
-        "PR %ile": dis["__pagerank_pct__"].map(_fmt_pct),
-        "Betweenness": dis["__betweenness__"].map(_fmt_num),
-        "Bet %ile": dis["__betweenness_pct__"].map(_fmt_pct),
-        "Eigen": dis["__eigen__"].map(_fmt_num),
-        "Eigen %ile": dis["__eigen_pct__"].map(_fmt_pct),
-        "Composite %ile": dis["__composite_pct__"].map(_fmt_pct),
+        "PageRank": dis["__pagerank__"].map(_fmt_num_for_table),
+        "PR %ile": dis["__pagerank_pct__"].map(_fmt_pct_for_table),
+        "Betweenness": dis["__betweenness__"].map(_fmt_num_for_table),
+        "Bet %ile": dis["__betweenness_pct__"].map(_fmt_pct_for_table),
+        "Eigen": dis["__eigen__"].map(_fmt_num_for_table),
+        "Eigen %ile": dis["__eigen_pct__"].map(_fmt_pct_for_table),
+        "Composite %ile": dis["__composite_pct__"].map(_fmt_pct_for_table),
     })
-
     return out
 
 
@@ -596,7 +641,7 @@ def interpret_centrality(
     pagerank_pct: Optional[float] = None,
     betweenness_pct: Optional[float] = None,
     eigen_pct: Optional[float] = None,
-    composite_pct: Optional[float] = None
+    composite_pct: Optional[float] = None,
 ) -> str:
     """
     Interpret centrality.
@@ -605,8 +650,11 @@ def interpret_centrality(
     If not, falls back to conservative raw-threshold heuristics.
     """
 
+    def _is_nanlike(x: Any) -> bool:
+        return x is None or (isinstance(x, float) and np.isnan(x))
+
     def _bucket(p: Optional[float]) -> Optional[str]:
-        if p is None or (isinstance(p, float) and np.isnan(p)):
+        if _is_nanlike(p):
             return None
         p = float(p)
         if p >= 95:
@@ -621,7 +669,7 @@ def interpret_centrality(
             return "bottom half"
         return "bottom quartile"
 
-    if pagerank_pct is not None or betweenness_pct is not None or eigen_pct is not None or composite_pct is not None:
+    if not _is_nanlike(pagerank_pct) or not _is_nanlike(betweenness_pct) or not _is_nanlike(eigen_pct) or not _is_nanlike(composite_pct):
         pr_b = _bucket(pagerank_pct)
         bet_b = _bucket(betweenness_pct)
         eig_b = _bucket(eigen_pct)
@@ -642,8 +690,8 @@ def interpret_centrality(
         return "Centrality percentiles unavailable for interpretation."
 
     # Raw fallback (less stable across graph size/normalisation)
-    hub_like = (pagerank is not None and pagerank > 0.01) or (eigen is not None and eigen > 0.01)
-    bridge_like = (betweenness is not None and betweenness > 0.05)
+    hub_like = (not _is_nanlike(pagerank) and pagerank > 0.01) or (not _is_nanlike(eigen) and eigen > 0.01)
+    bridge_like = (not _is_nanlike(betweenness) and betweenness > 0.05)
 
     if hub_like and bridge_like:
         return "Likely a hub-bridge: influential and also connects parts of the network."

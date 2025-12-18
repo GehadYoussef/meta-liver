@@ -294,6 +294,106 @@ def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
 
 
 # =============================================================================
+# KG DISPLAY HELPERS (UI ONLY)
+# =============================================================================
+
+def _is_nanlike(x: object) -> bool:
+    try:
+        return x is None or (isinstance(x, float) and np.isnan(x))
+    except Exception:
+        return x is None
+
+
+def _fmt_pct(p: object) -> str:
+    if _is_nanlike(p):
+        return "N/A"
+    try:
+        return f"{float(p):.1f}%"
+    except Exception:
+        return "N/A"
+
+
+def _fmt_num(x: object, decimals: int = 4, sci_if_small: bool = False) -> str:
+    if _is_nanlike(x):
+        return "N/A"
+    try:
+        v = float(x)
+        if sci_if_small and 0 < abs(v) < 10 ** (-(decimals)):
+            return f"<{10 ** (-(decimals)):.0e}"
+        return f"{v:.{decimals}f}"
+    except Exception:
+        return "N/A"
+
+
+def _fmt_num_commas(x: object, decimals: int = 2) -> str:
+    if _is_nanlike(x):
+        return "N/A"
+    try:
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return "N/A"
+
+
+def _pct_str_to_float(s: object) -> float:
+    if s is None:
+        return np.nan
+    try:
+        t = str(s).strip().replace("%", "")
+        return float(t)
+    except Exception:
+        return np.nan
+
+
+def _num_str_to_float(s: object) -> float:
+    if s is None:
+        return np.nan
+    try:
+        t = str(s).strip().replace(",", "")
+        return float(t)
+    except Exception:
+        return np.nan
+
+
+def _prepare_cluster_table(df: pd.DataFrame, sort_key: str, top_n: int) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+
+    tmp = df.copy()
+
+    # Add numeric helpers for robust sorting (the kg_analysis tables are formatted strings)
+    pct_cols = ["Composite %ile", "PR %ile", "Bet %ile", "Eigen %ile"]
+    num_cols = ["PageRank", "Betweenness", "Eigen"]
+    for c in pct_cols:
+        if c in tmp.columns:
+            tmp[f"__{c}_num__"] = tmp[c].map(_pct_str_to_float)
+    for c in num_cols:
+        if c in tmp.columns:
+            tmp[f"__{c}_num__"] = tmp[c].map(_num_str_to_float)
+
+    sort_map = {
+        "Composite %ile": "__Composite %ile_num__",
+        "PR %ile": "__PR %ile_num__",
+        "Bet %ile": "__Bet %ile_num__",
+        "Eigen %ile": "__Eigen %ile_num__",
+        "PageRank (raw)": "__PageRank_num__",
+        "Betweenness (raw)": "__Betweenness_num__",
+        "Eigen (raw)": "__Eigen_num__",
+        "Name": "Name",
+    }
+
+    col = sort_map.get(sort_key, sort_key)
+    if col in tmp.columns:
+        # Descending for metrics, ascending for Name
+        asc = True if sort_key == "Name" else False
+        tmp = tmp.sort_values(col, ascending=asc, na_position="last")
+
+    # Remove helper cols before display
+    tmp = tmp.head(int(top_n)).copy()
+    tmp = tmp[[c for c in tmp.columns if not c.startswith("__")]]
+    return tmp
+
+
+# =============================================================================
 # MAIN APP
 # =============================================================================
 
@@ -544,63 +644,36 @@ else:
                     kg_info = get_gene_kg_info(search_query, kg_data)
 
                     if kg_info:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Cluster", kg_info.get("cluster", "N/A"))
-                        with col2:
-                            st.metric("PageRank", f"{kg_info['pagerank']:.4f}")
-                        with col3:
-                            st.metric("Betweenness", f"{kg_info['betweenness']:.4f}")
+                        cluster_id = kg_info.get("cluster", None)
 
-                        col4, col5, col6 = st.columns(3)
-                        with col4:
-                            st.metric("Eigenvector", f"{kg_info['eigen']:.4f}")
-                        with col5:
-                            st.metric("Composite", f"{kg_info['composite']:.6f}")
-                        with col6:
-                            st.write("")
+                        # Percentile-first headline (more interpretable than raw scales)
+                        h1, h2, h3, h4 = st.columns(4)
+                        with h1:
+                            st.metric("Cluster", "N/A" if cluster_id is None else str(cluster_id))
+                        with h2:
+                            st.metric("Composite centrality", _fmt_pct(kg_info.get("composite_percentile")))
+                            st.caption(f"raw: {_fmt_num(kg_info.get('composite'), decimals=6)}")
+                        with h3:
+                            st.metric("Betweenness", _fmt_pct(kg_info.get("bet_percentile")))
+                            st.caption(f"raw: {_fmt_num_commas(kg_info.get('betweenness'), decimals=2)}")
+                        with h4:
+                            st.metric("PageRank", _fmt_pct(kg_info.get("pagerank_percentile")))
+                            st.caption(f"raw: {_fmt_num(kg_info.get('pagerank'), decimals=4)}")
 
-                        st.markdown("---")
-
-                        st.markdown("**Centrality Metrics – MASH Subgraph Context**")
-                        st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
-                        st.write(f"Composite score: {kg_info['composite']:.6f}")
-                        st.write(f"Min/Max (subgraph): {kg_info['composite_min']:.6f} – {kg_info['composite_max']:.6f}")
-                        st.write(f"Percentile: {kg_info['composite_percentile']:.1f}%")
-                        st.write("*Weights: PageRank 50%, Betweenness 25%, Eigenvector 25%*")
-
-                        st.markdown("---")
-                        st.markdown("**Individual Metrics – MASH Subgraph Context**")
-
-                        context_col1, context_col2, context_col3 = st.columns(3)
-
-                        with context_col1:
-                            st.write("**PageRank**")
-                            st.write(f"Min: {kg_info['pagerank_min']:.4f}")
-                            st.write(f"Max: {kg_info['pagerank_max']:.4f}")
-                            st.write(f"Your node: {kg_info['pagerank']:.4f}")
-                            st.write(f"Percentile: {kg_info['pagerank_percentile']:.1f}%")
-
-                        with context_col2:
-                            st.write("**Betweenness**")
-                            st.write(f"Min: {kg_info['bet_min']:.4f}")
-                            st.write(f"Max: {kg_info['bet_max']:.4f}")
-                            st.write(f"Your node: {kg_info['betweenness']:.4f}")
-                            st.write(f"Percentile: {kg_info['bet_percentile']:.1f}%")
-
-                        with context_col3:
-                            st.write("**Eigenvector**")
-                            st.write(f"Min: {kg_info['eigen_min']:.4f}")
-                            st.write(f"Max: {kg_info['eigen_max']:.4f}")
-                            st.write(f"Your node: {kg_info['eigen']:.4f}")
-                            st.write(f"Percentile: {kg_info['eigen_percentile']:.1f}%")
+                        h5, h6, _, _ = st.columns(4)
+                        with h5:
+                            st.metric("Eigenvector", _fmt_pct(kg_info.get("eigen_percentile")))
+                            st.caption(f"raw: {_fmt_num(kg_info.get('eigen'), decimals=6, sci_if_small=True)}")
+                        with h6:
+                            # Helpful to avoid “is this whole graph?” confusion
+                            st.caption("Percentiles computed across the MASH subgraph nodes table.")
 
                         st.markdown("---")
 
                         interpretation = interpret_centrality(
-                            kg_info["pagerank"],
-                            kg_info["betweenness"],
-                            kg_info["eigen"],
+                            kg_info.get("pagerank", np.nan),
+                            kg_info.get("betweenness", np.nan),
+                            kg_info.get("eigen", np.nan),
                             pagerank_pct=kg_info.get("pagerank_percentile"),
                             betweenness_pct=kg_info.get("bet_percentile"),
                             eigen_pct=kg_info.get("eigen_percentile"),
@@ -608,31 +681,82 @@ else:
                         )
                         st.info(f"📍 {interpretation}")
 
-                        cluster_id = kg_info.get("cluster", None)
+                        # Keep min/max and raw details, but hide them by default (less overwhelming)
+                        with st.expander("Show raw centrality values and subgraph ranges"):
+                            st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
+                            st.write(f"Composite score: {_fmt_num(kg_info.get('composite'), decimals=6)}")
+                            st.write(
+                                f"Min/Max (subgraph): "
+                                f"{_fmt_num(kg_info.get('composite_min'), decimals=6)} – {_fmt_num(kg_info.get('composite_max'), decimals=6)}"
+                            )
+                            st.write(f"Percentile: {_fmt_pct(kg_info.get('composite_percentile'))}")
+                            st.write("*Weights: PageRank 50%, Betweenness 25%, Eigenvector 25%*")
+
+                            st.markdown("---")
+                            st.markdown("**Individual Metrics – MASH Subgraph Context**")
+
+                            c1, c2, c3 = st.columns(3)
+
+                            with c1:
+                                st.write("**PageRank**")
+                                st.write(f"Min: {_fmt_num(kg_info.get('pagerank_min'), decimals=4)}")
+                                st.write(f"Max: {_fmt_num(kg_info.get('pagerank_max'), decimals=4)}")
+                                st.write(f"Your node: {_fmt_num(kg_info.get('pagerank'), decimals=4)}")
+                                st.write(f"Percentile: {_fmt_pct(kg_info.get('pagerank_percentile'))}")
+
+                            with c2:
+                                st.write("**Betweenness**")
+                                st.write(f"Min: {_fmt_num(kg_info.get('bet_min'), decimals=4)}")
+                                st.write(f"Max: {_fmt_num(kg_info.get('bet_max'), decimals=4)}")
+                                st.write(f"Your node: {_fmt_num_commas(kg_info.get('betweenness'), decimals=4)}")
+                                st.write(f"Percentile: {_fmt_pct(kg_info.get('bet_percentile'))}")
+
+                            with c3:
+                                st.write("**Eigenvector**")
+                                st.write(f"Min: {_fmt_num(kg_info.get('eigen_min'), decimals=6)}")
+                                st.write(f"Max: {_fmt_num(kg_info.get('eigen_max'), decimals=6)}")
+                                st.write(f"Your node: {_fmt_num(kg_info.get('eigen'), decimals=6, sci_if_small=True)}")
+                                st.write(f"Percentile: {_fmt_pct(kg_info.get('eigen_percentile'))}")
+
+                        st.markdown("---")
+
                         if cluster_id is None or str(cluster_id).strip() == "" or str(cluster_id).lower() == "nan":
                             st.warning("Cluster ID missing for this node; cannot display cluster neighbours.")
                         else:
                             st.markdown("**Nodes in Cluster**")
+
+                            # Cluster neighbour controls (useful for large clusters)
+                            ctl1, ctl2 = st.columns(2)
+                            with ctl1:
+                                top_n = st.slider("Show top N per table", 10, 300, 50, step=10, key="kg_top_n")
+                            with ctl2:
+                                sort_key = st.selectbox(
+                                    "Sort by",
+                                    ["Composite %ile", "PR %ile", "Bet %ile", "Eigen %ile", "PageRank (raw)", "Betweenness (raw)", "Eigen (raw)", "Name"],
+                                    index=0,
+                                    key="kg_sort_key"
+                                )
+
                             tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
 
                             with tab_genes:
                                 genes_df = get_cluster_genes(cluster_id, kg_data)
-                                if genes_df is not None:
-                                    st.dataframe(genes_df, use_container_width=True, hide_index=True)
+                                if genes_df is not None and not genes_df.empty:
+                                    st.dataframe(_prepare_cluster_table(genes_df, sort_key, top_n), use_container_width=True, hide_index=True)
                                 else:
                                     st.write("No genes/proteins in this cluster")
 
                             with tab_drugs:
                                 drugs_df = get_cluster_drugs(cluster_id, kg_data)
-                                if drugs_df is not None:
-                                    st.dataframe(drugs_df, use_container_width=True, hide_index=True)
+                                if drugs_df is not None and not drugs_df.empty:
+                                    st.dataframe(_prepare_cluster_table(drugs_df, sort_key, top_n), use_container_width=True, hide_index=True)
                                 else:
                                     st.write("No drugs in this cluster")
 
                             with tab_diseases:
                                 diseases_df = get_cluster_diseases(cluster_id, kg_data)
-                                if diseases_df is not None:
-                                    st.dataframe(diseases_df, use_container_width=True, hide_index=True)
+                                if diseases_df is not None and not diseases_df.empty:
+                                    st.dataframe(_prepare_cluster_table(diseases_df, sort_key, top_n), use_container_width=True, hide_index=True)
                                 else:
                                     st.write("No diseases in this cluster")
                     else:
