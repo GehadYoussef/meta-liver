@@ -156,34 +156,69 @@ else:
                 """)
                 st.markdown("---")
 
+                # One-sentence explanations for each score (no expander)
+                help_text = consistency.get("score_help", {})
+
+                # Headline metrics
                 col1, col2, col3, col4 = st.columns(4)
 
                 with col1:
                     st.metric("Evidence Score", f"{consistency['evidence_score']:.1%}")
+                    st.caption(help_text.get("Evidence Score", ""))
 
                 with col2:
                     st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
+                    st.caption(help_text.get("Direction Agreement", ""))
 
-                # Show discriminative median (this is the “AUC-disc” you care about)
                 with col3:
                     med_disc = consistency.get("auc_median_discriminative", None)
-                    if med_disc is None:
-                        st.metric("Median AUC (disc)", "missing")
-                    else:
-                        st.metric("Median AUC (disc)", f"{med_disc:.3f}")
+                    st.metric("Median AUC (disc)", "missing" if med_disc is None else f"{med_disc:.3f}")
+                    st.caption(help_text.get("Median AUC (disc)", ""))
 
                 with col4:
                     st.metric("Studies Found", f"{consistency['found_count']}")
+                    st.caption(help_text.get("Studies Found", ""))
 
                 st.info(f"📊 **{consistency['interpretation']}**")
+                st.markdown("---")
 
-                with st.expander("Show scoring components"):
-                    st.write(f"Strength: {consistency.get('strength', np.nan):.3f}")
-                    st.write(f"Stability: {consistency.get('stability', np.nan):.3f}")
-                    st.write(f"n_auc (valid AUROC): {consistency.get('n_auc', 'N/A')}")
-                    st.write(f"n_weight: {consistency.get('n_weight', np.nan):.3f}")
-                    st.write(f"Median AUC (raw): {consistency.get('auc_median', np.nan):.3f}")
-                    st.write(f"Median AUC (oriented): {consistency.get('auc_median_oriented', np.nan):.3f}")
+                # Score components shown directly (no pull-down)
+                c1, c2, c3, c4 = st.columns(4)
+
+                with c1:
+                    st.metric("Strength", f"{consistency.get('strength', np.nan):.3f}")
+                    st.caption(help_text.get("Strength", ""))
+
+                with c2:
+                    st.metric("Stability", f"{consistency.get('stability', np.nan):.3f}")
+                    st.caption(help_text.get("Stability", ""))
+
+                with c3:
+                    st.metric("Study Weight", f"{consistency.get('n_weight', np.nan):.3f}")
+                    st.caption(help_text.get("Study Weight", ""))
+
+                with c4:
+                    st.metric("Valid AUROC (n_auc)", f"{consistency.get('n_auc', 'N/A')}")
+                    st.caption(help_text.get("Valid AUROC (n_auc)", ""))
+
+                st.markdown("---")
+
+                # Diagnostics (still explained; useful for debugging)
+                d1, d2, d3 = st.columns(3)
+
+                with d1:
+                    st.metric("Median AUC (raw)", f"{consistency.get('auc_median', np.nan):.3f}")
+                    st.caption(help_text.get("Median AUC (raw)", ""))
+
+                with d2:
+                    st.metric("Median AUC (oriented)", f"{consistency.get('auc_median_oriented', np.nan):.3f}")
+                    st.caption(help_text.get("Median AUC (oriented)", ""))
+
+                with d3:
+                    st.metric("disc_full", f"{consistency.get('disc_full', 0.65):.2f}")
+                    st.caption(help_text.get("disc_full", ""))
+
+                st.markdown("---")
 
                 st.markdown("**AUROC Across Studies**")
                 fig = soa.create_lollipop_plot(search_query, single_omics_data)
