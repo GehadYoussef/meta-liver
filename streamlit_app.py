@@ -13,7 +13,9 @@ import numpy as np
 import plotly.graph_objects as go
 
 from robust_data_loader import load_single_omics_studies, load_kg_data, load_ppi_data
-from kg_analysis import get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
+from kg_analysis import (
+    get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
+)
 from wgcna_ppi_analysis import (
     load_wgcna_module_data, get_gene_module, get_module_genes,
     get_coexpressed_partners, find_ppi_interactors, get_network_stats
@@ -70,6 +72,228 @@ except Exception as e:
 
 
 # =============================================================================
+# PLOT HELPERS (RAW vs DISC) — NO NEED TO MODIFY single_omics_analysis.py
+# =============================================================================
+
+def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
+    """
+    Returns per-study dicts: study, auc_raw, auc_disc, auc_oriented, lfc, direction
+    Uses soa.find_gene_in_study + soa.extract_metrics_from_row for consistency.
+    """
+    out = []
+    for study_name, df in (studies_data or {}).items():
+        row, _ = soa.find_gene_in_study(gene_name, df)
+        if row is None:
+            continue
+
+        auc, lfc, direction = soa.extract_metrics_from_row(row)
+
+        auc_raw = None
+        if auc is not None and not np.isnan(auc) and 0.0 <= float(auc) <= 1.0:
+            auc_raw = float(auc)
+
+        lfc_val = None
+        if lfc is not None and not np.isnan(lfc):
+            lfc_val = float(lfc)
+
+        # Discriminative (orientation-invariant)
+        auc_disc = None
+        if auc_raw is not None:
+            auc_disc = float(max(auc_raw, 1.0 - auc_raw))
+
+        # Oriented (align MAFLD as "positive") — diagnostic only
+        auc_oriented = None
+        if auc_raw is not None:
+            if direction == "Healthy":
+                auc_oriented = float(1.0 - auc_raw)
+            else:
+                auc_oriented = float(auc_raw)
+
+        out.append({
+            "study": study_name,
+            "auc_raw": auc_raw,
+            "auc_disc": auc_disc,
+            "auc_oriented": auc_oriented,
+            "lfc": lfc_val,
+            "direction": direction
+        })
+
+    return out
+
+
+def _marker_style(direction: str):
+    if direction == "MAFLD":
+        return dict(symbol="triangle-up", color="#2E86AB")
+    if direction == "Healthy":
+        return dict(symbol="triangle-down", color="#A23B72")
+    return dict(symbol="circle", color="#777777")
+
+
+def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str | None = None) -> go.Figure | None:
+    vals = [m for m in metrics if m.get(auc_key) is not None]
+    if not vals:
+        return None
+
+    vals = sorted(vals, key=lambda x: x[auc_key])
+
+    fig = go.Figure()
+
+    # stems
+    for m in vals:
+        fig.add_trace(go.Scatter(
+            x=[0.5, m[auc_key]],
+            y=[m["study"], m["study"]],
+            mode="lines",
+            line=dict(color="#cccccc", width=1.5),
+            showlegend=False,
+            hoverinfo="skip"
+        ))
+
+    # points
+    for m in vals:
+        style = _marker_style(m.get("direction"))
+        lfc = m.get("lfc")
+        size = 10 + abs(lfc if lfc is not None else 0.0) * 1.5
+        size = float(min(size, 16))
+
+        hover = (
+            f"<b>{m['study']}</b>"
+            f"<br>{auc_key}: {m[auc_key]:.3f}"
+        )
+        if m.get("auc_raw") is not None:
+            hover += f"<br>AUC_raw: {m['auc_raw']:.3f}"
+        if m.get("auc_disc") is not None:
+            hover += f"<br>AUC_disc: {m['auc_disc']:.3f}"
+        if m.get("lfc") is not None:
+            hover += f"<br>logFC: {m['lfc']:.3f}"
+        if m.get("direction") is not None:
+            hover += f"<br>Direction: {m['direction']}"
+
+        fig.add_trace(go.Scatter(
+            x=[m[auc_key]],
+            y=[m["study"]],
+            mode="markers",
+            marker=dict(
+                size=size,
+                symbol=style["symbol"],
+                color=style["color"],
+                line=dict(color="white", width=1),
+            ),
+            hovertext=hover,
+            hoverinfo="text",
+            showlegend=False
+        ))
+
+    title_text = title if subtitle is None else f"{title}<br><span style='font-size:11px;color:#666'>{subtitle}</span>"
+    fig.update_layout(
+        title=dict(text=title_text, font=dict(size=14, color="#000000")),
+        xaxis_title=dict(text="AUROC", font=dict(size=12, color="#000000")),
+        height=320,
+        hovermode="closest",
+        xaxis=dict(
+            range=[0.45, 1.0],
+            tickfont=dict(color="#000000", size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#f0f0f0"
+        ),
+        yaxis=dict(tickfont=dict(color="#000000", size=11)),
+        showlegend=False,
+        plot_bgcolor="#fafafa",
+        paper_bgcolor="white"
+    )
+    return fig
+
+
+def make_scatter_auc_logfc(metrics: list[dict], auc_key: str, title: str, subtitle: str | None = None) -> go.Figure | None:
+    pts = [m for m in metrics if m.get(auc_key) is not None and m.get("lfc") is not None]
+    if len(pts) < 2:
+        return None
+
+    fig = go.Figure()
+    for m in pts:
+        style = _marker_style(m.get("direction"))
+        fig.add_trace(go.Scatter(
+            x=[m[auc_key]],
+            y=[m["lfc"]],
+            mode="markers",
+            marker=dict(size=10, symbol=style["symbol"], color="#333333", line=dict(width=0)),
+            hovertext=(
+                f"<b>{m['study']}</b>"
+                f"<br>{auc_key}: {m[auc_key]:.3f}"
+                f"<br>logFC: {m['lfc']:.3f}"
+                f"<br>Direction: {m.get('direction', 'Unknown')}"
+            ),
+            hoverinfo="text",
+            showlegend=False
+        ))
+
+    fig.add_hline(y=0, line_dash="dash", line_color="#999999", line_width=1.5)
+    fig.add_vline(x=0.5, line_dash="dash", line_color="#999999", line_width=1.5)
+
+    title_text = title if subtitle is None else f"{title}<br><span style='font-size:11px;color:#666'>{subtitle}</span>"
+    fig.update_layout(
+        title=dict(text=title_text, font=dict(size=14, color="#000000")),
+        xaxis_title=dict(text="AUROC", font=dict(size=12, color="#000000")),
+        yaxis_title=dict(text="logFC (MAFLD vs Healthy)", font=dict(size=12, color="#000000")),
+        height=340,
+        hovermode="closest",
+        xaxis=dict(
+            range=[0.45, 1.0],
+            tickfont=dict(color="#000000", size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#f0f0f0"
+        ),
+        yaxis=dict(
+            tickfont=dict(color="#000000", size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#f0f0f0"
+        ),
+        showlegend=False,
+        plot_bgcolor="#fafafa",
+        paper_bgcolor="white"
+    )
+    return fig
+
+
+def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
+    vals = [m["auc_disc"] for m in metrics if m.get("auc_disc") is not None]
+    if not vals:
+        return None
+
+    fig = go.Figure()
+    fig.add_trace(go.Box(
+        y=vals,
+        boxpoints="all",
+        jitter=0.25,
+        pointpos=0,
+        name="AUC-disc",
+        marker=dict(size=8),
+        line=dict(width=1)
+    ))
+    fig.add_hline(y=0.5, line_dash="dash", line_color="#999999", line_width=1.5)
+    fig.update_layout(
+        title=dict(text="AUC-disc distribution (stability view)", font=dict(size=14, color="#000000")),
+        yaxis_title=dict(text="AUC-disc = max(AUC, 1−AUC)", font=dict(size=12, color="#000000")),
+        height=320,
+        showlegend=False,
+        plot_bgcolor="#fafafa",
+        paper_bgcolor="white",
+        yaxis=dict(
+            range=[0.45, 1.0],
+            tickfont=dict(color="#000000", size=11),
+            showgrid=True,
+            gridwidth=0.5,
+            gridcolor="#f0f0f0"
+        ),
+        xaxis=dict(showgrid=False, tickfont=dict(color="#000000", size=11))
+    )
+    return fig
+
+
+# =============================================================================
 # MAIN APP
 # =============================================================================
 
@@ -116,7 +340,7 @@ if not search_query:
 
     Search for a gene to see:
     - Evidence Score (discriminative AUROC + stability + direction agreement + study count)
-    - AUROC Across Studies
+    - AUROC Across Studies (raw + discriminative)
     - Concordance: AUROC vs logFC
     - Detailed per-study results
 
@@ -150,34 +374,44 @@ else:
             with tab_omics:
                 st.markdown("""
                 This tab summarises gene-level evidence across the single-omics data sets.
-                For the selected gene, we report study-specific AUROC values and differential expression
-                direction (logFC), together with a composite evidence score reflecting discriminative power,
-                stability across studies, direction agreement, and the number of studies with valid AUROC.
+                AUC is per-study discriminative performance, logFC indicates direction (MAFLD vs Healthy), and the Evidence Score
+                summarises strength, stability, direction agreement, and study support.
                 """)
                 st.markdown("---")
 
-                # One-sentence explanations for each score (no expander)
-                help_text = consistency.get("score_help", {})
+                help_text = {
+                    "Evidence Score": "Overall evidence across studies (Strength × Stability × Direction Agreement × Study Weight).",
+                    "Direction Agreement": "Fraction of studies where the gene’s direction (MAFLD vs Healthy) matches the majority.",
+                    "Median AUC (disc)": "Median discriminative AUC across studies: AUC-disc = max(AUC, 1−AUC).",
+                    "Studies Found": "Number of studies where the gene is present (even if AUROC is missing).",
+                    "Strength": "How far the median AUC-disc is above 0.5 (0=no signal; 1=perfect).",
+                    "Stability": "Cross-study consistency of AUC-disc (1=very consistent; 0=very variable).",
+                    "Study Weight": "Downweights scores supported by very few AUROC values (increases with n_auc).",
+                    "Valid AUROC (n_auc)": "Number of studies with a usable AUROC value for this gene.",
+                    "Median AUC (raw)": "Median of the raw AUROC values as stored in the study tables (diagnostic).",
+                    "Median AUC (oriented)": "Median AUROC after aligning direction so MAFLD is treated as ‘positive’ (diagnostic).",
+                    "AUC-disc IQR": "Interquartile range of AUC-disc across studies (lower = more stable).",
+                }
 
                 # Headline metrics
                 col1, col2, col3, col4 = st.columns(4)
 
                 with col1:
                     st.metric("Evidence Score", f"{consistency['evidence_score']:.1%}")
-                    st.caption(help_text.get("Evidence Score", ""))
+                    st.caption(help_text["Evidence Score"])
 
                 with col2:
                     st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
-                    st.caption(help_text.get("Direction Agreement", ""))
+                    st.caption(help_text["Direction Agreement"])
 
                 with col3:
                     med_disc = consistency.get("auc_median_discriminative", None)
                     st.metric("Median AUC (disc)", "missing" if med_disc is None else f"{med_disc:.3f}")
-                    st.caption(help_text.get("Median AUC (disc)", ""))
+                    st.caption(help_text["Median AUC (disc)"])
 
                 with col4:
                     st.metric("Studies Found", f"{consistency['found_count']}")
-                    st.caption(help_text.get("Studies Found", ""))
+                    st.caption(help_text["Studies Found"])
 
                 st.info(f"📊 **{consistency['interpretation']}**")
                 st.markdown("---")
@@ -187,55 +421,112 @@ else:
 
                 with c1:
                     st.metric("Strength", f"{consistency.get('strength', np.nan):.3f}")
-                    st.caption(help_text.get("Strength", ""))
+                    st.caption(help_text["Strength"])
 
                 with c2:
                     st.metric("Stability", f"{consistency.get('stability', np.nan):.3f}")
-                    st.caption(help_text.get("Stability", ""))
+                    st.caption(help_text["Stability"])
 
                 with c3:
                     st.metric("Study Weight", f"{consistency.get('n_weight', np.nan):.3f}")
-                    st.caption(help_text.get("Study Weight", ""))
+                    st.caption(help_text["Study Weight"])
 
                 with c4:
                     st.metric("Valid AUROC (n_auc)", f"{consistency.get('n_auc', 'N/A')}")
-                    st.caption(help_text.get("Valid AUROC (n_auc)", ""))
+                    st.caption(help_text["Valid AUROC (n_auc)"])
 
                 st.markdown("---")
 
-                # Diagnostics (still explained; useful for debugging)
+                # Diagnostics (useful for debugging)
                 d1, d2, d3 = st.columns(3)
+
+                # AUC-disc IQR (if not returned, compute quickly from values)
+                auc_disc_vals = []
+                try:
+                    auc_disc_vals = [max(a, 1.0 - a) for a in consistency.get("auc_values", []) if a is not None and not np.isnan(a)]
+                except Exception:
+                    auc_disc_vals = []
+
+                disc_iqr = np.nan
+                if len(auc_disc_vals) > 1:
+                    disc_iqr = float(np.subtract(*np.percentile(auc_disc_vals, [75, 25])))
 
                 with d1:
                     st.metric("Median AUC (raw)", f"{consistency.get('auc_median', np.nan):.3f}")
-                    st.caption(help_text.get("Median AUC (raw)", ""))
+                    st.caption(help_text["Median AUC (raw)"])
 
                 with d2:
                     st.metric("Median AUC (oriented)", f"{consistency.get('auc_median_oriented', np.nan):.3f}")
-                    st.caption(help_text.get("Median AUC (oriented)", ""))
+                    st.caption(help_text["Median AUC (oriented)"])
 
                 with d3:
-                    st.metric("disc_full", f"{consistency.get('disc_full', 0.65):.2f}")
-                    st.caption(help_text.get("disc_full", ""))
+                    st.metric("AUC-disc IQR", "NA" if np.isnan(disc_iqr) else f"{disc_iqr:.3f}")
+                    st.caption(help_text["AUC-disc IQR"])
 
                 st.markdown("---")
 
-                st.markdown("**AUROC Across Studies**")
-                fig = soa.create_lollipop_plot(search_query, single_omics_data)
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                # NEW PLOTS (raw + disc + distribution)
+                metrics = _collect_gene_metrics(search_query, single_omics_data)
 
-                st.markdown("**Concordance: AUROC vs logFC**")
-                fig_scatter = soa.create_auc_logfc_scatter(search_query, single_omics_data)
-                if fig_scatter:
-                    st.plotly_chart(fig_scatter, use_container_width=True)
-                else:
-                    st.info("Not enough data for concordance plot")
+                left, right = st.columns(2)
+
+                with left:
+                    st.markdown("**AUROC Across Studies (raw)**")
+                    fig_raw = make_lollipop(
+                        metrics,
+                        auc_key="auc_raw",
+                        title="AUROC Across Studies (raw)",
+                        subtitle="Raw AUROC values as stored in each study table."
+                    )
+                    if fig_raw:
+                        st.plotly_chart(fig_raw, use_container_width=True)
+                    else:
+                        st.info("No AUROC values available for this gene.")
+
+                with right:
+                    st.markdown("**AUROC Across Studies (discriminative)**")
+                    fig_disc = make_lollipop(
+                        metrics,
+                        auc_key="auc_disc",
+                        title="AUROC Across Studies (discriminative)",
+                        subtitle="AUC-disc = max(AUC, 1−AUC), so AUROC < 0.5 counts as label-flipped signal."
+                    )
+                    if fig_disc:
+                        st.plotly_chart(fig_disc, use_container_width=True)
+                    else:
+                        st.info("No AUROC values available for this gene.")
+
+                left2, right2 = st.columns(2)
+
+                with left2:
+                    st.markdown("**Concordance: AUC-disc vs logFC**")
+                    fig_scatter_disc = make_scatter_auc_logfc(
+                        metrics,
+                        auc_key="auc_disc",
+                        title="Concordance: AUC-disc vs logFC",
+                        subtitle="Checks whether discriminative signal aligns with up/down regulation."
+                    )
+                    if fig_scatter_disc:
+                        st.plotly_chart(fig_scatter_disc, use_container_width=True)
+                    else:
+                        st.info("Not enough data for concordance plot (need AUROC + logFC in ≥2 studies).")
+
+                with right2:
+                    st.markdown("**AUC-disc distribution (stability view)**")
+                    fig_dist = make_auc_disc_distribution(metrics)
+                    if fig_dist:
+                        st.plotly_chart(fig_dist, use_container_width=True)
+                    else:
+                        st.info("Not enough AUROC values to show a distribution.")
+
+                st.markdown("---")
 
                 st.markdown("**Detailed Results**")
                 results_df = soa.create_results_table(search_query, single_omics_data)
                 if results_df is not None:
                     st.dataframe(results_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No per-study rows found for this gene.")
 
             # -----------------------------------------------------------------
             # TAB 2: MAFLD KNOWLEDGE GRAPH
