@@ -106,25 +106,22 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
 
 
 # =============================================================================
-# SCORE DEFINITIONS (UI TEXT)
+# CONCISE, ONE-SENTENCE DEFINITIONS FOR EVERY SCORE (FOR UI)
 # =============================================================================
 
-def score_definitions(disc_full: float) -> Dict[str, str]:
-    """
-    One concise sentence per score, designed to be shown directly in the UI.
-    """
-    return {
-        "Evidence Score": "A 0–100% composite that multiplies Strength, Stability, Direction Agreement, and Study Weight into a single summary.",
-        "Median AUC (disc)": "The median orientation-invariant AUROC across studies, computed as max(AUC, 1−AUC) so below-chance AUROC still counts as predictive.",
-        "Strength": f"Maps Median AUC (disc) to 0–1, where 0.50 is chance and {disc_full:.2f} is treated as full strength (1.0).",
-        "Stability": "Captures cross-study consistency as 1 minus the AUROC IQR scaled by 0.5, so higher means less spread across studies.",
-        "Direction Agreement": "The fraction of studies agreeing on whether the gene is higher in MAFLD or higher in Healthy.",
-        "Study Weight": "Upweights evidence supported by more studies with valid AUROC using 1−exp(−n_auc/3).",
-        "Valid AUROC (n)": "Number of studies contributing a valid AUROC value to the score.",
-        "Studies Found": "Number of studies where the gene was found (including those with missing AUROC).",
-        "Median AUC (raw)": "The median reported AUROC across studies with no flipping or re-orientation.",
-        "Median AUC (oriented)": "AUROC re-oriented so MAFLD is aligned as the positive class using inferred direction (diagnostic only).",
-    }
+SCORE_HELP: Dict[str, str] = {
+    "Evidence Score": "Overall 0–100% summary computed as Strength × Stability × Direction Agreement × Study Weight.",
+    "Median AUC (disc)": "Median orientation-invariant AUROC across studies, computed as max(AUC, 1−AUC) so AUC<0.5 still counts as predictive (label-flipped).",
+    "Direction Agreement": "Fraction of studies that agree on whether the gene is higher in MAFLD or higher in Healthy (based on direction/logFC).",
+    "Strength": "Signal magnitude (0–1) derived from Median AUC (disc), where 0.50=chance and disc_full is treated as full strength (1.0).",
+    "Stability": "Cross-study consistency (0–1), computed as 1 − IQR(AUCdisc)/0.5 so higher means less variation between studies.",
+    "Study Weight": "Support factor (0–1) that increases with the number of valid AUROCs using 1−exp(−n_auc/3).",
+    "Valid AUROC (n_auc)": "Number of studies that contributed a valid AUROC value for this gene.",
+    "Studies Found": "Number of studies where the gene was present in the table (including those without AUROC).",
+    "Median AUC (raw)": "Median reported AUROC across studies with no flipping or re-orientation.",
+    "Median AUC (oriented)": "Median AUROC after aligning direction so MAFLD is treated as the positive class (diagnostic only).",
+    "disc_full": "The Median AUC (disc) threshold at which Strength saturates at 1.0 (tunes how strict the score is).",
+}
 
 
 # =============================================================================
@@ -234,7 +231,7 @@ def compute_consistency_score(
         "n_auc": int(n_auc),
         "disc_full": float(disc_full),
         "interpretation": interpretation,
-        "definitions": score_definitions(disc_full=float(disc_full)),
+        "score_help": SCORE_HELP,
     }
 
 
