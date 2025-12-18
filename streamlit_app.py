@@ -3,11 +3,14 @@ Meta Liver - Interactive Streamlit App for Liver Genomics Analysis
 Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | Co-expression and PPI Networks
 """
 
+import sys
+import importlib
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from pathlib import Path
 
 from robust_data_loader import load_single_omics_studies, load_kg_data, load_ppi_data
 from kg_analysis import get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
@@ -16,7 +19,17 @@ from wgcna_ppi_analysis import (
     get_coexpressed_partners, find_ppi_interactors, get_network_stats
 )
 
+# -----------------------------------------------------------------------------
+# IMPORTANT: always import the *local* single_omics_analysis.py from this app folder
+# and always call its functions (no duplicated scoring logic in this file).
+# This prevents stale/other-module versions silently "winning".
+# -----------------------------------------------------------------------------
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
 import single_omics_analysis as soa
+soa = importlib.reload(soa)
 
 
 # =============================================================================
@@ -119,6 +132,7 @@ else:
     if not single_omics_data:
         st.error("No studies data found!")
     else:
+        # Always use the module's scoring logic (no duplicated scoring logic here)
         consistency = soa.compute_consistency_score(search_query, single_omics_data)
 
         if consistency is None:
