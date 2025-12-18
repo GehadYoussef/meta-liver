@@ -1,24 +1,30 @@
 """
 Robust Data Loader for Meta Liver
-Auto-detects files regardless of folder case and handles missing data gracefully
+
+Purpose
+- Auto-detects the data directory at runtime
+- Finds folders/files case-insensitively
+- Loads WGCNA, single-omics, knowledge graph, and PPI tables
+- Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
+
+Usage (in Streamlit)
+- Wrap calls in @st.cache_data in streamlit_app.py (recommended)
 """
 
-import pandas as pd
-import numpy as np
+from __future__ import annotations
+
 from pathlib import Path
-import streamlit as st
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 import warnings
-warnings.filterwarnings('ignore')
+import pandas as pd
+
 
 # ============================================================================
 # AUTO-DETECT DATA DIRECTORY (RUNTIME)
 # ============================================================================
 
 def find_data_dir() -> Optional[Path]:
-    """Auto-detect data directory (case-insensitive) - computed at runtime"""
-    
-    # Try common locations
+    """Auto-detect data directory (case-insensitive) - computed at runtime."""
     possible_dirs = [
         Path("meta-liver-data"),
         Path("meta_liver_data"),
@@ -27,345 +33,355 @@ def find_data_dir() -> Optional[Path]:
         Path.home() / "meta-liver-data",
         Path.home() / "meta_liver_data",
     ]
-    
     for dir_path in possible_dirs:
         if dir_path.exists():
             return dir_path.resolve()
-    
     return None
 
-def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
-    """Find file in directory (case-insensitive)"""
-    
-    if not directory.exists():
-        return None
-    
-    # Try exact match first
-    exact_path = directory / filename_pattern
-    if exact_path.exists():
-        return exact_path
-    
-    # Try case-insensitive search
-    for file in directory.rglob("*"):
-        if file.name.lower() == filename_pattern.lower():
-            return file
-        if filename_pattern.lower() in file.name.lower():
-            return file
-    
-    return None
 
 def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
-    """Find subfolder (case-insensitive)"""
-    
-    if not parent.exists():
+    """Find immediate subfolder (case-insensitive)."""
+    if parent is None or not parent.exists():
         return None
-    
-    # Try exact match
+
     exact_path = parent / folder_pattern
-    if exact_path.exists():
+    if exact_path.exists() and exact_path.is_dir():
         return exact_path
-    
-    # Try case-insensitive
+
+    pat = folder_pattern.lower()
     for item in parent.iterdir():
-        if item.is_dir() and item.name.lower() == folder_pattern.lower():
+        if item.is_dir() and item.name.lower() == pat:
             return item
-    
+
+    # Fall back to deeper search (optional but useful if structure varies)
+    for item in parent.rglob("*"):
+        if item.is_dir() and item.name.lower() == pat:
+            return item
+
     return None
 
+
+def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
+    """Find file in directory (case-insensitive)."""
+    if directory is None or not directory.exists():
+        return None
+
+    exact_path = directory / filename_pattern
+    if exact_path.exists() and exact_path.is_file():
+        return exact_path
+
+    target = filename_pattern.lower()
+    for file in directory.rglob("*"):
+        if not file.is_file():
+            continue
+        name = file.name.lower()
+        if name == target or target in name:
+            return file
+
+    return None
+
+
 # ============================================================================
-# CACHED DATA LOADERS
+# SAFE READERS
 # ============================================================================
 
-@st.cache_data
+def _read_table(file_path: Path, *, index_col: Optional[int] = None) -> pd.DataFrame:
+    """Read CSV/Parquet defensively; returns empty DF on failure."""
+    if file_path is None or not file_path.exists():
+        return pd.DataFrame()
+
+    try:
+        if file_path.suffix.lower() == ".parquet":
+            return pd.read_parquet(file_path)
+        if file_path.suffix.lower() == ".csv":
+            return pd.read_csv(file_path, index_col=index_col)
+        return pd.DataFrame()
+    except Exception as e:
+        warnings.warn(f"Failed to read {file_path.name}: {e}")
+        return pd.DataFrame()
+
+
+def _load_first_existing(directory: Path, candidates: list[str], *, index_col: Optional[int] = None) -> pd.DataFrame:
+    """Try a list of filenames (case-insensitive); return the first that loads."""
+    if directory is None or not directory.exists():
+        return pd.DataFrame()
+
+    for name in candidates:
+        fp = find_file(directory, name)
+        if fp is not None:
+            df = _read_table(fp, index_col=index_col)
+            if not df.empty:
+                return df
+    return pd.DataFrame()
+
+
+# ============================================================================
+# WGCNA LOADERS
+# ============================================================================
+
 def load_wgcna_expr() -> pd.DataFrame:
-    """Load WGCNA expression matrix"""
+    """Load WGCNA expression matrix."""
     data_dir = find_data_dir()
     if data_dir is None:
         return pd.DataFrame()
-    
+
     wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
-    
-    # Try different filenames
-    for filename in ["datExpr_processed.parquet", "datExpr_processed.csv"]:
-        file_path = find_file(wgcna_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    return pd.read_parquet(file_path)
-                else:
-                    return pd.read_csv(file_path, index_col=0)
-            except Exception as e:
-                st.warning(f"Error loading {filename}: {e}")
-    
-    return pd.DataFrame()
 
-@st.cache_data
+    return _load_first_existing(
+        wgcna_dir,
+        ["datExpr_processed.parquet", "datExpr_processed.csv"],
+        index_col=0
+    )
+
+
 def load_wgcna_mes() -> pd.DataFrame:
-    """Load WGCNA module eigenvectors"""
+    """Load WGCNA module eigengenes."""
     data_dir = find_data_dir()
     if data_dir is None:
         return pd.DataFrame()
-    
+
     wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
-    
-    for filename in ["MEs_processed.parquet", "MEs_processed.csv"]:
-        file_path = find_file(wgcna_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    return pd.read_parquet(file_path)
-                else:
-                    return pd.read_csv(file_path, index_col=0)
-            except Exception as e:
-                st.warning(f"Error loading {filename}: {e}")
-    
-    return pd.DataFrame()
 
-@st.cache_data
+    return _load_first_existing(
+        wgcna_dir,
+        ["MEs_processed.parquet", "MEs_processed.csv"],
+        index_col=0
+    )
+
+
 def load_wgcna_mod_trait_cor() -> pd.DataFrame:
-    """Load module-trait correlations"""
+    """Load module-trait correlations."""
     data_dir = find_data_dir()
     if data_dir is None:
         return pd.DataFrame()
-    
+
     wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
-    
-    for filename in ["moduleTraitCor.parquet", "moduleTraitCor.csv"]:
-        file_path = find_file(wgcna_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    return pd.read_parquet(file_path)
-                else:
-                    return pd.read_csv(file_path, index_col=0)
-            except Exception as e:
-                st.warning(f"Error loading {filename}: {e}")
-    
-    return pd.DataFrame()
 
-@st.cache_data
+    return _load_first_existing(
+        wgcna_dir,
+        ["moduleTraitCor.parquet", "moduleTraitCor.csv"],
+        index_col=0
+    )
+
+
 def load_wgcna_mod_trait_pval() -> pd.DataFrame:
-    """Load module-trait p-values"""
+    """Load module-trait p-values."""
     data_dir = find_data_dir()
     if data_dir is None:
         return pd.DataFrame()
-    
+
     wgcna_dir = find_subfolder(data_dir, "wgcna")
     if wgcna_dir is None:
         return pd.DataFrame()
-    
-    for filename in ["moduleTraitPvalue.parquet", "moduleTraitPvalue.csv"]:
-        file_path = find_file(wgcna_dir, filename)
-        if file_path:
-            try:
-                if file_path.suffix == '.parquet':
-                    return pd.read_parquet(file_path)
-                else:
-                    return pd.read_csv(file_path, index_col=0)
-            except Exception as e:
-                st.warning(f"Error loading {filename}: {e}")
-    
-    return pd.DataFrame()
 
-@st.cache_data
+    return _load_first_existing(
+        wgcna_dir,
+        ["moduleTraitPvalue.parquet", "moduleTraitPvalue.csv"],
+        index_col=0
+    )
+
+
+# ============================================================================
+# SINGLE-OMICS / KG / PPI LOADERS
+# ============================================================================
+
 def load_single_omics_studies() -> Dict[str, pd.DataFrame]:
-    """Load all single-omics studies"""
+    """Load all single-omics studies (all CSV/Parquet files under single_omics)."""
     data_dir = find_data_dir()
     if data_dir is None:
         return {}
-    
+
     single_omics_dir = find_subfolder(data_dir, "single_omics")
     if single_omics_dir is None:
         return {}
-    
-    studies = {}
-    
-    # Look for all CSV and Parquet files
+
+    studies: Dict[str, pd.DataFrame] = {}
     for file_path in single_omics_dir.rglob("*"):
-        if file_path.suffix in ['.csv', '.parquet']:
-            try:
-                study_name = file_path.stem
-                
-                if file_path.suffix == '.parquet':
-                    df = pd.read_parquet(file_path)
-                else:
-                    df = pd.read_csv(file_path)
-                
-                studies[study_name] = df
-            except Exception as e:
-                pass  # Skip files that can't be loaded
-    
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+            continue
+
+        study_name = file_path.stem
+        df = _read_table(file_path, index_col=None)
+        if not df.empty:
+            studies[study_name] = df
+
     return studies
 
-@st.cache_data
+
 def load_kg_data() -> Dict[str, pd.DataFrame]:
-    """Load all knowledge graph data"""
+    """Load all knowledge graph data (all CSV/Parquet files under knowledge_graphs)."""
     data_dir = find_data_dir()
     if data_dir is None:
         return {}
-    
+
     kg_dir = find_subfolder(data_dir, "knowledge_graphs")
     if kg_dir is None:
         return {}
-    
-    kg_data = {}
-    
+
+    kg_data: Dict[str, pd.DataFrame] = {}
     for file_path in kg_dir.rglob("*"):
-        if file_path.suffix in ['.csv', '.parquet']:
-            try:
-                data_name = file_path.stem
-                
-                if file_path.suffix == '.parquet':
-                    df = pd.read_parquet(file_path)
-                else:
-                    df = pd.read_csv(file_path)
-                
-                kg_data[data_name] = df
-            except Exception as e:
-                pass
-    
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+            continue
+
+        name = file_path.stem
+        df = _read_table(file_path, index_col=None)
+        if not df.empty:
+            kg_data[name] = df
+
     return kg_data
 
-@st.cache_data
+
 def load_ppi_data() -> Dict[str, pd.DataFrame]:
-    """Load all PPI network data"""
+    """Load all PPI network data (all CSV/Parquet files under ppi_networks)."""
     data_dir = find_data_dir()
     if data_dir is None:
         return {}
-    
+
     ppi_dir = find_subfolder(data_dir, "ppi_networks")
     if ppi_dir is None:
         return {}
-    
-    ppi_data = {}
-    
+
+    ppi_data: Dict[str, pd.DataFrame] = {}
     for file_path in ppi_dir.rglob("*"):
-        if file_path.suffix in ['.csv', '.parquet']:
-            try:
-                data_name = file_path.stem
-                
-                if file_path.suffix == '.parquet':
-                    df = pd.read_parquet(file_path)
-                else:
-                    df = pd.read_csv(file_path)
-                
-                ppi_data[data_name] = df
-            except Exception as e:
-                pass
-    
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+            continue
+
+        name = file_path.stem
+        df = _read_table(file_path, index_col=None)
+        if not df.empty:
+            ppi_data[name] = df
+
     return ppi_data
 
+
 # ============================================================================
-# DATA AVAILABILITY CHECKER
+# DATA AVAILABILITY / SUMMARY
 # ============================================================================
 
 def check_data_availability() -> Dict[str, bool]:
-    """Check what data is available"""
-    
-    availability = {
-        'data_dir': find_data_dir() is not None,
-        'wgcna_expr': not load_wgcna_expr().empty,
-        'wgcna_mes': not load_wgcna_mes().empty,
-        'wgcna_mod_trait_cor': not load_wgcna_mod_trait_cor().empty,
-        'wgcna_mod_trait_pval': not load_wgcna_mod_trait_pval().empty,
-        'single_omics': len(load_single_omics_studies()) > 0,
-        'knowledge_graphs': len(load_kg_data()) > 0,
-        'ppi_networks': len(load_ppi_data()) > 0,
+    """Check what data is available (loads are cheap if Streamlit caches upstream)."""
+    data_dir_ok = find_data_dir() is not None
+
+    expr_ok = False
+    mes_ok = False
+    cor_ok = False
+    pval_ok = False
+    single_ok = False
+    kg_ok = False
+    ppi_ok = False
+
+    if data_dir_ok:
+        expr_ok = not load_wgcna_expr().empty
+        mes_ok = not load_wgcna_mes().empty
+        cor_ok = not load_wgcna_mod_trait_cor().empty
+        pval_ok = not load_wgcna_mod_trait_pval().empty
+        single_ok = len(load_single_omics_studies()) > 0
+        kg_ok = len(load_kg_data()) > 0
+        ppi_ok = len(load_ppi_data()) > 0
+
+    return {
+        "data_dir": data_dir_ok,
+        "wgcna_expr": expr_ok,
+        "wgcna_mes": mes_ok,
+        "wgcna_mod_trait_cor": cor_ok,
+        "wgcna_mod_trait_pval": pval_ok,
+        "single_omics": single_ok,
+        "knowledge_graphs": kg_ok,
+        "ppi_networks": ppi_ok,
     }
-    
-    return availability
+
 
 def get_data_summary() -> str:
-    """Get human-readable data availability summary"""
-    
+    """Human-readable data availability summary (no Streamlit formatting dependencies)."""
     avail = check_data_availability()
-    
-    summary = "**Data Availability:**\n\n"
-    
-    if not avail['data_dir']:
-        summary += "❌ Data directory not found\n"
-        return summary
-    
-    summary += "✅ Data directory found\n\n"
-    
-    if avail['wgcna_expr']:
+
+    if not avail["data_dir"]:
+        return "Data Availability:\n\n✗ Data directory not found"
+
+    lines = ["Data Availability:\n", "✓ Data directory found\n"]
+
+    if avail["wgcna_expr"]:
         expr = load_wgcna_expr()
-        summary += f"✅ WGCNA Expression: {expr.shape[0]} samples × {expr.shape[1]} genes\n"
+        lines.append(f"✓ WGCNA Expression: {expr.shape[0]} samples × {expr.shape[1]} genes")
     else:
-        summary += "❌ WGCNA Expression: Not found\n"
-    
-    if avail['wgcna_mes']:
+        lines.append("✗ WGCNA Expression: Not found")
+
+    if avail["wgcna_mes"]:
         mes = load_wgcna_mes()
-        summary += f"✅ WGCNA Module Eigenvectors: {mes.shape[1]} modules\n"
+        lines.append(f"✓ WGCNA Module Eigengenes: {mes.shape[1]} modules")
     else:
-        summary += "❌ WGCNA Module Eigenvectors: Not found\n"
-    
-    if avail['wgcna_mod_trait_cor']:
-        summary += "✅ Module-Trait Correlations: Available\n"
-    else:
-        summary += "❌ Module-Trait Correlations: Not found\n"
-    
-    if avail['single_omics']:
+        lines.append("✗ WGCNA Module Eigengenes: Not found")
+
+    lines.append("✓ Module-Trait Correlations: Available" if avail["wgcna_mod_trait_cor"] else "✗ Module-Trait Correlations: Not found")
+    lines.append("✓ Module-Trait P-values: Available" if avail["wgcna_mod_trait_pval"] else "✗ Module-Trait P-values: Not found")
+
+    if avail["single_omics"]:
         studies = load_single_omics_studies()
-        summary += f"✅ Single-Omics Studies: {len(studies)} datasets\n"
+        lines.append(f"✓ Single-Omics Studies: {len(studies)} datasets")
         for name, df in studies.items():
-            summary += f"   - {name}: {len(df)} rows\n"
+            lines.append(f"  - {name}: {len(df)} rows")
     else:
-        summary += "❌ Single-Omics Studies: Not found\n"
-    
-    if avail['knowledge_graphs']:
-        kg = load_kg_data()
-        summary += f"✅ Knowledge Graphs: {len(kg)} datasets\n"
-    else:
-        summary += "❌ Knowledge Graphs: Not found\n"
-    
-    if avail['ppi_networks']:
-        ppi = load_ppi_data()
-        summary += f"✅ PPI Networks: {len(ppi)} datasets\n"
-    else:
-        summary += "❌ PPI Networks: Not found\n"
-    
-    return summary
+        lines.append("✗ Single-Omics Studies: Not found")
+
+    lines.append(f"✓ Knowledge Graphs: {len(load_kg_data())} datasets" if avail["knowledge_graphs"] else "✗ Knowledge Graphs: Not found")
+    lines.append(f"✓ PPI Networks: {len(load_ppi_data())} datasets" if avail["ppi_networks"] else "✗ PPI Networks: Not found")
+
+    return "\n".join(lines)
+
 
 # ============================================================================
-# SEARCH FUNCTIONS
+# SEARCH HELPERS
 # ============================================================================
 
 def search_gene_in_studies(gene_name: str) -> Dict[str, pd.DataFrame]:
-    """Search for a gene across all single-omics studies"""
-    
+    """Search for a gene across all single-omics studies (substring match)."""
     studies = load_single_omics_studies()
-    results = {}
-    
+    results: Dict[str, pd.DataFrame] = {}
+
     for study_name, df in studies.items():
-        # Try to find the gene
-        if 'Gene' in df.columns:
-            matches = df[df['Gene'].str.contains(gene_name, case=False, na=False)]
-            if not matches.empty:
-                results[study_name] = matches
-        elif 'gene' in df.columns:
-            matches = df[df['gene'].str.contains(gene_name, case=False, na=False)]
-            if not matches.empty:
-                results[study_name] = matches
-    
+        if df is None or df.empty:
+            continue
+
+        if "Gene" in df.columns:
+            col = df["Gene"].astype(str)
+        elif "gene" in df.columns:
+            col = df["gene"].astype(str)
+        else:
+            continue
+
+        matches = df[col.str.contains(gene_name, case=False, na=False)]
+        if not matches.empty:
+            results[study_name] = matches
+
     return results
 
+
 def search_drug_in_kg(drug_name: str) -> Dict[str, pd.DataFrame]:
-    """Search for a drug in knowledge graphs"""
-    
+    """Search for a drug in knowledge graph tables (substring match on Name column)."""
     kg_data = load_kg_data()
-    results = {}
-    
+    results: Dict[str, pd.DataFrame] = {}
+
     for kg_name, df in kg_data.items():
-        if 'Name' in df.columns:
-            matches = df[df['Name'].str.contains(drug_name, case=False, na=False)]
-            if not matches.empty:
-                results[kg_name] = matches
-    
+        if df is None or df.empty:
+            continue
+        if "Name" not in df.columns:
+            continue
+
+        col = df["Name"].astype(str)
+        matches = df[col.str.contains(drug_name, case=False, na=False)]
+        if not matches.empty:
+            results[kg_name] = matches
+
     return results
