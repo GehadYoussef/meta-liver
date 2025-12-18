@@ -127,6 +127,7 @@ def _build_score_help() -> Dict[str, str]:
         "Median AUC (raw)": "Median AUROC as reported in the study tables (can be <0.5 if the labels are flipped).",
         "Median AUC (oriented)": "Median AUROC after orienting so higher values correspond to MAFLD as the ‘positive’ side (for diagnostics).",
         "disc_full": "Reference ‘good signal’ line: AUC-disc=0.65 corresponds to a moderate discriminative signal.",
+        "AUC-disc IQR": "Interquartile range of AUC-disc across studies (lower = more stable).",
     }
 
 
@@ -344,6 +345,15 @@ def create_lollipop_plot(
         ))
 
     for item in plot_data:
+        lfc_txt = f"{item['lfc']:.3f}" if pd.notna(item["lfc"]) else "N/A"
+        hover = (
+            f"<b>{item['study']}</b>"
+            f"<br>AUC (raw): {item['auc_raw']:.3f}"
+            f"<br>AUC (disc): {item['auc_disc']:.3f}"
+            f"<br>logFC: {lfc_txt}"
+            f"<br>Direction: {item['direction']}"
+        )
+
         fig.add_trace(go.Scatter(
             x=[item["auc_plot"]],
             y=[item["study"]],
@@ -354,14 +364,7 @@ def create_lollipop_plot(
                 color=item["color"],
                 line=dict(color="white", width=1),
             ),
-            hovertext=(
-                f"<b>{item['study']}</b>"
-                f"<br>AUC (raw): {item['auc_raw']:.3f}"
-                f"<br>AUC (disc): {item['auc_disc']:.3f}"
-                f"<br>logFC: {item['lfc']:.3f}" if pd.notna(item["lfc"]) else f"<br>logFC: N/A"
-            ) + (
-                f"<br>Direction: {item['direction']}"
-            ),
+            hovertext=hover,
             hoverinfo="text",
             showlegend=False
         ))
