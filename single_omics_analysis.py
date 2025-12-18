@@ -4,11 +4,14 @@ Single-Omics Analysis Module
 This module provides:
 - Robust gene matching across study tables
 - Extraction of AUROC + logFC + direction
-- A composite evidence score that reflects (i) discriminative power, (ii) stability,
-  (iii) direction agreement, and (iv) the number of studies with valid AUROC
+- A composite evidence score that reflects:
+    (i) discriminative power (orientation-invariant AUROC),
+    (ii) stability (IQR of discriminative AUROC),
+    (iii) direction agreement,
+    (iv) number of studies with valid AUROC
 - Visualisations (lollipop AUROC plot, AUROC vs logFC concordance) and a results table
 
-It is designed to be imported by streamlit_app.py so the single-omics logic lives in one place.
+Designed to be imported by streamlit_app.py.
 """
 
 from __future__ import annotations
@@ -22,9 +25,9 @@ import plotly.graph_objects as go
 from robust_data_loader import load_single_omics_studies
 
 
-# ============================================================================
+# =============================================================================
 # ROBUST GENE MATCHING
-# ============================================================================
+# =============================================================================
 
 def find_gene_in_study(gene_name: str, study_df: pd.DataFrame) -> Tuple[Optional[pd.Series], Optional[str]]:
     """
@@ -45,13 +48,11 @@ def find_gene_in_study(gene_name: str, study_df: pd.DataFrame) -> Tuple[Optional
 
     col = study_df[gene_col].astype(str)
 
-    # Exact match first (case-insensitive)
     exact_mask = col.str.lower() == str(gene_name).lower()
     exact_match = study_df[exact_mask]
     if not exact_match.empty:
         return exact_match.iloc[0], gene_col
 
-    # Substring fallback
     sub_mask = col.str.contains(str(gene_name), case=False, na=False)
     sub_match = study_df[sub_mask]
     if not sub_match.empty:
@@ -65,7 +66,6 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
     if row is None or row.empty:
         return None, None, None
 
-    # AUC
     auc = None
     for col in ["AUC", "auc", "AUC_score"]:
         if col in row.index:
@@ -75,7 +75,6 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
             except Exception:
                 pass
 
-    # logFC
     lfc = None
     for col in ["avg_logFC", "avg_LFC", "logFC", "log2FC", "avg_log2FC"]:
         if col in row.index:
@@ -85,7 +84,6 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
             except Exception:
                 pass
 
-    # Direction
     direction = None
     if "direction" in row.index and pd.notna(row["direction"]):
         dir_val = str(row["direction"]).lower()
@@ -100,20 +98,19 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
     return auc, lfc, direction
 
 
-# ============================================================================
-# CONSISTENCY / EVIDENCE SCORING
-# ============================================================================
+# =============================================================================
+# CONSISTENCY / EVIDENCE SCORING (DISCRIMINATIVE AUC)
+# =============================================================================
 
-def compute_consistency_score(gene_name: str, studies_data: Optional[Dict[str, pd.DataFrame]] = None) -> Optional[Dict[str, Any]]:
+def compute_consistency_score(
+    gene_name: str,
+    studies_data: Optional[Dict[str, pd.DataFrame]] = None
+) -> Optional[Dict[str, Any]]:
     """
     Composite evidence score.
 
-    Key design choices:
-    - Direction agreement is based on inferred/declared direction per study.
-    - Strength is based on *discriminative AUROC* (max(AUC, 1-AUC)) so that AUROC < 0.5
-      is treated as 'still predictive but flipped label orientation'.
-    - Stability is based on the IQR of discriminative AUROC values.
-    - n_weight depends on number of studies with a valid AUROC (not just gene presence).
+    Strength is based on discriminative AUROC: max(AUC, 1-AUC)
+    so AUROC < 0.5 counts as predictive (but label-flipped).
     """
     if studies_data is None:
         studies_data = load_single_omics_studies()
@@ -137,7 +134,7 @@ def compute_consistency_score(gene_name: str, studies_data: Optional[Dict[str, p
         if auc is not None and not np.isnan(auc):
             auc_values.append(float(auc))
 
-            # Oriented AUC (kept for debugging/plotting; not used for strength after patch)
+            # Oriented AUC (kept for diagnostics; NOT used for strength)
             if direction == "MAFLD":
                 auc_oriented = float(auc)
             elif direction == "Healthy":
@@ -153,33 +150,34 @@ def compute_consistency_score(gene_name: str, studies_data: Optional[Dict[str, p
     if found_count == 0:
         return None
 
-    # Direction agreement (majority fraction)
     direction_agreement = (
         max(directions.count("MAFLD"), directions.count("Healthy")) / len(directions)
         if directions else 0.0
     )
 
-    # Patch: strength/stability computed on discriminative AUROC (orientation-invariant)
     n_auc = len(auc_oriented_vals)
+
+    # Discriminative AUC (orientation-invariant)
     auc_disc_vals = [max(a, 1.0 - a) for a in auc_oriented_vals]
     median_auc_discriminative = float(np.median(auc_disc_vals)) if auc_disc_vals else 0.5
+
     median_auc_raw = float(np.median(auc_values)) if auc_values else 0.0
     median_auc_oriented = float(np.median(auc_oriented_vals)) if auc_oriented_vals else 0.5
 
-    # Strength: map 0.5->0, 1.0->1
+    # Strength: 0.5 -> 0, 1.0 -> 1
     strength = max(0.0, (median_auc_discriminative - 0.5) / 0.5)
 
-    # Stability: 1 - IQR/0.5 on discriminative AUROC
+    # Stability: 1 - IQR/0.5 on discriminative AUC
     if len(auc_disc_vals) > 1:
         iqr = float(np.subtract(*np.percentile(auc_disc_vals, [75, 25])))
         stability = max(0.0, 1.0 - (iqr / 0.5))
     else:
         stability = 1.0
 
-    # Sample weight: use valid AUC count
+    # Weight by number of valid AUCs
     n_weight = float(1.0 - np.exp(-n_auc / 3.0))
 
-    evidence_score = float(strength * stability * direction_agreement * n_weight)
+    evidence_score = float(strength * stability * float(direction_agreement) * n_weight)
 
     if strength > 0.7 and stability > 0.7 and direction_agreement > 0.7:
         interpretation = "Highly consistent: strong, stable, and directionally aligned"
@@ -198,23 +196,22 @@ def compute_consistency_score(gene_name: str, studies_data: Optional[Dict[str, p
         "auc_median": median_auc_raw,
         "auc_median_oriented": median_auc_oriented,
         "auc_median_discriminative": median_auc_discriminative,
-        "strength": strength,
-        "stability": stability,
+        "strength": float(strength),
+        "stability": float(stability),
         "direction_agreement": float(direction_agreement),
-        "evidence_score": evidence_score,
-        "n_weight": n_weight,
+        "evidence_score": float(evidence_score),
+        "n_weight": float(n_weight),
         "found_count": int(found_count),
         "n_auc": int(n_auc),
         "interpretation": interpretation,
     }
 
 
-# ============================================================================
+# =============================================================================
 # PLOTS + TABLE
-# ============================================================================
+# =============================================================================
 
 def create_lollipop_plot(gene_name: str, studies_data: Optional[Dict[str, pd.DataFrame]] = None) -> Optional[go.Figure]:
-    """Create horizontal lollipop plot with direction cues (triangle markers)."""
     if studies_data is None:
         studies_data = load_single_omics_studies()
 
@@ -302,9 +299,7 @@ def create_lollipop_plot(gene_name: str, studies_data: Optional[Dict[str, pd.Dat
             gridwidth=0.5,
             gridcolor="#f0f0f0"
         ),
-        yaxis=dict(
-            tickfont=dict(color="#000000", size=11)
-        ),
+        yaxis=dict(tickfont=dict(color="#000000", size=11)),
         showlegend=False,
         plot_bgcolor="#fafafa",
         paper_bgcolor="white"
@@ -314,7 +309,6 @@ def create_lollipop_plot(gene_name: str, studies_data: Optional[Dict[str, pd.Dat
 
 
 def create_auc_logfc_scatter(gene_name: str, studies_data: Optional[Dict[str, pd.DataFrame]] = None) -> Optional[go.Figure]:
-    """Create AUROC vs logFC scatter plot with direction symbols."""
     if studies_data is None:
         studies_data = load_single_omics_studies()
 
@@ -354,12 +348,7 @@ def create_auc_logfc_scatter(gene_name: str, studies_data: Optional[Dict[str, pd
             x=[item["auc"]],
             y=[item["lfc"]],
             mode="markers",
-            marker=dict(
-                size=10,
-                color="#333333",
-                symbol=item["symbol"],
-                line=dict(width=0),
-            ),
+            marker=dict(size=10, color="#333333", symbol=item["symbol"], line=dict(width=0)),
             hovertext=(
                 f"<b>{item['study']}</b>"
                 f"<br>AUC: {item['auc']:.3f}"
@@ -401,7 +390,6 @@ def create_auc_logfc_scatter(gene_name: str, studies_data: Optional[Dict[str, pd
 
 
 def create_results_table(gene_name: str, studies_data: Optional[Dict[str, pd.DataFrame]] = None) -> Optional[pd.DataFrame]:
-    """Create per-study AUROC/logFC/direction table for the selected gene."""
     if studies_data is None:
         studies_data = load_single_omics_studies()
 
