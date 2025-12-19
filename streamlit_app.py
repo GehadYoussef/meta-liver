@@ -126,7 +126,61 @@ except Exception as e:
 
 
 # =============================================================================
-# PLOT HELPERS (RAW vs DISC) — NO NEED TO MODIFY single_omics_analysis.py
+# GENERAL FORMAT HELPERS
+# =============================================================================
+
+def _is_nanlike(x: object) -> bool:
+    try:
+        return x is None or (isinstance(x, float) and np.isnan(x))
+    except Exception:
+        return x is None
+
+
+def _fmt_pct01(x: object, decimals: int = 1) -> str:
+    """x is expected to be in [0,1]."""
+    if _is_nanlike(x):
+        return "missing"
+    try:
+        return f"{float(x):.{decimals}%}"
+    except Exception:
+        return "missing"
+
+
+def _fmt_auc(x: object) -> str:
+    if _is_nanlike(x):
+        return "missing"
+    try:
+        v = float(x)
+        if not (0.0 <= v <= 1.0):
+            return "missing"
+        return f"{v:.3f}"
+    except Exception:
+        return "missing"
+
+
+def _fmt_num(x: object, decimals: int = 4, sci_if_small: bool = False) -> str:
+    if _is_nanlike(x):
+        return "N/A"
+    try:
+        v = float(x)
+        if sci_if_small and 0 < abs(v) < 10 ** (-(decimals)):
+            return f"<{10 ** (-(decimals)):.0e}"
+        return f"{v:.{decimals}f}"
+    except Exception:
+        return "N/A"
+
+
+def _fmt_num_commas(x: object, decimals: int = 2) -> str:
+    if _is_nanlike(x):
+        return "N/A"
+    try:
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return "N/A"
+
+
+# =============================================================================
+# PLOT HELPERS (RAW vs DISC vs ORIENTED)
 # =============================================================================
 
 def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
@@ -156,16 +210,12 @@ def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
         except Exception:
             lfc_val = None
 
-        auc_disc = None
-        if auc_raw is not None:
-            auc_disc = float(max(auc_raw, 1.0 - auc_raw))
+        auc_disc = float(max(auc_raw, 1.0 - auc_raw)) if auc_raw is not None else None
 
         auc_oriented = None
         if auc_raw is not None:
-            if direction == "Healthy":
-                auc_oriented = float(1.0 - auc_raw)
-            else:
-                auc_oriented = float(auc_raw)
+            # "Oriented" here means: align so MAFLD is treated as the "positive" class
+            auc_oriented = float(1.0 - auc_raw) if direction == "Healthy" else float(auc_raw)
 
         out.append({
             "study": study_name,
@@ -216,6 +266,8 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
             hover += f"<br>AUC_raw: {m['auc_raw']:.3f}"
         if m.get("auc_disc") is not None:
             hover += f"<br>AUC_disc: {m['auc_disc']:.3f}"
+        if m.get("auc_oriented") is not None:
+            hover += f"<br>AUC_oriented: {m['auc_oriented']:.3f}"
         if m.get("lfc") is not None:
             hover += f"<br>logFC: {m['lfc']:.3f}"
         if m.get("direction") is not None:
@@ -349,39 +401,11 @@ def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
 # KG DISPLAY HELPERS (UI ONLY)
 # =============================================================================
 
-def _is_nanlike(x: object) -> bool:
-    try:
-        return x is None or (isinstance(x, float) and np.isnan(x))
-    except Exception:
-        return x is None
-
-
 def _fmt_pct(p: object) -> str:
     if _is_nanlike(p):
         return "N/A"
     try:
         return f"{float(p):.1f}%"
-    except Exception:
-        return "N/A"
-
-
-def _fmt_num(x: object, decimals: int = 4, sci_if_small: bool = False) -> str:
-    if _is_nanlike(x):
-        return "N/A"
-    try:
-        v = float(x)
-        if sci_if_small and 0 < abs(v) < 10 ** (-(decimals)):
-            return f"<{10 ** (-(decimals)):.0e}"
-        return f"{v:.{decimals}f}"
-    except Exception:
-        return "N/A"
-
-
-def _fmt_num_commas(x: object, decimals: int = 2) -> str:
-    if _is_nanlike(x):
-        return "N/A"
-    try:
-        return f"{float(x):,.{decimals}f}"
     except Exception:
         return "N/A"
 
@@ -646,23 +670,24 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
                 col1, col2, col3, col4 = st.columns(4)
 
                 with col1:
-                    st.metric("Evidence Score", f"{consistency['evidence_score']:.1%}")
+                    st.metric("Evidence Score", _fmt_pct01(consistency.get("evidence_score")))
                     st.caption(help_text["Evidence Score"])
 
                 with col2:
-                    st.metric("Direction Agreement", f"{consistency['direction_agreement']:.1%}")
+                    st.metric("Direction Agreement", _fmt_pct01(consistency.get("direction_agreement")))
                     st.caption(help_text["Direction Agreement"])
 
                 with col3:
-                    med_disc = consistency.get("auc_median_discriminative", None)
-                    st.metric("Median AUC (disc)", "missing" if med_disc is None else f"{med_disc:.3f}")
+                    st.metric("Median AUC (disc)", _fmt_auc(consistency.get("auc_median_discriminative")))
                     st.caption(help_text["Median AUC (disc)"])
 
                 with col4:
-                    st.metric("Studies Found", f"{consistency['found_count']}")
+                    st.metric("Studies Found", f"{consistency.get('found_count', 0)}")
                     st.caption(help_text["Studies Found"])
 
-                st.info(f"📊 **{consistency['interpretation']}**")
+                interp = consistency.get("interpretation", "")
+                if interp:
+                    st.info(f"📊 **{interp}**")
                 st.markdown("---")
 
                 c1, c2, c3, c4 = st.columns(4)
@@ -711,58 +736,59 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
 
                 st.markdown("---")
 
+                # ---- NEW: AUROC VIEW TOGGLE (this is the "toggle" you were expecting) ----
+                auc_view = st.radio(
+                    "AUROC view (plots)",
+                    ["Discriminative (AUC-disc)", "Raw (as reported)", "Oriented (MAFLD-positive)"],
+                    index=0,
+                    horizontal=True,
+                    key="omics_auc_view_toggle"
+                )
+
+                auc_key_map = {
+                    "Discriminative (AUC-disc)": "auc_disc",
+                    "Raw (as reported)": "auc_raw",
+                    "Oriented (MAFLD-positive)": "auc_oriented",
+                }
+                auc_key = auc_key_map[auc_view]
+
                 metrics = _collect_gene_metrics(search_query, single_omics_data)
 
-                left, right = st.columns(2)
+                fig = make_lollipop(
+                    metrics,
+                    auc_key=auc_key,
+                    title=f"AUROC Across Studies ({auc_view})",
+                    subtitle=("AUC-disc = max(AUC, 1−AUC)." if auc_key == "auc_disc"
+                              else "Raw AUROC values as stored in each study table." if auc_key == "auc_raw"
+                              else "AUROC aligned so MAFLD is treated as ‘positive’.")
+                )
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No AUROC values available for this gene under the selected AUROC view.")
 
-                with left:
-                    st.markdown("**AUROC Across Studies (raw)**")
-                    fig_raw = make_lollipop(
-                        metrics,
-                        auc_key="auc_raw",
-                        title="AUROC Across Studies (raw)",
-                        subtitle="Raw AUROC values as stored in each study table."
-                    )
-                    if fig_raw:
-                        st.plotly_chart(fig_raw, use_container_width=True)
-                    else:
-                        st.info("No AUROC values available for this gene.")
+                st.markdown("---")
 
-                with right:
-                    st.markdown("**AUROC Across Studies (discriminative)**")
-                    fig_disc = make_lollipop(
-                        metrics,
-                        auc_key="auc_disc",
-                        title="AUROC Across Studies (discriminative)",
-                        subtitle="AUC-disc = max(AUC, 1−AUC), so AUROC < 0.5 counts as label-flipped signal."
-                    )
-                    if fig_disc:
-                        st.plotly_chart(fig_disc, use_container_width=True)
-                    else:
-                        st.info("No AUROC values available for this gene.")
+                st.markdown("**Concordance: AUROC vs logFC**")
+                fig_scatter = make_scatter_auc_logfc(
+                    metrics,
+                    auc_key=auc_key,
+                    title=f"Concordance: {auc_view} vs logFC",
+                    subtitle="Checks whether discriminative signal aligns with up/down regulation."
+                )
+                if fig_scatter:
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                else:
+                    st.info("Not enough data for concordance plot (need AUROC + logFC in ≥2 studies).")
 
-                left2, right2 = st.columns(2)
+                st.markdown("---")
 
-                with left2:
-                    st.markdown("**Concordance: AUC-disc vs logFC**")
-                    fig_scatter_disc = make_scatter_auc_logfc(
-                        metrics,
-                        auc_key="auc_disc",
-                        title="Concordance: AUC-disc vs logFC",
-                        subtitle="Checks whether discriminative signal aligns with up/down regulation."
-                    )
-                    if fig_scatter_disc:
-                        st.plotly_chart(fig_scatter_disc, use_container_width=True)
-                    else:
-                        st.info("Not enough data for concordance plot (need AUROC + logFC in ≥2 studies).")
-
-                with right2:
-                    st.markdown("**AUC-disc distribution (stability view)**")
-                    fig_dist = make_auc_disc_distribution(metrics)
-                    if fig_dist:
-                        st.plotly_chart(fig_dist, use_container_width=True)
-                    else:
-                        st.info("Not enough AUROC values to show a distribution.")
+                st.markdown("**AUC-disc distribution (stability view)**")
+                fig_dist = make_auc_disc_distribution(metrics)
+                if fig_dist:
+                    st.plotly_chart(fig_dist, use_container_width=True)
+                else:
+                    st.info("Not enough AUROC values to show a distribution.")
 
                 st.markdown("---")
 
