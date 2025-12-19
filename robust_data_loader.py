@@ -84,13 +84,11 @@ def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
 
 def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
     """
-    Support both folder spellings:
-    - preferred in your repo: 'wcgna'
-    - legacy/other exports: 'wgcna'
+    Prefer 'wgcna' (you renamed to this), but still accept legacy 'wcgna'.
     """
     if data_dir is None:
         return None
-    return find_subfolder(data_dir, "wcgna") or find_subfolder(data_dir, "wgcna")
+    return find_subfolder(data_dir, "wgcna") or find_subfolder(data_dir, "wcgna")
 
 
 # ============================================================================
@@ -128,7 +126,7 @@ def _load_first_existing(directory: Path, candidates: list[str], *, index_col: O
 
 
 # ============================================================================
-# WGCNA LOADERS (supports wcgna/ and wgcna/)
+# WGCNA LOADERS (supports wgcna/ and wcgna/)
 # ============================================================================
 
 def load_wgcna_expr() -> pd.DataFrame:
@@ -203,12 +201,9 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
     """
     Load all pathway/enrichment tables under <wgcna_dir>/pathways/.
 
-    Returns:
-      dict keyed by module (lowercase), e.g. 'black' -> dataframe
-
-    Module key is inferred from filename:
-      - takes first token split on _ - space, e.g. 'black_enrichment.csv' -> 'black'
-      - if no token can be inferred, uses file stem.
+    Returns dict keyed by module (lowercase), e.g. 'black' -> dataframe.
+    Module key is inferred from filename: first token split on _ - space.
+    Example: 'black_enrichment.csv' -> 'black'.
     """
     data_dir = find_data_dir()
     if data_dir is None:
@@ -233,7 +228,6 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
         if df.empty:
             continue
 
-        # drop common junk index col from exports
         if "Unnamed: 0" in df.columns:
             df = df.drop(columns=["Unnamed: 0"])
 
@@ -253,9 +247,6 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
 def load_wgcna_module_trait_heatmap_pdf_path() -> Optional[Path]:
     """
     Return a Path to the module-trait heatmap PDF if present, else None.
-    Looks for:
-      - module-trait-relationships-heatmap.pdf
-      - moduleTraitRelationshipsHeatmap.pdf (common variations)
     """
     data_dir = find_data_dir()
     if data_dir is None:
