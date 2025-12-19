@@ -46,6 +46,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+APP_DOI = "10.1101/2024.10.10.617610"
+APP_DOI_URL = "https://doi.org/10.1101/2024.10.10.617610"
+
 APP_CITATION = (
     "Weihs J, Baldo F, Cardinali A, Youssef G, Ludwik K, Haep N, Tang P, Kumar P, "
     "Engelmann C, Quach S, Meindl M, Kucklick M, Engelmann S, Chillian B, Rothe M, "
@@ -462,7 +465,7 @@ st.sidebar.markdown("## 🔬 Meta Liver")
 search_query = st.sidebar.text_input("Search gene:", placeholder="e.g., SAA1, TP53, IL6").strip().upper()
 
 st.sidebar.caption(f"single_omics_analysis loaded from: {getattr(soa, '__file__', 'unknown')}")
-st.sidebar.caption("Citation: doi:10.1101/2024.10.10.617610")
+st.sidebar.caption(f"Citation: doi:{APP_DOI}")
 
 if data_loaded:
     if single_omics_data:
@@ -511,18 +514,18 @@ if not search_query:
     st.title("🔬 Meta Liver")
     st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
 
-    st.markdown("""
-    Meta Liver is an interactive companion to the study below. It enables gene-centric exploration of single-omics signal strength and consistency, network context within a MAFLD/MASH knowledge graph, and WGCNA module structure (including fibrosis stage–stratified analyses where available), with optional PPI neighbourhood context.
+    st.markdown(f"""
+Meta Liver is an interactive companion to the study cited below. It supports gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, and WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), with optional protein–protein interaction (PPI) neighbourhood context.
 
-    **How to use:** enter a gene symbol in the sidebar search box to open the three analysis tabs for that gene.
+**How to use:** enter a gene symbol in the sidebar search box to open the three analysis tabs for that gene.
 
-    **Citation (please cite if you use this app):**  
-    Combined stem cell and predictive models reveal flavin cofactors as targets in metabolic liver dysfunction. bioRxiv 2024.10.10.617610. doi: [10.1101/2024.10.10.617610](https://doi.org/10.1101/2024.10.10.617610)
+**Citation (please cite if you use this app):**  
+{APP_CITATION}  
+doi: [{APP_DOI}]({APP_DOI_URL})
 
-    **Team:**  
-    Computational biology: Professor Namshik Han (University of Cambridge) and team; Dr Gehad Youssef led the single-omics analysis, Dr Fatima Baldo led the knowledge graph work, and Dr Alessandra Cardinali led the WGCNA analyses.  
-    Experimental models: Dr Milad Rezvani (Charité) and team; Dr Julian Weihs led the MAFLD in vitro model.
-    """)
+**Team:**  
+{APP_TEAM}
+""")
 else:
     st.title(f"🔬 {search_query}")
 
@@ -545,10 +548,8 @@ else:
             # -----------------------------------------------------------------
             with tab_omics:
                 st.markdown("""
-                This tab summarises gene-level evidence across the single-omics datasets. AUROC reflects per-study discriminative
-                performance, logFC indicates direction (MAFLD vs Healthy), and the Evidence Score summarises strength, stability,
-                direction agreement, and study support.
-                """)
+This tab summarises gene-level evidence across the single-omics datasets. AUROC reflects per-study discriminative performance, logFC indicates direction (MAFLD vs Healthy), and the Evidence Score summarises strength, stability, direction agreement, and study support.
+""")
                 st.markdown("---")
 
                 help_text = {
@@ -700,11 +701,8 @@ else:
             # -----------------------------------------------------------------
             with tab_kg:
                 st.markdown("""
-                This tab places the selected gene in its network context within the MAFLD/MASH subgraph.
-                It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness,
-                eigenvector) indicating whether it behaves as a hub or peripheral node. The cluster view lists co-clustered
-                genes, drugs, and disease annotations.
-                """)
+This tab places the selected gene in its network context within the MAFLD/MASH subgraph. It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness, eigenvector) indicating whether it behaves as a hub or peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations.
+""")
                 st.markdown("---")
 
                 if kg_data:
@@ -794,11 +792,8 @@ else:
             # -----------------------------------------------------------------
             with tab_wgcna:
                 st.markdown("""
-                This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage
-                (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment,
-                module–trait relationships, and module-specific enrichment tables, and then shows direct PPI interactors and local
-                network statistics for the selected gene.
-                """)
+This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment, module–trait relationships, and module-specific enrichment tables, and then shows direct PPI interactors and local network statistics for the selected gene.
+""")
                 st.markdown("---")
 
                 st.markdown("**WGCNA Co-expression Module**")
@@ -815,21 +810,30 @@ else:
                         else:
                             st.info(f"No other genes found in module {module_name}")
 
-                        with st.expander("Module–trait relationships (WGCNA)"):
-                            mt = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
-                            if mt is None or mt.empty:
-                                st.info("Module–trait tables not available for this module (check module index names).")
-                            else:
-                                st.dataframe(mt, use_container_width=True, hide_index=True)
+                        st.markdown("---")
+                        st.markdown("**Module–trait relationships (WGCNA)**")
+                        mt = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
+                        if mt is None or mt.empty:
+                            st.info("Module–trait tables not available for this module (check module index names).")
+                        else:
+                            st.dataframe(mt, use_container_width=True, hide_index=True)
 
-                        with st.expander("Pathways / enrichment (module)"):
-                            key = str(module_name).strip().lower()
-                            dfp = (wgcna_pathways or {}).get(key)
-                            if dfp is None or dfp.empty:
-                                st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
-                            else:
-                                st.dataframe(dfp, use_container_width=True, hide_index=True)
-
+                        st.markdown("---")
+                        st.markdown("**Pathways / enrichment (module)**")
+                        top_n_pathways = st.slider(
+                            "Show top N pathways",
+                            min_value=10,
+                            max_value=300,
+                            value=50,
+                            step=10,
+                            key="wgcna_top_n_pathways"
+                        )
+                        key = str(module_name).strip().lower()
+                        dfp = (wgcna_pathways or {}).get(key)
+                        if dfp is None or dfp.empty:
+                            st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
+                        else:
+                            st.dataframe(dfp.head(int(top_n_pathways)), use_container_width=True, hide_index=True)
                     else:
                         st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
                 else:
@@ -858,7 +862,7 @@ st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 11px;'>"
     "<p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks</p>"
-    "<p>doi: <a href='https://doi.org/10.1101/2024.10.10.617610' target='_blank'>10.1101/2024.10.10.617610</a></p>"
+    f"<p>doi: <a href='{APP_DOI_URL}' target='_blank'>{APP_DOI}</a></p>"
     "</div>",
     unsafe_allow_html=True
 )
