@@ -70,22 +70,19 @@ CONTRAST_HELP = {
 
 LINE_TOKENS = ["1b", "5a"]
 
-# Optional mapping file name
 GENE_MAPPING_FILENAME = "gene_mapping.csv"
 
-# Regexes for DEG files
 _RE_PROCESSED = re.compile(r"^processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)$", flags=re.IGNORECASE)
 _RE_CONTRAST_LINE = re.compile(r"^(?P<contrast>.+)_(?P<line>[^_]+)$", flags=re.IGNORECASE)
 
-# Ensembl-like patterns (human + mouse, just in case)
 _RE_ENSEMBL = re.compile(r"^(ENSG|ENSMUSG)\d+", flags=re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class InVitroKey:
-    line: str        # "1b" or "5a"
-    contrast: str    # canonical token e.g. "OAPAvsHCM"
-    ext: str         # "csv" or "parquet" (for debugging)
+    line: str
+    contrast: str
+    ext: str
 
 
 # -----------------------------------------------------------------------------
@@ -93,12 +90,6 @@ class InVitroKey:
 # -----------------------------------------------------------------------------
 
 def _clean_gene_id(x: str) -> str:
-    """
-    Normalise gene identifiers for matching:
-    - upper-case
-    - strip whitespace
-    - drop Ensembl version suffix "ENSG... .12" -> "ENSG..."
-    """
     s = str(x).strip().upper()
     if not s:
         return s
@@ -160,11 +151,6 @@ def _find_stem_cell_model_dir() -> Optional[Path]:
 # -----------------------------------------------------------------------------
 
 def _parse_deg_stem(stem: str, ext: str) -> Optional[InVitroKey]:
-    """
-    Supports:
-      processed_degs_<LINE>_<CONTRAST>
-      <CONTRAST>_<LINE>
-    """
     if not stem:
         return None
 
@@ -190,11 +176,6 @@ def _parse_deg_stem(stem: str, ext: str) -> Optional[InVitroKey]:
 
 
 def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
-    """
-    Discovers DEG files in stem_cell_model/. Returns {key -> path}.
-    Searches recursively so subfolders like stem_cell_model/parquet/ work.
-    Ignores gene_mapping.csv.
-    """
     root = _find_stem_cell_model_dir()
     if root is None:
         return {}
@@ -215,7 +196,6 @@ def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
         if key is None:
             continue
 
-        # If both CSV and Parquet exist, prefer Parquet
         if key in out:
             if out[key].suffix.lower() == ".csv" and p.suffix.lower() == ".parquet":
                 out[key] = p
@@ -230,10 +210,6 @@ def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
 # -----------------------------------------------------------------------------
 
 def _find_gene_mapping_file(root: Path) -> Optional[Path]:
-    """
-    Find gene_mapping.csv anywhere under stem_cell_model/ (recursive),
-    because users often keep it inside a parquet/ or misc/ subfolder.
-    """
     direct = root / GENE_MAPPING_FILENAME
     if direct.exists() and direct.is_file():
         return direct
@@ -243,13 +219,6 @@ def _find_gene_mapping_file(root: Path) -> Optional[Path]:
 
 
 def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Loads gene_mapping.csv if present (searched recursively).
-    Returns (symbol_to_ensg, ensg_to_symbol).
-
-    Expected columns:
-      'Gene stable ID' (Ensembl) and 'Gene name' (symbol)
-    """
     root = _find_stem_cell_model_dir()
     if root is None:
         return {}, {}
@@ -288,9 +257,6 @@ def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
 
 
 def _resolve_query_to_gene_id(query: str, symbol_to_ensg: Dict[str, str]) -> Tuple[str, Optional[str]]:
-    """
-    Returns (gene_id_to_search_in_deg_table, resolved_symbol_if_any)
-    """
     q = str(query).strip().upper()
     if not q:
         return "", None
@@ -310,7 +276,6 @@ def _resolve_query_to_gene_id(query: str, symbol_to_ensg: Dict[str, str]) -> Tup
 # Robust readers + normalisation
 # -----------------------------------------------------------------------------
 
-# Common DEG formats vary a lot; include many realistic candidates
 _GENE_COL_CANDIDATES = [
     "Gene", "gene",
     "GeneID", "gene_id", "geneid",
@@ -318,7 +283,8 @@ _GENE_COL_CANDIDATES = [
     "Gene stable ID", "Gene stable id",
     "ensg", "ensembl",
     "feature", "id",
-    "Name", "NAME"
+    "Name", "NAME",
+    "Unnamed: 0", "Unnamed: 0.1", "__index_level_0__", "index", "level_0", "",
 ]
 _LOGFC_COL_CANDIDATES = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
 _PVAL_COL_CANDIDATES = ["pvalue", "pval", "PValue", "p_value"]
@@ -338,54 +304,36 @@ def _pick_col(cols: List[str], candidates: List[str]) -> Optional[str]:
 
 
 def _autodetect_gene_col_by_values(df: pd.DataFrame) -> Optional[str]:
-    """
-    If we can't find a gene column by name, inspect values and pick the first column
-    where a decent fraction of entries look like ENSG... (after cleaning).
-    """
     if df is None or df.empty:
         return None
 
     sample_n = min(200, len(df))
     for c in df.columns:
-        s = df[c].head(sample_n).astype(str).map(_clean_gene_id)
+        try:
+            s = df[c].head(sample_n).astype(str).map(_clean_gene_id)
+        except Exception:
+            continue
         if s.empty:
             continue
-        frac = float((s.map(_looks_like_ensembl)).mean())
+        frac = float(s.map(_looks_like_ensembl).mean())
         if frac >= 0.3:
             return c
     return None
 
 
 def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
-    """
-    Read CSV/Parquet robustly.
-
-    Key fix:
-    - For CSVs where the Ensembl IDs are stored in an unnamed first column, keep it
-      (do NOT treat it as an index at read time), then normalise_deg_table() will
-      detect/rename it to 'Gene'.
-    """
     try:
         if path.suffix.lower() == ".csv":
-            df = pd.read_csv(path)
-
-            # Some CSV exports store Ensembl IDs in an unnamed first column.
-            # pandas will call it "Unnamed: 0" (or similar). We keep it and let
-            # normalise_deg_table() turn it into 'Gene'.
-            return df, None
-
+            return pd.read_csv(path), None
         if path.suffix.lower() == ".parquet":
-            df = pd.read_parquet(path)
-            return df, None
-
+            return pd.read_parquet(path), None
         return None, f"Unsupported file type: {path.name}"
-
     except Exception as e:
         if path.suffix.lower() == ".parquet":
             msg = (
                 f"Could not read parquet file: {path.name}\n\n"
                 f"Underlying error: {type(e).__name__}: {e}\n\n"
-                "Fix: add a parquet engine to your environment, for example include this in requirements.txt:\n"
+                "Fix: add a parquet engine to your environment, for example in requirements.txt:\n"
                 "  pyarrow\n"
                 "Then redeploy/restart the app."
             )
@@ -393,50 +341,43 @@ def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[st
         return None, f"Could not read {path.name}: {type(e).__name__}: {e}"
 
 
+def _gene_col_is_effectively_empty(series: pd.Series) -> bool:
+    try:
+        s = series.astype(str).str.strip().str.upper()
+        s = s.replace({"NAN": "", "NONE": ""}, regex=False)
+        return bool((s == "").mean() > 0.9)
+    except Exception:
+        return True
+
 
 def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardises key columns to:
       Gene, logFC, pval, padj, stat, baseMean
-
-    Key fixes:
-    - If Ensembl IDs are in the index, reset_index() and name it 'Gene'
-    - If Ensembl IDs are in an unnamed first column (e.g. 'Unnamed: 0' or ''), rename it to 'Gene'
-    - If we still can't find a gene column by name, auto-detect by ENSG-like values
-    - Strip Ensembl version suffixes (ENSG... .12 -> ENSG...)
+    Leaves any other columns intact.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
 
-    # 1) If Ensembl IDs are in the index (common with parquet), materialise them
+    gene_present = ("Gene" in out.columns) and (not _gene_col_is_effectively_empty(out["Gene"]))
+
+    # Promote index to Gene if it looks like ENSG and Gene is missing/empty.
     try:
-        idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
-        if len(idx_vals) > 0 and float(idx_vals.map(_looks_like_ensembl).mean()) >= 0.3:
-            out = out.reset_index()
-            # pandas names this column "index" unless index.name exists
-            first_col = out.columns[0]
-            out = out.rename(columns={first_col: "Gene"})
+        if (not gene_present) and (not isinstance(out.index, pd.RangeIndex)):
+            idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
+            if len(idx_vals) > 0 and float(idx_vals.map(_looks_like_ensembl).mean()) >= 0.3:
+                out = out.reset_index()
+                out = out.rename(columns={out.columns[0]: "Gene"})
+                gene_present = True
     except Exception:
         pass
 
     cols = list(out.columns)
 
-    # 2) If the first column is unnamed and looks like ENSG..., treat it as Gene
-    if cols:
-        c0 = cols[0]
-        c0_str = str(c0)
-        if c0_str.strip() == "" or c0_str.lower().startswith("unnamed"):
-            s = out[c0].head(min(200, len(out))).astype(str).map(_clean_gene_id)
-            if len(s) > 0 and float(s.map(_looks_like_ensembl).mean()) >= 0.3:
-                out = out.rename(columns={c0: "Gene"})
-
-    cols = list(out.columns)
-
-    # 3) Pick/auto-detect a gene column if not yet called 'Gene'
-    gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
-    if gene_col is None and "Gene" not in cols:
+    gene_col = "Gene" if gene_present else _pick_col(cols, _GENE_COL_CANDIDATES)
+    if (not gene_present) and (gene_col is None):
         gene_col = _autodetect_gene_col_by_values(out)
 
     logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
@@ -461,7 +402,16 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     out = out.rename(columns=ren)
 
-    # 4) Final clean-up: standardise Gene IDs for matching
+    # Final safety net: if still no Gene, try promoting index again (non-RangeIndex).
+    try:
+        if "Gene" not in out.columns and not isinstance(out.index, pd.RangeIndex):
+            idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
+            if len(idx_vals) > 0 and float(idx_vals.map(_looks_like_ensembl).mean()) >= 0.3:
+                out = out.reset_index()
+                out = out.rename(columns={out.columns[0]: "Gene"})
+    except Exception:
+        pass
+
     if "Gene" in out.columns:
         out["Gene"] = out["Gene"].astype(str).map(_clean_gene_id)
 
@@ -473,10 +423,6 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str]]:
-    """
-    Loads all discovered DEG tables.
-    Returns (tables, errors, symbol_to_ensg, ensg_to_symbol).
-    """
     files = discover_invitro_deg_files()
     tables: Dict[InVitroKey, pd.DataFrame] = {}
     errors: List[str] = []
@@ -513,10 +459,6 @@ def gene_summary_table(
     symbol_to_ensg: Dict[str, str],
     ensg_to_symbol: Dict[str, str],
 ) -> pd.DataFrame:
-    """
-    Per-dataset summary for the queried gene.
-    Query can be a symbol or Ensembl ID.
-    """
     gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
     if not gene_id:
         return pd.DataFrame()
@@ -576,10 +518,6 @@ def gene_summary_table(
 
 
 def direction_consensus_by_contrast(summary_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    For each contrast, compare direction between 1b and 5a (even if non-significant).
-    Returns: Contrast | Direction 1b | Direction 5a | Consensus
-    """
     if summary_df is None or summary_df.empty:
         return pd.DataFrame()
 
@@ -726,7 +664,6 @@ def make_volcano(
     with np.errstate(divide="ignore", invalid="ignore"):
         tmp["neglog10p"] = -np.log10(p)
 
-    # Hover gene label: prefer Symbol if we can map Ensembl IDs
     if "Gene" in tmp.columns:
         tmp["Gene"] = tmp["Gene"].astype(str).map(_clean_gene_id)
         if ensg_to_symbol:
@@ -761,7 +698,6 @@ def make_volcano(
         g = _clean_gene_id(highlight_gene_id)
         hit = tmp.loc[tmp["Gene"] == g]
 
-        # If user typed a symbol and table stores symbols, try symbol too
         if hit.empty and highlight_label:
             hit = tmp.loc[tmp["Gene"] == _clean_gene_id(highlight_label)]
 
@@ -862,7 +798,6 @@ def render_invitro_tab(query: str) -> None:
         st.warning("In vitro DEG files were found, but none could be loaded.")
         return
 
-    # Quick availability + debug info
     st.markdown("### Dataset availability")
     st.caption(f"Gene mapping loaded: {len(symbol_to_ensg):,} symbols")
     avail_rows = []
