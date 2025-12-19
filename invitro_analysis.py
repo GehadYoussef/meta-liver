@@ -232,23 +232,39 @@ def _find_gene_mapping_file(root: Path) -> Optional[Path]:
     return hits_sorted[0]
 
 
-def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
+def _read_gene_mapping_any(fp: Path) -> Optional[pd.DataFrame]:
+    """
+    Gene mapping in your repo is often tab-delimited even if named *.csv.
+    We therefore:
+      - try Python engine delimiter auto-detect (sep=None)
+      - if it still gives a single column, force tab
+      - as a last resort, try comma explicitly
+    """
+    try:
+        gm = pd.read_csv(fp, sep=None, engine="python")
+        if gm.shape[1] == 1:
+            gm = pd.read_csv(fp, sep="\t")
+        if gm.shape[1] == 1:
+            gm = pd.read_csv(fp)
+        return gm
+    except Exception:
+        return None
+
+
+def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str], Optional[Path]]:
     root = _find_stem_cell_model_dir()
     if root is None:
-        return {}, {}
+        return {}, {}, None
 
     fp = _find_gene_mapping_file(root)
     if fp is None:
-        return {}, {}
+        return {}, {}, None
 
-    try:
-        gm = pd.read_csv(fp)
-    except Exception:
-        return {}, {}
+    gm = _read_gene_mapping_any(fp)
+    if gm is None or gm.empty:
+        return {}, {}, fp
 
-    # Normalise headers to avoid BOM/whitespace issues
     gm = gm.rename(columns={c: _norm_colname(c) for c in gm.columns})
-
     cols = {str(c).lower(): c for c in gm.columns}
 
     def _get(*names: str) -> Optional[str]:
@@ -263,7 +279,7 @@ def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
     sym_col = _get("Gene name", "Symbol", "gene_symbol", "gene", "HGNC symbol", "hgnc_symbol")
 
     if ensg_col is None or sym_col is None:
-        return {}, {}
+        return {}, {}, fp
 
     tmp = gm[[ensg_col, sym_col]].copy()
     tmp[ensg_col] = tmp[ensg_col].astype(str).map(_clean_gene_id)
@@ -279,7 +295,7 @@ def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
             symbol_to_ensg.setdefault(sym, ensg)
             ensg_to_symbol.setdefault(ensg, sym)
 
-    return symbol_to_ensg, ensg_to_symbol
+    return symbol_to_ensg, ensg_to_symbol, fp
 
 
 def _resolve_query_to_gene_id(query: str, symbol_to_ensg: Dict[str, str]) -> Tuple[str, Optional[str]]:
@@ -374,7 +390,7 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy()
 
-    # 1) If gene IDs are in the index, promote them (only works if index is meaningful)
+    # If gene IDs are in the index, promote them (only works if index is meaningful)
     try:
         if "Gene" not in out.columns and not isinstance(out.index, pd.RangeIndex):
             idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
@@ -386,28 +402,32 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     cols = list(out.columns)
 
-    # 2) Pick gene column by name OR by values (ENSG-like detection)
     gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
     if gene_col is None:
         gene_col = _autodetect_gene_col_by_values(out)
 
     logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
-    pval_col  = _pick_col(cols, _PVAL_COL_CANDIDATES)
-    padj_col  = _pick_col(cols, _PADJ_COL_CANDIDATES)
-    stat_col  = _pick_col(cols, _STAT_COL_CANDIDATES)
-    base_col  = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
+    pval_col = _pick_col(cols, _PVAL_COL_CANDIDATES)
+    padj_col = _pick_col(cols, _PADJ_COL_CANDIDATES)
+    stat_col = _pick_col(cols, _STAT_COL_CANDIDATES)
+    base_col = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
 
     ren: Dict[str, str] = {}
-    if gene_col is not None:  ren[gene_col] = "Gene"
-    if logfc_col is not None: ren[logfc_col] = "logFC"
-    if pval_col is not None:  ren[pval_col] = "pval"
-    if padj_col is not None:  ren[padj_col] = "padj"
-    if stat_col is not None:  ren[stat_col] = "stat"
-    if base_col is not None:  ren[base_col] = "baseMean"
+    if gene_col is not None:
+        ren[gene_col] = "Gene"
+    if logfc_col is not None:
+        ren[logfc_col] = "logFC"
+    if pval_col is not None:
+        ren[pval_col] = "pval"
+    if padj_col is not None:
+        ren[padj_col] = "padj"
+    if stat_col is not None:
+        ren[stat_col] = "stat"
+    if base_col is not None:
+        ren[base_col] = "baseMean"
 
     out = out.rename(columns=ren)
 
-    # 3) Normalise identifiers + numeric columns
     if "Gene" in out.columns:
         out["Gene"] = out["Gene"].astype(str).map(_clean_gene_id)
 
@@ -418,12 +438,12 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str]]:
+def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str], Optional[Path]]:
     files = discover_invitro_deg_files()
     tables: Dict[InVitroKey, pd.DataFrame] = {}
     errors: List[str] = []
 
-    symbol_to_ensg, ensg_to_symbol = _load_gene_mapping()
+    symbol_to_ensg, ensg_to_symbol, mapping_fp = _load_gene_mapping()
 
     for key, fp in files.items():
         df, err = _read_deg_file_safe(fp)
@@ -432,7 +452,7 @@ def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[
             continue
         tables[key] = normalise_deg_table(df)
 
-    return tables, errors, symbol_to_ensg, ensg_to_symbol
+    return tables, errors, symbol_to_ensg, ensg_to_symbol, mapping_fp
 
 
 # -----------------------------------------------------------------------------
@@ -783,7 +803,7 @@ def render_invitro_tab(query: str) -> None:
             pass
         return
 
-    tables, errors, symbol_to_ensg, ensg_to_symbol = load_all_invitro_deg_tables()
+    tables, errors, symbol_to_ensg, ensg_to_symbol, mapping_fp = load_all_invitro_deg_tables()
     if errors:
         st.error(errors[0])
         if len(errors) > 1:
@@ -796,6 +816,11 @@ def render_invitro_tab(query: str) -> None:
 
     st.markdown("### Dataset availability")
     st.caption(f"Gene mapping loaded: {len(symbol_to_ensg):,} symbols")
+    if mapping_fp is not None:
+        st.caption(f"Mapping file: {mapping_fp}")
+    else:
+        st.caption("Mapping file: not found")
+
     avail_rows = []
     for c in CONTRAST_TOKENS:
         for l in LINE_TOKENS:
@@ -815,7 +840,6 @@ def render_invitro_tab(query: str) -> None:
         st.markdown("### Gene summary")
         st.caption("Direction consensus is computed from logFC sign between 1b and 5a for the same contrast (significance not required).")
 
-        # Show whether the query resolved to an Ensembl ID (so you can debug mapping immediately)
         gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
         if gene_id:
             if resolved_symbol and _looks_like_ensembl(gene_id):
