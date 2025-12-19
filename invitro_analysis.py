@@ -23,12 +23,12 @@ Accepted contrasts:
   OAPAResMyoPBMCsvsHCM
 
 Gene identifiers:
-- DEG tables may store Ensembl IDs, gene symbols, or both.
-- If a user searches by gene symbol and the symbol is not present, we try to map
-  symbol -> Ensembl using:
-    (a) gene_mapping.csv (if present), and/or
-    (b) embedded columns inside the DEG tables (if present).
-- If mapping fails, we fall back to using the entered identifier as-is.
+Many DEG tables use Ensembl IDs in the gene column (e.g., ENSG... or ENSMUSG...).
+If a user searches by gene symbol and the symbol is not present in the DEG table,
+we try to map symbol -> Ensembl using:
+  - gene_mapping.csv in the same folder (if present), and/or
+  - any symbol column embedded in the DEG tables themselves.
+If mapping fails, we fall back to using the entered identifier as-is.
 
 Parquet note:
 Reading Parquet requires pyarrow or fastparquet. If missing, the UI will show
@@ -76,14 +76,21 @@ LINE_TOKENS = ["1b", "5a"]
 
 GENE_MAPPING_FILENAME = "gene_mapping.csv"
 
-_RE_PROCESSED = re.compile(r"^processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)$", flags=re.IGNORECASE)
-_RE_CONTRAST_LINE = re.compile(r"^(?P<contrast>.+)_(?P<line>[^_]+)$", flags=re.IGNORECASE)
+_RE_PROCESSED = re.compile(
+    r"^processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)$",
+    flags=re.IGNORECASE,
+)
+_RE_CONTRAST_LINE = re.compile(
+    r"^(?P<contrast>.+)_(?P<line>[^_]+)$",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
 class InVitroKey:
-    line: str        # "1b" or "5a"
-    contrast: str    # canonical token e.g. "OAPAvsHCM"
+    line: str
+    contrast: str
+    ext: str
 
 
 # -----------------------------------------------------------------------------
@@ -134,12 +141,7 @@ def _canon_line(line: str) -> Optional[str]:
     return None
 
 
-def _parse_deg_stem(stem: str) -> Optional[InVitroKey]:
-    """
-    Supports:
-      processed_degs_<LINE>_<CONTRAST>
-      <CONTRAST>_<LINE>
-    """
+def _parse_deg_stem(stem: str, ext: str) -> Optional[InVitroKey]:
     if not stem:
         return None
 
@@ -150,7 +152,7 @@ def _parse_deg_stem(stem: str) -> Optional[InVitroKey]:
         line = _canon_line(m.group("line"))
         contrast = _canon_contrast(m.group("contrast"))
         if line and contrast:
-            return InVitroKey(line=line, contrast=contrast)
+            return InVitroKey(line=line, contrast=contrast, ext=ext)
         return None
 
     m = _RE_CONTRAST_LINE.match(s)
@@ -158,19 +160,13 @@ def _parse_deg_stem(stem: str) -> Optional[InVitroKey]:
         contrast = _canon_contrast(m.group("contrast"))
         line = _canon_line(m.group("line"))
         if line and contrast:
-            return InVitroKey(line=line, contrast=contrast)
+            return InVitroKey(line=line, contrast=contrast, ext=ext)
         return None
 
     return None
 
 
 def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
-    """
-    Discovers DEG files in stem_cell_model/. Returns {key -> path}.
-    Searches recursively so subfolders like stem_cell_model/parquet/ work.
-    Ignores gene_mapping.csv.
-    If both CSV and Parquet exist for the same key, prefers Parquet.
-    """
     root = _find_stem_cell_model_dir()
     if root is None:
         return {}
@@ -183,16 +179,15 @@ def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
         if p.name.lower() == GENE_MAPPING_FILENAME.lower():
             continue
 
-        ext = p.suffix.lower()
-        if ext not in (".csv", ".parquet"):
+        ext = p.suffix.lower().lstrip(".")
+        if ext not in ("csv", "parquet"):
             continue
 
-        key = _parse_deg_stem(p.stem)
+        key = _parse_deg_stem(p.stem, ext)
         if key is None:
             continue
 
         if key in out:
-            # prefer parquet
             if out[key].suffix.lower() == ".csv" and p.suffix.lower() == ".parquet":
                 out[key] = p
         else:
@@ -205,14 +200,14 @@ def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
 # Gene mapping
 # -----------------------------------------------------------------------------
 
-def _load_gene_mapping_csv() -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Loads gene_mapping.csv if present. Returns (symbol_to_ensg, ensg_to_symbol).
+def _strip_ens_version(x: str) -> str:
+    s = str(x).strip().upper()
+    if (s.startswith("ENSG") or s.startswith("ENSMUSG")) and "." in s:
+        return s.split(".", 1)[0]
+    return s
 
-    Robust column detection: accepts common variants like:
-      Ensembl: 'Gene stable ID', 'ensembl_gene_id', 'Ensembl ID'
-      Symbol:  'Gene name', 'symbol', 'gene_symbol', 'Gene'
-    """
+
+def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
     root = _find_stem_cell_model_dir()
     if root is None:
         return {}, {}
@@ -227,27 +222,14 @@ def _load_gene_mapping_csv() -> Tuple[Dict[str, str], Dict[str, str]]:
         return {}, {}
 
     cols = {c.lower(): c for c in gm.columns}
-
-    ensg_col = (
-        cols.get("gene stable id")
-        or cols.get("ensembl id")
-        or cols.get("ensembl_gene_id")
-        or cols.get("ensembl")
-        or cols.get("ensg")
-    )
-    sym_col = (
-        cols.get("gene name")
-        or cols.get("gene_symbol")
-        or cols.get("symbol")
-        or cols.get("gene")
-        or cols.get("hgnc_symbol")
-    )
+    ensg_col = cols.get("gene stable id") or cols.get("ensembl") or cols.get("ensembl_id") or cols.get("ensembl id")
+    sym_col = cols.get("gene name") or cols.get("symbol") or cols.get("gene_symbol") or cols.get("gene symbol") or cols.get("gene")
 
     if ensg_col is None or sym_col is None:
         return {}, {}
 
     tmp = gm[[ensg_col, sym_col]].copy()
-    tmp[ensg_col] = tmp[ensg_col].astype(str).str.strip().str.upper()
+    tmp[ensg_col] = tmp[ensg_col].astype(str).map(_strip_ens_version)
     tmp[sym_col] = tmp[sym_col].astype(str).str.strip().str.upper()
 
     symbol_to_ensg: Dict[str, str] = {}
@@ -256,33 +238,24 @@ def _load_gene_mapping_csv() -> Tuple[Dict[str, str], Dict[str, str]]:
     for _, r in tmp.iterrows():
         ensg = str(r[ensg_col]).strip().upper()
         sym = str(r[sym_col]).strip().upper()
-        if not ensg or ensg == "NAN" or not sym or sym == "NAN":
-            continue
-        # strip version suffix if any
-        ensg = ensg.split(".")[0]
-        symbol_to_ensg.setdefault(sym, ensg)
-        ensg_to_symbol.setdefault(ensg, sym)
+        if sym and sym != "NAN" and ensg and ensg != "NAN":
+            symbol_to_ensg.setdefault(sym, ensg)
+            ensg_to_symbol.setdefault(ensg, sym)
 
     return symbol_to_ensg, ensg_to_symbol
 
 
 def _resolve_query_to_gene_id(query: str, symbol_to_ensg: Dict[str, str]) -> Tuple[str, Optional[str]]:
-    """
-    Returns (gene_id_to_search, resolved_symbol_if_any)
-    - If query is ENSG-like -> return ENSG
-    - Else try symbol_to_ensg
-    - Else return query as-is
-    """
     q = str(query).strip().upper()
     if not q:
         return "", None
 
     if q.startswith("ENSG") or q.startswith("ENSMUSG"):
-        return q.split(".")[0], None
+        return _strip_ens_version(q), None
 
     ensg = symbol_to_ensg.get(q)
     if ensg:
-        return ensg.split(".")[0], q
+        return _strip_ens_version(ensg), q
 
     return q, q
 
@@ -291,17 +264,15 @@ def _resolve_query_to_gene_id(query: str, symbol_to_ensg: Dict[str, str]) -> Tup
 # Robust table readers + normalisation
 # -----------------------------------------------------------------------------
 
-# IMPORTANT: split candidates into Ensembl vs Symbol (do NOT treat 'Gene' as Ensembl by default)
-_ENS_COL_CANDIDATES = [
-    "Ensembl ID", "Gene stable ID", "Gene stable id",
-    "ensembl_gene_id", "ensembl id", "ensembl_id", "ensembl",
-    "ensg", "gene_id", "GeneID"
+_GENE_COL_CANDIDATES = [
+    "Gene", "gene", "gene_id", "GeneID", "ensg", "ensembl", "ensembl_id", "ensembl id",
+    "Gene stable ID", "Gene stable id",
+    "Name", "name",
 ]
 _SYMBOL_COL_CANDIDATES = [
-    "Gene", "gene", "symbol", "gene_symbol", "hgnc_symbol",
-    "Gene name", "gene name", "external_gene_name"
+    "Gene symbol", "gene symbol", "Gene name", "gene name", "symbol", "gene_symbol",
+    "external_gene_name", "hgnc_symbol", "mgi_symbol", "GeneName", "GeneSymbol",
 ]
-
 _LOGFC_COL_CANDIDATES = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
 _PVAL_COL_CANDIDATES = ["pvalue", "pval", "PValue", "p_value"]
 _PADJ_COL_CANDIDATES = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
@@ -341,53 +312,34 @@ def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[st
         return None, f"Could not read {path.name}: {type(e).__name__}: {e}"
 
 
-def _looks_ensembl(x: str) -> bool:
-    if not x:
-        return False
-    u = str(x).strip().upper()
-    u = u.split(".")[0]
-    return u.startswith("ENSG") or u.startswith("ENSMUSG")
-
-
-def normalise_deg_table(
-    df: pd.DataFrame,
-    ensg_to_symbol: Optional[Dict[str, str]] = None,
-) -> pd.DataFrame:
-    """
-    Standardises key columns to:
-      Gene (symbol if available, else Ensembl), Ensembl ID (if available),
-      logFC, pval, padj, stat, baseMean
-    Leaves other columns intact.
-    """
+def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
-
-    # If the index looks like Ensembl IDs, bring it back even if index.name is None
-    try:
-        idx_vals = out.index.astype(str)
-        if (idx_vals.str.upper().str.startswith(("ENSG", "ENSMUSG")).mean() > 0.5) and ("Ensembl ID" not in out.columns):
-            out = out.reset_index().rename(columns={"index": "Ensembl ID"})
-    except Exception:
-        pass
-
     cols = list(out.columns)
 
-    ens_col = _pick_col(cols, _ENS_COL_CANDIDATES)
+    gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
     sym_col = _pick_col(cols, _SYMBOL_COL_CANDIDATES)
-
     logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
     pval_col = _pick_col(cols, _PVAL_COL_CANDIDATES)
     padj_col = _pick_col(cols, _PADJ_COL_CANDIDATES)
     stat_col = _pick_col(cols, _STAT_COL_CANDIDATES)
     base_col = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
 
-    ren: Dict[str, str] = {}
-    if ens_col is not None:
-        ren[ens_col] = "Ensembl ID"
-    if sym_col is not None and sym_col != ens_col:
-        ren[sym_col] = "Gene"
+    if gene_col is None and out.index.name:
+        idx_name = str(out.index.name).lower()
+        if idx_name in [c.lower() for c in _GENE_COL_CANDIDATES]:
+            out = out.reset_index()
+            cols = list(out.columns)
+            gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
+            sym_col = _pick_col(cols, _SYMBOL_COL_CANDIDATES)
+
+    ren = {}
+    if gene_col is not None:
+        ren[gene_col] = "Gene"
+    if sym_col is not None and sym_col != gene_col:
+        ren[sym_col] = "Symbol"
     if logfc_col is not None:
         ren[logfc_col] = "logFC"
     if pval_col is not None:
@@ -401,127 +353,42 @@ def normalise_deg_table(
 
     out = out.rename(columns=ren)
 
-    # Clean Ensembl IDs
-    if "Ensembl ID" in out.columns:
-        out["Ensembl ID"] = (
-            out["Ensembl ID"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .replace({"NAN": np.nan, "NONE": np.nan, "": np.nan})
-        )
-        out.loc[out["Ensembl ID"].notna(), "Ensembl ID"] = out.loc[out["Ensembl ID"].notna(), "Ensembl ID"].astype(str).str.split(".").str[0]
-
-    # Clean Gene symbols if present
     if "Gene" in out.columns:
-        out["Gene"] = (
-            out["Gene"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .replace({"NAN": np.nan, "NONE": np.nan, "": np.nan})
-        )
+        out["Gene"] = out["Gene"].astype(str).map(_strip_ens_version)
+    if "Symbol" in out.columns:
+        out["Symbol"] = out["Symbol"].astype(str).str.strip().str.upper()
 
-    # If "Gene" exists but is actually Ensembl IDs (common if column is called "Gene"), move it
-    if "Gene" in out.columns and "Ensembl ID" not in out.columns:
-        try:
-            frac_ens = out["Gene"].dropna().astype(str).apply(_looks_ensembl).mean() if out["Gene"].notna().any() else 0.0
-        except Exception:
-            frac_ens = 0.0
-        if frac_ens > 0.7:
-            out["Ensembl ID"] = out["Gene"].astype(str).str.split(".").str[0]
-            out["Gene"] = np.nan  # will fill from mapping below if possible
-
-    # If no Gene symbol, but we have Ensembl and mapping, fill it
-    if "Gene" not in out.columns or out["Gene"].isna().all():
-        out["Gene"] = np.nan
-        if ensg_to_symbol and "Ensembl ID" in out.columns:
-            out["Gene"] = out["Ensembl ID"].map(lambda x: ensg_to_symbol.get(str(x).upper(), np.nan))
-
-    # If we have Gene but no Ensembl, try to infer Ensembl from embedded mapping columns (if any)
-    # (This is optional; we mainly need reliable lookup columns.)
-    # Numeric coercions
     for c in ["logFC", "pval", "padj", "stat", "baseMean"]:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
 
-    # Prefer unique rows by Ensembl if present, else by Gene
-    if "Ensembl ID" in out.columns and out["Ensembl ID"].notna().any():
-        out = out.drop_duplicates(subset=["Ensembl ID"], keep="first")
-    elif "Gene" in out.columns:
-        out = out.drop_duplicates(subset=["Gene"], keep="first")
-
     return out
 
 
-def _build_mapping_from_tables(tables: Dict[InVitroKey, pd.DataFrame]) -> Tuple[Dict[str, str], Dict[str, str]]:
-    """
-    Build symbol<->ensg mapping from loaded tables if they contain both columns.
-    """
-    symbol_to_ensg: Dict[str, str] = {}
-    ensg_to_symbol: Dict[str, str] = {}
-
-    for df in tables.values():
-        if df is None or df.empty:
-            continue
-        if "Ensembl ID" not in df.columns or "Gene" not in df.columns:
-            continue
-        tmp = df[["Ensembl ID", "Gene"]].dropna()
-        if tmp.empty:
-            continue
-        for _, r in tmp.iterrows():
-            ensg = str(r["Ensembl ID"]).strip().upper()
-            sym = str(r["Gene"]).strip().upper()
-            if not ensg or ensg == "NAN" or not sym or sym == "NAN":
-                continue
-            ensg = ensg.split(".")[0]
-            symbol_to_ensg.setdefault(sym, ensg)
-            ensg_to_symbol.setdefault(ensg, sym)
-
-    return symbol_to_ensg, ensg_to_symbol
-
-
 def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str]]:
-    """
-    Loads all discovered DEG tables.
-    Returns (tables, errors, symbol_to_ensg, ensg_to_symbol).
-    """
     files = discover_invitro_deg_files()
     tables: Dict[InVitroKey, pd.DataFrame] = {}
     errors: List[str] = []
 
-    # Start with mapping from gene_mapping.csv (if exists)
-    symbol_to_ensg, ensg_to_symbol = _load_gene_mapping_csv()
+    symbol_to_ensg, ensg_to_symbol = _load_gene_mapping()
 
-    # Load tables (normalise using whatever mapping we have so far)
     for key, fp in files.items():
         df, err = _read_deg_file_safe(fp)
         if err is not None:
             errors.append(err)
             continue
-        tables[key] = normalise_deg_table(df, ensg_to_symbol=ensg_to_symbol)
 
-    # If mapping was absent/weak, enrich mapping from embedded columns in the loaded tables
-    built_sym2ensg, built_ensg2sym = _build_mapping_from_tables(tables)
-    if built_sym2ensg:
-        # merge (CSV mapping takes precedence)
-        for sym, ensg in built_sym2ensg.items():
-            symbol_to_ensg.setdefault(sym, ensg)
-        for ensg, sym in built_ensg2sym.items():
-            ensg_to_symbol.setdefault(ensg, sym)
+        norm = normalise_deg_table(df)
 
-    # Re-normalise with the enriched mapping so Gene symbols fill properly where possible
-    for key, df in list(tables.items()):
-        # We need the raw again to re-normalise; easiest is to leave as-is if Gene exists.
-        # But if Gene is all-missing and Ensembl exists, fill Gene now.
-        if df is None or df.empty:
-            continue
-        if "Gene" in df.columns and df["Gene"].notna().any():
-            continue
-        if "Ensembl ID" in df.columns and ensg_to_symbol:
-            df = df.copy()
-            df["Gene"] = df["Ensembl ID"].map(lambda x: ensg_to_symbol.get(str(x).upper(), np.nan))
-            tables[key] = df
+        if not norm.empty and "Gene" in norm.columns and "Symbol" in norm.columns:
+            for g, s in zip(norm["Gene"].astype(str), norm["Symbol"].astype(str)):
+                gg = _strip_ens_version(g)
+                ss = str(s).strip().upper()
+                if ss and ss != "NAN" and gg and gg != "NAN":
+                    symbol_to_ensg.setdefault(ss, gg)
+                    ensg_to_symbol.setdefault(gg, ss)
+
+        tables[key] = norm
 
     return tables, errors, symbol_to_ensg, ensg_to_symbol
 
@@ -530,27 +397,20 @@ def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[
 # Gene-centric summaries + direction consensus between lines
 # -----------------------------------------------------------------------------
 
-def _get_gene_row(df: pd.DataFrame, gene_id_or_symbol: str) -> Optional[pd.Series]:
+def _get_gene_row(df: pd.DataFrame, gene_id: str, gene_symbol: Optional[str] = None) -> Optional[pd.Series]:
     if df is None or df.empty:
         return None
-    q = str(gene_id_or_symbol).strip().upper()
-    q = q.split(".")[0]
 
-    # If query looks like Ensembl, match Ensembl ID when available
-    if (q.startswith("ENSG") or q.startswith("ENSMUSG")) and "Ensembl ID" in df.columns:
-        hit = df.loc[df["Ensembl ID"].astype(str).str.upper().str.split(".").str[0] == q]
-        if not hit.empty:
-            return hit.iloc[0]
+    gid = _strip_ens_version(gene_id)
 
-    # Otherwise match Gene symbol
     if "Gene" in df.columns:
-        hit = df.loc[df["Gene"].astype(str).str.upper() == q]
+        hit = df.loc[df["Gene"].astype(str).map(_strip_ens_version) == gid]
         if not hit.empty:
             return hit.iloc[0]
 
-    # As last resort, if there's a column literally called "Gene" but it holds Ensembl IDs and wasn't normalised
-    if "Gene" in df.columns and (q.startswith("ENSG") or q.startswith("ENSMUSG")):
-        hit = df.loc[df["Gene"].astype(str).str.upper().str.split(".").str[0] == q]
+    if gene_symbol and "Symbol" in df.columns:
+        sym = str(gene_symbol).strip().upper()
+        hit = df.loc[df["Symbol"].astype(str).str.strip().str.upper() == sym]
         if not hit.empty:
             return hit.iloc[0]
 
@@ -563,26 +423,13 @@ def gene_summary_table(
     symbol_to_ensg: Dict[str, str],
     ensg_to_symbol: Dict[str, str],
 ) -> pd.DataFrame:
-    """
-    Per-dataset summary for the queried gene.
-    Query can be a symbol or Ensembl ID.
-    """
     gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
     if not gene_id:
         return pd.DataFrame()
 
     rows = []
     for k, df in tables.items():
-        # Try Ensembl (if we resolved it)
-        r = _get_gene_row(df, gene_id)
-
-        # If missing, also try the symbol directly (covers tables storing symbols only)
-        if r is None and resolved_symbol:
-            r = _get_gene_row(df, resolved_symbol)
-
-        # If still missing, try the raw query
-        if r is None:
-            r = _get_gene_row(df, str(query).strip().upper())
+        r = _get_gene_row(df, gene_id, resolved_symbol)
 
         label = CONTRAST_LABELS.get(k.contrast, k.contrast)
 
@@ -599,9 +446,9 @@ def gene_summary_table(
             })
             continue
 
-        logfc = float(r["logFC"]) if ("logFC" in r and pd.notna(r["logFC"])) else np.nan
-        padj = float(r["padj"]) if ("padj" in r and pd.notna(r["padj"])) else np.nan
-        pval = float(r["pval"]) if ("pval" in r and pd.notna(r["pval"])) else np.nan
+        logfc = float(r["logFC"]) if "logFC" in r and pd.notna(r.get("logFC")) else np.nan
+        padj = float(r["padj"]) if "padj" in r and pd.notna(r.get("padj")) else np.nan
+        pval = float(r["pval"]) if "pval" in r and pd.notna(r.get("pval")) else np.nan
 
         direction = (
             "Up in model" if pd.notna(logfc) and logfc > 0
@@ -609,16 +456,11 @@ def gene_summary_table(
             else "missing"
         )
 
-        # Determine display symbol
-        display_sym = resolved_symbol or ensg_to_symbol.get(gene_id)
-        if not display_sym and "Gene" in r and pd.notna(r["Gene"]):
-            display_sym = str(r["Gene"]).strip().upper()
-
         rows.append({
             "iHeps line": k.line,
             "Contrast": label,
             "Gene ID": gene_id,
-            "Gene symbol": display_sym,
+            "Gene symbol": (resolved_symbol or ensg_to_symbol.get(gene_id)),
             "logFC": logfc,
             "padj": padj,
             "pval": pval,
@@ -636,10 +478,6 @@ def gene_summary_table(
 
 
 def direction_consensus_by_contrast(summary_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    For each contrast, compare direction between 1b and 5a (even if non-significant).
-    Returns: Contrast | Direction 1b | Direction 5a | Consensus
-    """
     if summary_df is None or summary_df.empty:
         return pd.DataFrame()
 
@@ -773,7 +611,6 @@ def make_volcano(
 
     tmp = df.copy()
 
-    # Choose p column
     if "padj" in tmp.columns:
         p = tmp["padj"].astype(float)
         y_label = "-log10(FDR)"
@@ -787,63 +624,49 @@ def make_volcano(
     with np.errstate(divide="ignore", invalid="ignore"):
         tmp["neglog10p"] = -np.log10(p)
 
-    # Hover label text: prefer symbol if we can map; else show Gene/Ensembl
-    if "Gene" in tmp.columns:
-        base_text = tmp["Gene"].astype(str)
-    elif "Ensembl ID" in tmp.columns:
-        base_text = tmp["Ensembl ID"].astype(str)
-    else:
-        base_text = pd.Series([""] * len(tmp), index=tmp.index)
+    sym = None
+    if ensg_to_symbol and "Gene" in tmp.columns:
+        sym = tmp["Gene"].astype(str).map(lambda g: ensg_to_symbol.get(_strip_ens_version(g), ""))
+    if sym is None and "Symbol" in tmp.columns:
+        sym = tmp["Symbol"].astype(str).str.strip().str.upper()
 
-    if ensg_to_symbol and "Ensembl ID" in tmp.columns:
-        sym = tmp["Ensembl ID"].map(lambda g: ensg_to_symbol.get(str(g).upper().split(".")[0], ""))
-        text = sym.where(sym.astype(str) != "", base_text)
-    else:
-        text = base_text
+    tmp["__hover_gene__"] = sym.where(sym.astype(str) != "", tmp.get("Gene", "")) if sym is not None else tmp.get("Gene", "")
 
     fig = go.Figure()
     fig.add_trace(go.Scattergl(
-        x=tmp["logFC"],
-        y=tmp["neglog10p"],
+        x=tmp["logFC"].astype(float),
+        y=tmp["neglog10p"].astype(float),
         mode="markers",
         marker=dict(size=4),
-        text=text,
+        text=tmp["__hover_gene__"],
         hovertemplate=(
             "Gene: %{text}<br>"
             "logFC: %{x:.3f}<br>"
-            f"{y_label}: %{{y:.3f}}<extra></extra>"   # <-- FIX: escape braces for Plotly
+            f"{y_label}: %{{y:.3f}}<extra></extra>"
         ),
         showlegend=False,
     ))
 
-    fig.add_vline(x=abs_logfc_thresh, line_dash="dash", line_width=1)
-    fig.add_vline(x=-abs_logfc_thresh, line_dash="dash", line_width=1)
-    if fdr_thresh and fdr_thresh > 0:
-        fig.add_hline(y=-math.log10(fdr_thresh), line_dash="dash", line_width=1)
+    fig.add_vline(x=float(abs_logfc_thresh), line_dash="dash", line_width=1)
+    fig.add_vline(x=-float(abs_logfc_thresh), line_dash="dash", line_width=1)
+    if fdr_thresh and float(fdr_thresh) > 0:
+        fig.add_hline(y=-math.log10(float(fdr_thresh)), line_dash="dash", line_width=1)
 
-    # Highlight point
     if highlight_gene_id:
-        g = str(highlight_gene_id).strip().upper().split(".")[0]
-
+        gid = _strip_ens_version(highlight_gene_id)
         hit = pd.DataFrame()
-        if "Ensembl ID" in tmp.columns and (g.startswith("ENSG") or g.startswith("ENSMUSG")):
-            hit = tmp.loc[tmp["Ensembl ID"].astype(str).str.upper().str.split(".").str[0] == g]
-        if hit.empty and "Gene" in tmp.columns:
-            hit = tmp.loc[tmp["Gene"].astype(str).str.upper() == g]
-        if hit.empty and highlight_label and "Gene" in tmp.columns:
-            hit = tmp.loc[tmp["Gene"].astype(str).str.upper() == str(highlight_label).strip().upper()]
+        if "Gene" in tmp.columns:
+            hit = tmp.loc[tmp["Gene"].astype(str).map(_strip_ens_version) == gid]
+        if hit.empty and highlight_label:
+            symq = str(highlight_label).strip().upper()
+            if "Symbol" in tmp.columns:
+                hit = tmp.loc[tmp["Symbol"].astype(str).str.strip().str.upper() == symq]
 
         if not hit.empty:
-            label = highlight_label
-            if not label:
-                if ensg_to_symbol and (g.startswith("ENSG") or g.startswith("ENSMUSG")):
-                    label = ensg_to_symbol.get(g, g)
-                else:
-                    label = g
-
+            label = highlight_label or (ensg_to_symbol.get(gid) if ensg_to_symbol else gid) or gid
             fig.add_trace(go.Scatter(
-                x=hit["logFC"],
-                y=hit["neglog10p"],
+                x=hit["logFC"].astype(float),
+                y=hit["neglog10p"].astype(float),
                 mode="markers+text",
                 text=[label],
                 textposition="top center",
@@ -851,7 +674,7 @@ def make_volcano(
                 hovertemplate=(
                     "Gene: %{text}<br>"
                     "logFC: %{x:.3f}<br>"
-                    f"{y_label}: %{{y:.3f}}<extra></extra>"  # <-- FIX here too
+                    f"{y_label}: %{{y:.3f}}<extra></extra>"
                 ),
                 showlegend=False,
             ))
@@ -879,46 +702,39 @@ def top_deg_tables(
     if "padj" in tmp.columns:
         tmp = tmp.loc[tmp["padj"].isna() | (tmp["padj"] <= float(padj_thresh))].copy()
 
-    if ensg_to_symbol and "Ensembl ID" in tmp.columns:
-        tmp = tmp.copy()
-        tmp.insert(1, "Gene symbol", tmp["Ensembl ID"].map(lambda g: ensg_to_symbol.get(str(g).upper().split(".")[0], "")))
-    elif "Gene" in tmp.columns:
-        tmp = tmp.copy()
-        tmp.insert(1, "Gene symbol", tmp["Gene"].astype(str))
+    if "Gene" not in tmp.columns and "Symbol" in tmp.columns:
+        tmp = tmp.rename(columns={"Symbol": "Gene"}).copy()
+
+    if ensg_to_symbol and "Gene" in tmp.columns:
+        if "Gene symbol" not in tmp.columns:
+            tmp.insert(1, "Gene symbol", tmp["Gene"].astype(str).map(lambda g: ensg_to_symbol.get(_strip_ens_version(g), "")))
 
     up = tmp.sort_values("logFC", ascending=False).head(int(n)).copy()
     down = tmp.sort_values("logFC", ascending=True).head(int(n)).copy()
 
-    keep = [c for c in ["Ensembl ID", "Gene", "Gene symbol", "logFC", "padj", "pval", "stat", "baseMean"] if c in tmp.columns]
-    return (up[keep] if keep else up), (down[keep] if keep else down)
+    keep = [c for c in ["Gene", "Gene symbol", "Symbol", "logFC", "padj", "pval", "stat", "baseMean"] if c in tmp.columns]
+    return up[keep] if keep else up, down[keep] if keep else down
 
 
 # -----------------------------------------------------------------------------
 # Streamlit UI entry point
 # -----------------------------------------------------------------------------
 
-def _st_dataframe(st, df: pd.DataFrame, hide_index: bool = True) -> None:
-    """
-    Streamlit compatibility wrapper for the upcoming 'width' API replacing use_container_width.
-    """
-    try:
-        st.dataframe(df, width="stretch", hide_index=hide_index)
-    except TypeError:
-        st.dataframe(df, use_container_width=True, hide_index=hide_index)
-
-
-def _st_plotly(st, fig: go.Figure) -> None:
-    try:
-        st.plotly_chart(fig, width="stretch")
-    except TypeError:
-        st.plotly_chart(fig, use_container_width=True)
-
-
 def render_invitro_tab(query: str) -> None:
-    """
-    Streamlit rendering for the in vitro model tab.
-    """
     import streamlit as st
+
+    # Backward-compatible wrappers for Streamlit's container width deprecation
+    def _df(data: pd.DataFrame, **kwargs):
+        try:
+            return st.dataframe(data, width="stretch", **kwargs)
+        except TypeError:
+            return st.dataframe(data, use_container_width=True, **kwargs)
+
+    def _plot(fig: go.Figure, **kwargs):
+        try:
+            return st.plotly_chart(fig, width="stretch", **kwargs)
+        except TypeError:
+            return st.plotly_chart(fig, use_container_width=True, **kwargs)
 
     root = _find_stem_cell_model_dir()
     if root is None:
@@ -957,18 +773,17 @@ def render_invitro_tab(query: str) -> None:
         st.warning("In vitro DEG files were found, but none could be loaded.")
         return
 
-    # Availability panel
     st.markdown("### Dataset availability")
     avail_rows = []
     for c in CONTRAST_TOKENS:
         for l in LINE_TOKENS:
-            key = InVitroKey(line=l, contrast=c)
+            hit = [k for k in files.keys() if k.contrast == c and k.line == l]
             avail_rows.append({
                 "iHeps line": l,
                 "Contrast": CONTRAST_LABELS[c],
-                "File": files[key].name if key in files else "missing",
+                "File": files[hit[0]].name if hit else "missing",
             })
-    _st_dataframe(st, pd.DataFrame(avail_rows), hide_index=True)
+    _df(pd.DataFrame(avail_rows), hide_index=True)
 
     st.markdown("---")
 
@@ -980,26 +795,26 @@ def render_invitro_tab(query: str) -> None:
 
         summ = gene_summary_table(tables, query, symbol_to_ensg, ensg_to_symbol)
         if summ is None or summ.empty:
-            st.warning("No rows could be generated for this query. Tip: try an ENSG ID directly to validate matching.")
+            st.warning("No rows could be generated for this query.")
             return
 
         gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
         label = resolved_symbol or ensg_to_symbol.get(gene_id) or str(query).strip().upper()
 
-        _st_dataframe(st, summ, hide_index=True)
+        _df(summ, hide_index=True)
 
         cons = direction_consensus_by_contrast(summ)
         if cons is not None and not cons.empty:
             st.markdown("### Direction consensus between lines (1b vs 5a)")
-            _st_dataframe(st, cons, hide_index=True)
+            _df(cons, hide_index=True)
 
         fig_hm = make_gene_logfc_heatmap(summ, label)
         if fig_hm is not None:
-            _st_plotly(st, fig_hm)
+            _plot(fig_hm)
 
         fig_dot = make_gene_dotplot(summ, label)
         if fig_dot is not None:
-            _st_plotly(st, fig_dot)
+            _plot(fig_dot)
 
         st.markdown("### Contrast notes")
         for lbl, expl in CONTRAST_HELP.items():
@@ -1007,7 +822,6 @@ def render_invitro_tab(query: str) -> None:
 
         return
 
-    # Volcano explorer
     st.markdown("### Volcano explorer")
 
     lines = sorted({k.line for k in tables.keys()})
@@ -1019,10 +833,20 @@ def render_invitro_tab(query: str) -> None:
     with c2:
         contrast_sel = st.selectbox("Contrast", options=[CONTRAST_LABELS[c] for c in contrasts], index=0)
 
-    contrast_token = next((c for c in contrasts if CONTRAST_LABELS[c] == contrast_sel), contrasts[0])
+    contrast_token = None
+    for c in contrasts:
+        if CONTRAST_LABELS[c] == contrast_sel:
+            contrast_token = c
+            break
+    if contrast_token is None:
+        contrast_token = contrasts[0]
 
-    key = InVitroKey(line=line_sel, contrast=contrast_token)
-    if key not in tables:
+    key = None
+    for k in tables.keys():
+        if k.line == line_sel and k.contrast == contrast_token:
+            key = k
+            break
+    if key is None:
         st.warning("Selected dataset is missing.")
         return
 
@@ -1038,7 +862,7 @@ def render_invitro_tab(query: str) -> None:
     with t1:
         fdr = st.number_input("FDR threshold", min_value=0.0001, max_value=0.5, value=0.05, step=0.01, format="%.4f")
     with t2:
-        lfc_thr = st.number_input("|logFC| threshold", min_value=0.0, max_value=10.0, value=1.0, step=0.1, format="%.1f")
+        lfc_thr = st.number_input("|logFC| threshold", min_value=0.0, max_value=5.0, value=1.0, step=0.1, format="%.1f")
     with t3:
         topn = st.number_input("Top N genes (tables)", min_value=5, max_value=200, value=25, step=5)
 
@@ -1053,14 +877,14 @@ def render_invitro_tab(query: str) -> None:
         abs_logfc_thresh=float(lfc_thr),
     )
     if fig is not None:
-        _st_plotly(st, fig)
+        _plot(fig)
 
     up, down = top_deg_tables(df, ensg_to_symbol=ensg_to_symbol, n=int(topn), padj_thresh=float(fdr))
     st.markdown("### Top genes (FDR-filtered where available)")
     c_up, c_down = st.columns(2)
     with c_up:
         st.markdown("Upregulated")
-        _st_dataframe(st, up, hide_index=True)
+        _df(up, hide_index=True)
     with c_down:
         st.markdown("Downregulated")
-        _st_dataframe(st, down, hide_index=True)
+        _df(down, hide_index=True)
