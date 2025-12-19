@@ -1,8 +1,8 @@
 """
 In vitro (human stem cell-derived) MASLD model analysis for Meta Liver.
 
-This module is designed to back a dedicated Streamlit tab that summarises DEGs from
-two iHeps lines (1b, 5a) under three conditions compared with healthy controls (HCM):
+This module backs a dedicated Streamlit tab that summarises DEGs from two iHeps
+lines (1b, 5a) under three conditions compared with healthy controls (HCM):
 - OA+PA vs HCM
 - OA+PA + Resistin/Myostatin vs HCM
 - OA+PA + Resistin/Myostatin + PBMC co-culture vs HCM
@@ -10,13 +10,14 @@ two iHeps lines (1b, 5a) under three conditions compared with healthy controls (
 
 Expected data location (inside the app data directory):
   stem_cell_model/processed_degs_<LINE>_<CONTRAST>.parquet
-Example:
-  stem_cell_model/processed_degs_1b_OAPAvsHCM.parquet
-  stem_cell_model/processed_degs_5a_OAPAResMyovsHCM.parquet
+Optionally, CSVs can exist alongside and are used as a fallback if parquet cannot be read.
 
-Important:
-Parquet reading requires an optional engine (pyarrow or fastparquet). If missing,
-the UI will show a clear install hint rather than crashing the whole app.
+Your DEG exports typically contain:
+  external_gene_name (gene symbol) and/or Spalte1
+  log2FoldChange (logFC)
+  pvalue (pval)
+  padj (FDR)
+This module normalises these to: Gene, logFC, pval, padj, stat, baseMean.
 """
 
 from __future__ import annotations
@@ -50,7 +51,11 @@ _CONTRAST_HELP = {
     "OA+PA + Resistin/Myostatin + PBMC co-culture vs HCM": "As above plus PBMC co-culture; PBMCs not sequenced.",
 }
 
-_FILE_RE = re.compile(r"processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)\.parquet$", flags=re.IGNORECASE)
+# Accept either parquet or csv
+_FILE_RE = re.compile(
+    r"processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)\.(?P<ext>parquet|csv)$",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -64,7 +69,6 @@ def _find_stem_cell_model_dir() -> Optional[Path]:
     if data_dir is None:
         return None
 
-    # Case-insensitive folder match
     candidates = [
         data_dir / "stem_cell_model",
         data_dir / "stem-cell-model",
@@ -75,7 +79,6 @@ def _find_stem_cell_model_dir() -> Optional[Path]:
         if c.exists() and c.is_dir():
             return c
 
-    # Fallback: walk one level deep for anything containing 'stem' and 'cell'
     for p in data_dir.iterdir():
         if p.is_dir():
             nm = p.name.lower().replace("-", "_")
@@ -87,18 +90,39 @@ def _find_stem_cell_model_dir() -> Optional[Path]:
 
 def discover_invitro_deg_files() -> List[Path]:
     """
-    Returns a list of DEG parquet files, if present.
-    This does not read parquet (safe to call even if parquet engines are missing).
+    Returns DEG files present under stem_cell_model/ (csv or parquet).
+    Does not attempt to read them.
     """
     root = _find_stem_cell_model_dir()
     if root is None:
         return []
 
     out: List[Path] = []
-    for p in sorted(root.glob("*.parquet")):
+    for p in sorted(root.iterdir()):
+        if not p.is_file():
+            continue
         if _FILE_RE.search(p.name):
             out.append(p)
-    return out
+
+    # Prefer parquet over csv if both exist (same stem)
+    def _rank(path: Path) -> Tuple[str, int]:
+        stem = path.stem.lower()
+        ext = path.suffix.lower()
+        return (stem, 0 if ext == ".parquet" else 1)
+
+    out = sorted(out, key=_rank)
+
+    # Deduplicate by stem, keep best-ranked
+    seen = set()
+    uniq = []
+    for p in out:
+        st = p.stem.lower()
+        if st in seen:
+            continue
+        seen.add(st)
+        uniq.append(p)
+
+    return uniq
 
 
 def _parse_file(path: Path) -> Optional[InVitroKey]:
@@ -107,11 +131,13 @@ def _parse_file(path: Path) -> Optional[InVitroKey]:
         return None
     line = str(m.group("line")).strip()
     contrast = str(m.group("contrast")).strip()
-    # Normalise contrast token casing to the keys we use in _CONTRAST_LABELS
+
+    # Normalise contrast token casing to our canonical keys
     for k in list(_CONTRAST_LABELS.keys()):
         if k.lower() == contrast.lower():
             contrast = k
             break
+
     return InVitroKey(line=line, contrast=contrast)
 
 
@@ -119,15 +145,14 @@ def _parse_file(path: Path) -> Optional[InVitroKey]:
 # Robust DEG table normalisation
 # -----------------------------------------------------------------------------
 
+# Your files: external_gene_name and Spalte1
 _GENE_COL_CANDIDATES = [
-    "gene", "Gene", "symbol", "Symbol", "gene_symbol", "gene_name", "GeneSymbol",
-    "external_gene_name", "External_Gene_Name", "externalGeneName",
-    "Spalte1", "spalte1",  # often gene symbol
-    "Column1", "column1"   # often Ensembl ID
+    "external_gene_name", "Spalte1",
+    "gene", "Gene", "symbol", "Symbol", "gene_symbol", "gene_name", "GeneSymbol", "hgnc_symbol"
 ]
-_LOGFC_COL_CANDIDATES = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
-_PVAL_COL_CANDIDATES = ["pvalue", "pval", "PValue", "p_value"]
-_PADJ_COL_CANDIDATES = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
+_LOGFC_COL_CANDIDATES = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange", "lfc"]
+_PVAL_COL_CANDIDATES = ["pvalue", "pval", "PValue", "p_value", "p.val", "p"]
+_PADJ_COL_CANDIDATES = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value", "fdr"]
 _STAT_COL_CANDIDATES = ["stat", "WaldStatistic", "wald_stat", "t", "t_stat"]
 _BASEMEAN_COL_CANDIDATES = ["baseMean", "base_mean", "mean", "avg_expression"]
 
@@ -142,127 +167,97 @@ def _pick_col(cols: List[str], candidates: List[str]) -> Optional[str]:
     return None
 
 
-
-def _read_parquet_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+def _read_table_with_fallback(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     """
-    Read a DEG table from parquet, with a CSV fallback if parquet can't be read
-    (e.g., missing pyarrow on Streamlit Cloud).
+    Try to read parquet; if that fails, try CSV with same stem.
+    Also supports being given a CSV directly.
     """
-    try:
-        df = pd.read_parquet(path)
-        return df, None
-    except Exception as e:
-        # Fallback: try a CSV with the same stem if present
-        csv_path = path.with_suffix(".csv")
-        if csv_path.exists():
-            try:
-                df = pd.read_csv(csv_path)
-                return df, None
-            except Exception as e2:
-                msg = (
-                    f"Could not read parquet file: {path.name} and CSV fallback failed: {csv_path.name}
+    if path is None or not path.exists():
+        return None, f"File not found: {path}"
 
-"
-                    f"Parquet error: {type(e).__name__}: {e}
-"
-                    f"CSV error: {type(e2).__name__}: {e2}
+    suf = path.suffix.lower()
 
-"
-                    "Fix: add a parquet engine to your environment (requirements.txt), e.g.
-"
-                    "  pyarrow
-"
-                    "Then redeploy/restart the app."
-                )
-                return None, msg
+    if suf == ".csv":
+        try:
+            return pd.read_csv(path), None
+        except Exception as e:
+            return None, f"Could not read CSV file: {path.name}\n{type(e).__name__}: {e}"
 
-        msg = (
-            f"Could not read parquet file: {path.name}
+    if suf == ".parquet":
+        try:
+            return pd.read_parquet(path), None
+        except Exception as e:
+            # CSV fallback with same stem
+            csv_path = path.with_suffix(".csv")
+            if csv_path.exists():
+                try:
+                    return pd.read_csv(csv_path), None
+                except Exception as e2:
+                    return None, (
+                        f"Parquet read failed and CSV fallback also failed for {path.stem}.\n"
+                        f"Parquet error: {type(e).__name__}: {e}\n"
+                        f"CSV error: {type(e2).__name__}: {e2}"
+                    )
 
-"
-            f"Underlying error: {type(e).__name__}: {e}
+            return None, (
+                f"Could not read parquet file: {path.name}\n\n"
+                f"Underlying error: {type(e).__name__}: {e}\n\n"
+                "If you want parquet support on Streamlit Cloud, add a parquet engine to requirements.txt, e.g.:\n"
+                "  pyarrow\n"
+                "Alternatively, provide the CSV alongside the parquet."
+            )
 
-"
-            "Fix: add a parquet engine to your environment, for example include this in requirements.txt:
-"
-            "  pyarrow
-"
-            "Then redeploy/restart the app.
-"
-            "Optional: you can also place a CSV with the same name next to the parquet file for fallback loading."
-        )
-        return None, msg
+    return None, f"Unsupported file type: {path.name}"
 
 
-
-def _auto_scale_p_like(s: pd.Series) -> pd.Series:
+def _rescale_prob_like_series(s: pd.Series) -> pd.Series:
     """
-    Heuristic: some exports store p-values/padj as large integers that represent
-    the true value scaled by 1e15 (e.g. 841526188339379 -> 0.8415...).
-    We rescale values > 1 by 1e15 when that fixes the range.
+    Some exports accidentally store probabilities as large integers that represent
+    the decimal digits of a 0.x number, e.g. 841526188339379 -> 0.841526188339379.
+
+    Heuristic:
+      if value > 1 and looks integer-like, divide by 10^(number of digits).
     """
     if s is None:
         return s
-    s2 = pd.to_numeric(s, errors="coerce")
-    if s2.dropna().empty:
-        return s2
 
-    mask = s2 > 1
-    if not mask.any():
-        return s2
+    out = pd.to_numeric(s, errors="coerce")
 
-    scaled = s2.copy()
-    cand = s2[mask] / 1e15
-    ok_frac = float(((cand >= 0) & (cand <= 1)).mean()) if len(cand) else 0.0
-    if ok_frac >= 0.8:
-        scaled.loc[mask] = cand
-    return scaled
+    def _fix(v: float) -> float:
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return np.nan
+        try:
+            fv = float(v)
+        except Exception:
+            return np.nan
 
+        if fv <= 1.0:
+            return fv
 
-def _auto_scale_logfc(s: pd.Series) -> pd.Series:
-    """
-    Heuristic: some exports store log2FC as large integers that represent the true
-    log2FC scaled by 1e15 (e.g. -999772864250975 -> -0.9997...).
-    """
-    if s is None:
-        return s
-    s2 = pd.to_numeric(s, errors="coerce")
-    v = s2.dropna()
-    if v.empty:
-        return s2
+        # If it is very large but not astronomical, treat as "digits of 0.xxx"
+        if fv < 1e18:
+            iv = int(fv)
+            # Only apply if it is truly integer-like (within tiny tolerance)
+            if abs(fv - float(iv)) < 1e-6 and iv > 0:
+                digits = len(str(iv))
+                return fv / (10.0 ** digits)
 
-    med_abs = float(np.median(np.abs(v)))
-    if med_abs > 1000:
-        return s2 / 1e15
-    return s2
+        return fv
 
+    return out.map(_fix)
 
-def _auto_scale_basemean(s: pd.Series) -> pd.Series:
-    """
-    Heuristic: baseMean sometimes appears scaled by 1e12 in exported tables.
-    """
-    if s is None:
-        return s
-    s2 = pd.to_numeric(s, errors="coerce")
-    v = s2.dropna()
-    if v.empty:
-        return s2
-
-    med = float(np.median(v))
-    if med > 1e8:
-        return s2 / 1e12
-    return s2
 
 def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardises key columns to:
       Gene, logFC, pval, padj, stat, baseMean
-    Leaves any other columns intact.
+    Keeps any other columns intact.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
-    cols = list(df.columns)
+    out = df.copy()
+    cols = list(out.columns)
 
     gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
     logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
@@ -271,13 +266,13 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     stat_col = _pick_col(cols, _STAT_COL_CANDIDATES)
     base_col = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
 
-    out = df.copy()
-
     # If gene is in the index, try to bring it back
-    if gene_col is None and out.index.name is not None and str(out.index.name).lower() in [c.lower() for c in _GENE_COL_CANDIDATES]:
-        out = out.reset_index()
-        cols = list(out.columns)
-        gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
+    if gene_col is None and out.index.name is not None:
+        idxn = str(out.index.name).lower()
+        if idxn in {c.lower() for c in _GENE_COL_CANDIDATES}:
+            out = out.reset_index()
+            cols = list(out.columns)
+            gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
 
     ren = {}
     if gene_col is not None:
@@ -295,23 +290,19 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     out = out.rename(columns=ren)
 
-    # Clean up types
     if "Gene" in out.columns:
         out["Gene"] = out["Gene"].astype(str).str.strip().str.upper()
 
+    # Coerce numerics
     for c in ["logFC", "pval", "padj", "stat", "baseMean"]:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
 
-    # Fix scaled exports (common in some CSV/Parquet conversions)
+    # Heuristic fixes for p-values that were exported as digit-strings
     if "pval" in out.columns:
-        out["pval"] = _auto_scale_p_like(out["pval"])
+        out["pval"] = _rescale_prob_like_series(out["pval"])
     if "padj" in out.columns:
-        out["padj"] = _auto_scale_p_like(out["padj"])
-    if "logFC" in out.columns:
-        out["logFC"] = _auto_scale_logfc(out["logFC"])
-    if "baseMean" in out.columns:
-        out["baseMean"] = _auto_scale_basemean(out["baseMean"])
+        out["padj"] = _rescale_prob_like_series(out["padj"])
 
     return out
 
@@ -328,10 +319,14 @@ def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[
         key = _parse_file(f)
         if key is None:
             continue
-        df, err = _read_parquet_safe(f)
+
+        df, err = _read_table_with_fallback(f)
         if err is not None:
             errors.append(err)
             continue
+        if df is None or df.empty:
+            continue
+
         norm = normalise_deg_table(df)
         tables[key] = norm
 
@@ -349,7 +344,6 @@ def _get_gene_row(df: pd.DataFrame, gene: str) -> Optional[pd.Series]:
     hit = df.loc[df["Gene"] == g]
     if hit.empty:
         return None
-    # If duplicates, take the first
     return hit.iloc[0]
 
 
@@ -357,10 +351,12 @@ def gene_summary_table(tables: Dict[InVitroKey, pd.DataFrame], gene: str) -> pd.
     rows = []
     for k, df in tables.items():
         r = _get_gene_row(df, gene)
+        contrast_lbl = _CONTRAST_LABELS.get(k.contrast, k.contrast)
+
         if r is None:
             rows.append({
                 "iHeps line": k.line,
-                "Contrast": _CONTRAST_LABELS.get(k.contrast, k.contrast),
+                "Contrast": contrast_lbl,
                 "logFC": np.nan,
                 "padj": np.nan,
                 "pval": np.nan,
@@ -372,11 +368,15 @@ def gene_summary_table(tables: Dict[InVitroKey, pd.DataFrame], gene: str) -> pd.
         padj = float(r["padj"]) if "padj" in r and pd.notna(r["padj"]) else np.nan
         pval = float(r["pval"]) if "pval" in r and pd.notna(r["pval"]) else np.nan
 
-        direction = "Up in model" if pd.notna(logfc) and logfc > 0 else "Down in model" if pd.notna(logfc) and logfc < 0 else "missing"
+        direction = (
+            "Up in model" if pd.notna(logfc) and logfc > 0 else
+            "Down in model" if pd.notna(logfc) and logfc < 0 else
+            "missing"
+        )
 
         rows.append({
             "iHeps line": k.line,
-            "Contrast": _CONTRAST_LABELS.get(k.contrast, k.contrast),
+            "Contrast": contrast_lbl,
             "logFC": logfc,
             "padj": padj,
             "pval": pval,
@@ -387,11 +387,9 @@ def gene_summary_table(tables: Dict[InVitroKey, pd.DataFrame], gene: str) -> pd.
     if out.empty:
         return out
 
-    # Nice ordering
     contrast_order = list(_CONTRAST_LABELS.values())
-    out["__c__"] = out["Contrast"].astype(str)
-    out["__c_rank__"] = out["__c__"].apply(lambda x: contrast_order.index(x) if x in contrast_order else 999)
-    out = out.sort_values(["iHeps line", "__c_rank__"], ascending=[True, True]).drop(columns=["__c__", "__c_rank__"])
+    out["__c_rank__"] = out["Contrast"].astype(str).apply(lambda x: contrast_order.index(x) if x in contrast_order else 999)
+    out = out.sort_values(["iHeps line", "__c_rank__"], ascending=[True, True]).drop(columns=["__c_rank__"])
     return out
 
 
@@ -399,19 +397,14 @@ def make_gene_logfc_heatmap(summary_df: pd.DataFrame, gene: str) -> Optional[go.
     if summary_df is None or summary_df.empty or "logFC" not in summary_df.columns:
         return None
 
-    # Pivot into matrix: line x contrast
     mat = summary_df.pivot(index="iHeps line", columns="Contrast", values="logFC")
     if mat.empty:
         return None
 
-    z = mat.values.astype(float)
-    y = list(mat.index)
-    x = list(mat.columns)
-
     fig = go.Figure(data=go.Heatmap(
-        z=z,
-        x=x,
-        y=y,
+        z=mat.values.astype(float),
+        x=list(mat.columns),
+        y=list(mat.index),
         colorbar=dict(title="logFC"),
         hovertemplate="Line: %{y}<br>Contrast: %{x}<br>logFC: %{z:.3f}<extra></extra>"
     ))
@@ -426,15 +419,14 @@ def make_gene_logfc_heatmap(summary_df: pd.DataFrame, gene: str) -> Optional[go.
 def make_gene_dotplot(summary_df: pd.DataFrame, gene: str) -> Optional[go.Figure]:
     if summary_df is None or summary_df.empty:
         return None
-
-    df = summary_df.copy()
-    if "padj" not in df.columns or "logFC" not in df.columns:
+    if "padj" not in summary_df.columns or "logFC" not in summary_df.columns:
         return None
 
-    # Size encodes -log10(padj)
+    df = summary_df.copy()
+
     def neglog10(x):
         try:
-            if x is None or (isinstance(x, float) and math.isnan(x)) or x <= 0:
+            if x is None or (isinstance(x, float) and math.isnan(x)) or float(x) <= 0:
                 return np.nan
             return -math.log10(float(x))
         except Exception:
@@ -457,7 +449,6 @@ def make_gene_dotplot(summary_df: pd.DataFrame, gene: str) -> Optional[go.Figure
                 f"logFC: {r['logFC'] if pd.notna(r['logFC']) else 'missing'}<br>"
                 f"padj: {r['padj'] if pd.notna(r['padj']) else 'missing'}<extra></extra>"
             ),
-            name=str(r["iHeps line"]),
             showlegend=False,
         ))
 
@@ -476,18 +467,22 @@ def make_gene_dotplot(summary_df: pd.DataFrame, gene: str) -> Optional[go.Figure
 # Dataset-centric volcano explorer
 # -----------------------------------------------------------------------------
 
-def make_volcano(df: pd.DataFrame, title: str, highlight_gene: Optional[str] = None,
-                fdr_thresh: float = 0.05, abs_logfc_thresh: float = 1.0) -> Optional[go.Figure]:
+def make_volcano(
+    df: pd.DataFrame,
+    title: str,
+    highlight_gene: Optional[str] = None,
+    fdr_thresh: float = 0.05,
+    abs_logfc_thresh: float = 1.0
+) -> Optional[go.Figure]:
     if df is None or df.empty or "logFC" not in df.columns:
         return None
 
     tmp = df.copy()
 
-    # Compute -log10(padj) if available, else pval
     if "padj" in tmp.columns:
-        p = tmp["padj"].astype(float)
+        p = pd.to_numeric(tmp["padj"], errors="coerce")
     elif "pval" in tmp.columns:
-        p = tmp["pval"].astype(float)
+        p = pd.to_numeric(tmp["pval"], errors="coerce")
     else:
         p = pd.Series(np.nan, index=tmp.index)
 
@@ -497,8 +492,9 @@ def make_volcano(df: pd.DataFrame, title: str, highlight_gene: Optional[str] = N
     sig = pd.Series(False, index=tmp.index)
     if "padj" in tmp.columns:
         sig = (tmp["padj"] <= float(fdr_thresh)) & (tmp["logFC"].abs() >= float(abs_logfc_thresh))
-
     tmp["sig"] = sig
+
+    text = tmp["Gene"] if "Gene" in tmp.columns else None
 
     fig = go.Figure()
     fig.add_trace(go.Scattergl(
@@ -511,7 +507,7 @@ def make_volcano(df: pd.DataFrame, title: str, highlight_gene: Optional[str] = N
             "logFC: %{x:.3f}<br>"
             "-log10(p): %{y:.3f}<extra></extra>"
         ),
-        text=tmp["Gene"] if "Gene" in tmp.columns else None,
+        text=text,
         showlegend=False
     ))
 
@@ -560,7 +556,7 @@ def top_deg_tables(df: pd.DataFrame, n: int = 25, padj_thresh: float = 0.05) -> 
     down = tmp.sort_values("logFC", ascending=True).head(int(n)).copy()
 
     keep = [c for c in ["Gene", "logFC", "padj", "pval", "stat", "baseMean"] if c in tmp.columns]
-    return up[keep] if keep else up, down[keep] if keep else down
+    return (up[keep] if keep else up), (down[keep] if keep else down)
 
 
 # -----------------------------------------------------------------------------
@@ -571,32 +567,32 @@ def render_invitro_tab(gene: str) -> None:
     """
     Streamlit rendering for the in vitro model tab.
     """
-    import streamlit as st  # local import to keep module usable outside Streamlit
+    import streamlit as st
 
     files = discover_invitro_deg_files()
     if not files:
-        st.warning("No in vitro DEG parquet files were found. Expected: data_dir/stem_cell_model/*.parquet")
+        st.warning("No in vitro DEG files were found. Expected: data_dir/stem_cell_model/processed_degs_*.(parquet|csv)")
         return
 
     tables, errors = load_all_invitro_deg_tables()
     if errors:
-        # Show only the first error in full; others as short lines
         st.error(errors[0])
         if len(errors) > 1:
-            st.info("More parquet read errors were encountered for other files as well.")
+            st.info("More DEG read errors were encountered for other files as well.")
         return
 
     if not tables:
         st.warning("In vitro DEG files were found, but none could be loaded.")
         return
 
-    # Controls
     st.markdown("### Data view")
     view = st.radio("Choose view", ["Gene summary", "Volcano explorer"], index=0, horizontal=True)
 
-    # Make options
     lines = sorted({k.line for k in tables.keys()})
-    contrast_tokens = sorted({k.contrast for k in tables.keys()}, key=lambda x: list(_CONTRAST_LABELS.keys()).index(x) if x in _CONTRAST_LABELS else 999)
+    # Keep the contrast order as defined in _CONTRAST_LABELS
+    contrast_tokens = [k for k in _CONTRAST_LABELS.keys() if any(t.contrast == k for t in tables.keys())]
+    if not contrast_tokens:
+        contrast_tokens = sorted({k.contrast for k in tables.keys()})
 
     if view == "Gene summary":
         g = str(gene).strip().upper()
@@ -620,7 +616,6 @@ def render_invitro_tab(gene: str) -> None:
 
         return
 
-    # Volcano explorer
     st.markdown("### Volcano explorer")
     c1, c2 = st.columns(2)
     with c1:
@@ -632,7 +627,6 @@ def render_invitro_tab(gene: str) -> None:
             index=0
         )
 
-    # Map back to token
     contrast_token = None
     for t in contrast_tokens:
         if _CONTRAST_LABELS.get(t, t) == contrast_sel:
@@ -647,7 +641,6 @@ def render_invitro_tab(gene: str) -> None:
         st.warning("Selected dataset is empty or missing.")
         return
 
-    # Thresholds
     t1, t2, t3 = st.columns(3)
     with t1:
         fdr = st.number_input("FDR threshold", min_value=0.0001, max_value=0.5, value=0.05, step=0.01, format="%.4f")
