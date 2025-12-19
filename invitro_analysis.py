@@ -1,36 +1,38 @@
 """
-In vitro (human stem cell-derived iHeps) MASLD model analysis for Meta Liver.
+In vitro (human stem cell-derived) MASLD model analysis for Meta Liver.
 
 This module backs a dedicated Streamlit tab that summarises DEGs from two iHeps lines
-(1b and 5a) under three conditions compared with healthy controls (HCM):
-  - OA+PA vs HCM
-  - OA+PA + Resistin/Myostatin vs HCM
-  - OA+PA + Resistin/Myostatin + PBMC co-culture vs HCM
+(1b, 5a) under three conditions compared with healthy controls (HCM):
+- OA+PA vs HCM
+- OA+PA + Resistin/Myostatin vs HCM
+- OA+PA + Resistin/Myostatin + PBMC co-culture vs HCM
 (PBMCs were not included in RNA-seq; the DEGs reflect iHeps only.)
 
-Expected location (inside the app data directory):
-  meta-liver-data/stem_cell_model/
+Expected data location (inside the app data directory):
+  stem_cell_model/
 
-Accepted DEG filenames (CSV or Parquet):
-  1) processed_degs_<LINE>_<CONTRAST>.(csv|parquet)
-     e.g. processed_degs_1b_OAPAvsHCM.parquet
-  2) <CONTRAST>_<LINE>.(csv|parquet)
-     e.g. OAPAvsHCM_1b.parquet
+Expected DEG filenames (new scheme):
+  OAPAvsHCM_1b.(parquet|csv)
+  OAPAvsHCM_5a.(parquet|csv)
+  OAPAResMyovsHCM_1b.(parquet|csv)
+  OAPAResMyovsHCM_5a.(parquet|csv)
+  OAPAResMyoPBMCsvsHCM_1b.(parquet|csv)
+  OAPAResMyoPBMCsvsHCM_5a.(parquet|csv)
 
-Accepted contrasts:
-  OAPAvsHCM
-  OAPAResMyovsHCM
-  OAPAResMyoPBMCsvsHCM
+Also supported (legacy scheme):
+  processed_degs_<LINE>_<CONTRAST>.parquet
+  processed_degs_<LINE>_<CONTRAST>.csv
 
-Gene identifiers:
-Many DEG tables use Ensembl IDs in the 'Gene' column (e.g., ENSG...).
-If a user searches by gene symbol and the symbol is not present in the DEG table,
-we try to map symbol -> Ensembl using gene_mapping.csv in the same folder.
-If mapping fails, we fall back to using the entered identifier as-is.
+Gene IDs:
+- DEG tables typically use Ensembl stable IDs in the 'Gene' column.
+- If a mapping file is available (e.g., stem_cell_model/gene_mapping.csv with
+  columns like "Gene stable ID" and "Gene name"), the tab will display gene symbols
+  but will always keep Ensembl IDs for matching.
+- If a gene symbol is not found in the mapping, the Ensembl ID is displayed/used.
 
-Parquet note:
-Reading Parquet requires pyarrow or fastparquet. If missing, the UI will show
-a clear install hint rather than crashing the whole app.
+Parquet reading:
+- Requires an optional engine (pyarrow or fastparquet). If missing, the module
+  will fall back to CSV (if present) or show a clear install hint.
 """
 
 from __future__ import annotations
@@ -49,39 +51,38 @@ from robust_data_loader import find_data_dir
 
 
 # -----------------------------------------------------------------------------
-# Constants
+# Labels / ordering
 # -----------------------------------------------------------------------------
 
-CONTRAST_TOKENS = [
-    "OAPAvsHCM",
-    "OAPAResMyovsHCM",
-    "OAPAResMyoPBMCsvsHCM",
-]
-
-CONTRAST_LABELS = {
+_CONTRAST_LABELS = {
     "OAPAvsHCM": "OA+PA vs HCM",
     "OAPAResMyovsHCM": "OA+PA + Resistin/Myostatin vs HCM",
     "OAPAResMyoPBMCsvsHCM": "OA+PA + Resistin/Myostatin + PBMC co-culture vs HCM",
 }
 
-CONTRAST_HELP = {
+_CONTRAST_HELP = {
     "OA+PA vs HCM": "Fatty-acid overload model (oleic + palmitic acid) compared with healthy controls.",
     "OA+PA + Resistin/Myostatin vs HCM": "Fatty acids plus adipose/muscle-derived signalling molecules.",
     "OA+PA + Resistin/Myostatin + PBMC co-culture vs HCM": "As above plus PBMC co-culture; PBMCs not sequenced.",
 }
 
-LINE_TOKENS = ["1b", "5a"]
+_CONTRAST_ORDER = ["OAPAvsHCM", "OAPAResMyovsHCM", "OAPAResMyoPBMCsvsHCM"]
+_LINE_ORDER = ["1b", "5a"]
 
-# Name of the optional mapping file inside stem_cell_model/
-GENE_MAPPING_FILENAME = "gene_mapping.csv"
 
-# Regexes for DEG files
-_RE_PROCESSED = re.compile(
-    r"^processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)$",
+# -----------------------------------------------------------------------------
+# File discovery
+# -----------------------------------------------------------------------------
+
+# New naming: <contrast>_<line>.(parquet|csv)
+_FILE_RE_NEW = re.compile(
+    r"^(?P<contrast>OAPAvsHCM|OAPAResMyovsHCM|OAPAResMyoPBMCsvsHCM)_(?P<line>1b|5a)\.(?P<ext>parquet|csv)$",
     flags=re.IGNORECASE,
 )
-_RE_CONTRAST_LINE = re.compile(
-    r"^(?P<contrast>.+)_(?P<line>[^_]+)$",
+
+# Legacy naming: processed_degs_<line>_<contrast>.(parquet|csv)
+_FILE_RE_LEGACY = re.compile(
+    r"^processed_degs_(?P<line>[^_]+)_(?P<contrast>.+)\.(?P<ext>parquet|csv)$",
     flags=re.IGNORECASE,
 )
 
@@ -89,122 +90,102 @@ _RE_CONTRAST_LINE = re.compile(
 @dataclass(frozen=True)
 class InVitroKey:
     line: str        # "1b" or "5a"
-    contrast: str    # canonical token e.g. "OAPAvsHCM"
-    ext: str         # "csv" or "parquet" (for debugging)
+    contrast: str    # canonical contrast token e.g. "OAPAvsHCM"
 
-
-# -----------------------------------------------------------------------------
-# Folder discovery
-# -----------------------------------------------------------------------------
 
 def _find_stem_cell_model_dir() -> Optional[Path]:
     data_dir = find_data_dir()
     if data_dir is None:
         return None
 
-    # User confirmed the folder is: stem_cell_model (under meta-liver-data)
-    # Find it case-insensitively.
-    direct = data_dir / "stem_cell_model"
-    if direct.exists() and direct.is_dir():
-        return direct
+    # direct candidates
+    candidates = [
+        data_dir / "stem_cell_model",
+        data_dir / "stem-cell-model",
+        data_dir / "stemcell_model",
+        data_dir / "stemcell",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_dir():
+            return c
 
+    # fallback: scan 1 level
     for p in data_dir.iterdir():
-        if p.is_dir() and p.name.lower() == "stem_cell_model":
-            return p
-
-    # Fallback (rare): search one level deeper for an exact folder name match.
-    for p in data_dir.rglob("*"):
-        if p.is_dir() and p.name.lower() == "stem_cell_model":
+        if not p.is_dir():
+            continue
+        nm = p.name.lower().replace("-", "_")
+        if nm == "stem_cell_model" or ("stem" in nm and "cell" in nm):
             return p
 
     return None
 
 
-# -----------------------------------------------------------------------------
-# File discovery + parsing
-# -----------------------------------------------------------------------------
-
-def _canon_contrast(token: str) -> Optional[str]:
+def _canonical_contrast(token: str) -> Optional[str]:
     if token is None:
         return None
     t = str(token).strip()
-    for k in CONTRAST_TOKENS:
+    # match against known tokens case-insensitively
+    for k in _CONTRAST_LABELS.keys():
         if k.lower() == t.lower():
             return k
     return None
 
 
-def _canon_line(line: str) -> Optional[str]:
-    if line is None:
-        return None
-    t = str(line).strip()
-    for k in LINE_TOKENS:
-        if k.lower() == t.lower():
-            return k
-    return None
+def _canonical_line(token: str) -> str:
+    if token is None:
+        return ""
+    return str(token).strip()
 
 
-def _parse_deg_stem(stem: str, ext: str) -> Optional[InVitroKey]:
+def discover_invitro_deg_files() -> Dict[InVitroKey, Dict[str, Path]]:
     """
-    Supports:
-      processed_degs_<LINE>_<CONTRAST>
-      <CONTRAST>_<LINE>
-    """
-    if not stem:
-        return None
+    Discover DEG files under stem_cell_model/.
 
-    s = stem.strip()
+    Returns a dict:
+      { InVitroKey(line, contrast) : { "parquet": path?, "csv": path? } }
 
-    m = _RE_PROCESSED.match(s)
-    if m:
-        line = _canon_line(m.group("line"))
-        contrast = _canon_contrast(m.group("contrast"))
-        if line and contrast:
-            return InVitroKey(line=line, contrast=contrast, ext=ext)
-        return None
-
-    m = _RE_CONTRAST_LINE.match(s)
-    if m:
-        contrast = _canon_contrast(m.group("contrast"))
-        line = _canon_line(m.group("line"))
-        if line and contrast:
-            return InVitroKey(line=line, contrast=contrast, ext=ext)
-        return None
-
-    return None
-
-
-def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
-    """
-    Discovers DEG files in stem_cell_model/. Returns {key -> path}.
-    Ignores gene_mapping.csv.
+    This does not attempt to read parquet/csv.
     """
     root = _find_stem_cell_model_dir()
     if root is None:
         return {}
 
-    out: Dict[InVitroKey, Path] = {}
+    out: Dict[InVitroKey, Dict[str, Path]] = {}
 
-    for p in sorted(root.rglob("*")):
+    for p in root.iterdir():
         if not p.is_file():
             continue
-        if p.name.lower() == GENE_MAPPING_FILENAME.lower():
+
+        name = p.name
+
+        # ignore mapping files
+        if name.lower().startswith("gene_mapping"):
             continue
 
-        ext = p.suffix.lower().lstrip(".")
-        if ext not in ("csv", "parquet"):
+        m = _FILE_RE_NEW.match(name)
+        if m:
+            contrast = _canonical_contrast(m.group("contrast"))
+            line = _canonical_line(m.group("line"))
+            ext = m.group("ext").lower()
+            if contrast and line:
+                key = InVitroKey(line=line, contrast=contrast)
+                out.setdefault(key, {})[ext] = p
             continue
 
-        key = _parse_deg_stem(p.stem, ext)
-        if key is None:
-            continue
+        m2 = _FILE_RE_LEGACY.match(name)
+        if m2:
+            contrast_raw = m2.group("contrast")
+            line = _canonical_line(m2.group("line"))
+            ext = m2.group("ext").lower()
 
-        # If both CSV and Parquet exist, prefer Parquet
-        if key in out:
-            if out[key].suffix.lower() == ".csv" and p.suffix.lower() == ".parquet":
-                out[key] = p
-        else:
-            out[key] = p
+            contrast = _canonical_contrast(contrast_raw)
+            if contrast is None:
+                # allow legacy contrast strings that already match our tokens with minor differences
+                contrast = _canonical_contrast(contrast_raw.replace("-", "").replace("_", ""))
+            if contrast and line:
+                key = InVitroKey(line=line, contrast=contrast)
+                out.setdefault(key, {})[ext] = p
+            continue
 
     return out
 
@@ -213,77 +194,102 @@ def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
 # Gene mapping
 # -----------------------------------------------------------------------------
 
-def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
+def _normalise_ensembl_id(x: object) -> str:
     """
-    Loads gene_mapping.csv if present. Returns (symbol_to_ensg, ensg_to_symbol).
-    Expects columns like:
-      'Gene stable ID' (Ensembl) and 'Gene name' (symbol)
+    Normalise Ensembl IDs:
+    - uppercase
+    - strip version suffix e.g. ENSG... .12 -> ENSG...
+    """
+    if x is None:
+        return ""
+    s = str(x).strip()
+    if not s:
+        return ""
+    s = s.split(".")[0]
+    return s.upper()
+
+
+def load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """
+    Load gene mapping from stem_cell_model/gene_mapping.(csv|parquet) if present.
+
+    Returns:
+      ens_to_symbol: {ENSG... : SYMBOL}
+      symbol_to_ens: {SYMBOL : [ENSG..., ...]}  (list to handle 1-to-many safely)
     """
     root = _find_stem_cell_model_dir()
     if root is None:
         return {}, {}
 
-    fp = root / GENE_MAPPING_FILENAME
-    if not fp.exists():
+    # locate mapping file
+    mapping_path = None
+    for cand in ["gene_mapping.csv", "gene_mapping.parquet", "Gene_mapping.csv", "GENE_MAPPING.csv"]:
+        fp = root / cand
+        if fp.exists() and fp.is_file():
+            mapping_path = fp
+            break
+
+    if mapping_path is None:
+        # also try any file that contains "gene_mapping"
+        for fp in root.iterdir():
+            if fp.is_file() and "gene_mapping" in fp.name.lower():
+                mapping_path = fp
+                break
+
+    if mapping_path is None:
         return {}, {}
 
     try:
-        gm = pd.read_csv(fp)
+        if mapping_path.suffix.lower() == ".parquet":
+            mdf = pd.read_parquet(mapping_path)
+        else:
+            mdf = pd.read_csv(mapping_path)
     except Exception:
         return {}, {}
 
-    # Find columns robustly
-    cols = {c.lower(): c for c in gm.columns}
-    ensg_col = cols.get("gene stable id") or cols.get("ensembl") or cols.get("ensembl_id") or cols.get("ensembl id")
-    sym_col = cols.get("gene name") or cols.get("symbol") or cols.get("gene") or cols.get("gene_symbol")
-
-    if ensg_col is None or sym_col is None:
+    if mdf is None or mdf.empty:
         return {}, {}
 
-    tmp = gm[[ensg_col, sym_col]].copy()
-    tmp[ensg_col] = tmp[ensg_col].astype(str).str.strip().str.upper()
-    tmp[sym_col] = tmp[sym_col].astype(str).str.strip().str.upper()
+    cols = {c.lower(): c for c in mdf.columns}
+    ens_col = None
+    sym_col = None
 
-    symbol_to_ensg = {}
-    ensg_to_symbol = {}
+    # common patterns from Ensembl export
+    for c in ["gene stable id", "gene_stable_id", "ensembl", "ensembl_id", "gene", "gene_id"]:
+        if c in cols:
+            ens_col = cols[c]
+            break
 
-    for _, r in tmp.iterrows():
-        ensg = r[ensg_col]
-        sym = r[sym_col]
-        if sym and sym != "NAN" and ensg and ensg != "NAN":
-            symbol_to_ensg.setdefault(sym, ensg)
-            ensg_to_symbol.setdefault(ensg, sym)
+    for c in ["gene name", "gene_symbol", "symbol", "hgnc symbol", "hgnc_symbol", "name"]:
+        if c in cols:
+            sym_col = cols[c]
+            break
 
-    return symbol_to_ensg, ensg_to_symbol
+    if ens_col is None or sym_col is None:
+        return {}, {}
 
+    ens = mdf[ens_col].map(_normalise_ensembl_id)
+    sym = mdf[sym_col].astype(str).str.strip().str.upper()
 
-def _resolve_query_to_gene_id(query: str, symbol_to_ensg: Dict[str, str]) -> Tuple[str, Optional[str]]:
-    """
-    Returns (gene_id_to_search_in_deg_table, resolved_symbol_if_any)
-    """
-    q = str(query).strip().upper()
-    if not q:
-        return "", None
+    ens_to_symbol: Dict[str, str] = {}
+    symbol_to_ens: Dict[str, List[str]] = {}
 
-    # If the query already looks like Ensembl, keep it
-    if q.startswith("ENSG"):
-        sym = None
-        return q, sym
+    for e, s in zip(ens, sym):
+        if not e:
+            continue
+        if not s or s.lower() == "nan":
+            continue
+        if e not in ens_to_symbol:
+            ens_to_symbol[e] = s
+        symbol_to_ens.setdefault(s, []).append(e)
 
-    # Otherwise treat it as a symbol and map
-    ensg = symbol_to_ensg.get(q)
-    if ensg:
-        return ensg, q
-
-    # Fall back to using the query as-is (covers non-ENSG IDs)
-    return q, q
+    return ens_to_symbol, symbol_to_ens
 
 
 # -----------------------------------------------------------------------------
-# Robust table readers + normalisation
+# Robust DEG table loading + normalisation
 # -----------------------------------------------------------------------------
 
-_GENE_COL_CANDIDATES = ["Gene", "gene", "gene_id", "GeneID", "ensg", "ensembl", "ensembl_id", "Gene stable ID", "Gene stable id"]
 _LOGFC_COL_CANDIDATES = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
 _PVAL_COL_CANDIDATES = ["pvalue", "pval", "PValue", "p_value"]
 _PADJ_COL_CANDIDATES = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
@@ -301,59 +307,88 @@ def _pick_col(cols: List[str], candidates: List[str]) -> Optional[str]:
     return None
 
 
-def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
-    try:
-        if path.suffix.lower() == ".csv":
-            df = pd.read_csv(path)
-            return df, None
-        if path.suffix.lower() == ".parquet":
-            df = pd.read_parquet(path)
-            return df, None
-        return None, f"Unsupported file type: {path.name}"
-    except Exception as e:
-        if path.suffix.lower() == ".parquet":
+def _read_parquet_or_csv(preferred: Dict[str, Path]) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    Try parquet first (if present), otherwise csv.
+    If parquet read fails, fall back to csv (if present) before emitting an error.
+    """
+    # try parquet
+    if "parquet" in preferred:
+        try:
+            return pd.read_parquet(preferred["parquet"]), None
+        except Exception as e:
+            # fall back to csv if available
+            if "csv" in preferred:
+                try:
+                    return pd.read_csv(preferred["csv"]), None
+                except Exception as e2:
+                    return None, f"Could not read parquet or csv for {preferred['parquet'].name}: {type(e).__name__}: {e}; csv error: {type(e2).__name__}: {e2}"
             msg = (
-                f"Could not read parquet file: {path.name}\n\n"
+                f"Could not read parquet file: {preferred['parquet'].name}\n\n"
                 f"Underlying error: {type(e).__name__}: {e}\n\n"
-                "Fix: add a parquet engine to your environment, for example include this in requirements.txt:\n"
+                "Fix: add a parquet engine to your environment (requirements.txt), e.g.:\n"
                 "  pyarrow\n"
                 "Then redeploy/restart the app."
             )
             return None, msg
-        return None, f"Could not read {path.name}: {type(e).__name__}: {e}"
+
+    # csv only
+    if "csv" in preferred:
+        try:
+            return pd.read_csv(preferred["csv"]), None
+        except Exception as e:
+            return None, f"Could not read csv file: {preferred['csv'].name}: {type(e).__name__}: {e}"
+
+    return None, "No readable file found (expected parquet or csv)."
 
 
-def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
+def normalise_deg_table(df: pd.DataFrame, ens_to_symbol: Dict[str, str]) -> pd.DataFrame:
     """
     Standardises key columns to:
-      Gene, logFC, pval, padj, stat, baseMean
-    Leaves any other columns intact.
+      Ensembl, Gene (display), logFC, pval, padj, stat, baseMean
+    Leaves other columns intact.
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
-    cols = list(df.columns)
+    out = df.copy()
 
-    gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
+    # If "Gene" is the Ensembl ID column (most common), capture it.
+    gene_col = None
+    cols = list(out.columns)
+    lower_map = {c.lower(): c for c in cols}
+    if "gene" in lower_map:
+        gene_col = lower_map["gene"]
+
+    # if Ensembl IDs are in the index
+    if gene_col is None and out.index.name and out.index.name.lower() == "gene":
+        out = out.reset_index()
+        cols = list(out.columns)
+        lower_map = {c.lower(): c for c in cols}
+        gene_col = lower_map.get("gene")
+
+    if gene_col is not None:
+        out["Ensembl"] = out[gene_col].map(_normalise_ensembl_id)
+    else:
+        # if we can't find a gene column, bail early
+        return pd.DataFrame()
+
+    # map to symbol for display
+    def _disp(e: str) -> str:
+        sym = ens_to_symbol.get(e, "")
+        return sym if sym else e
+
+    out["Gene"] = out["Ensembl"].map(_disp).astype(str).str.strip().str.upper()
+
+    # rename metrics
+    cols = list(out.columns)
     logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
     pval_col = _pick_col(cols, _PVAL_COL_CANDIDATES)
     padj_col = _pick_col(cols, _PADJ_COL_CANDIDATES)
     stat_col = _pick_col(cols, _STAT_COL_CANDIDATES)
     base_col = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
 
-    out = df.copy()
-
-    # If gene is in the index, bring it back
-    if gene_col is None and out.index.name:
-        idx_name = str(out.index.name).lower()
-        if idx_name in [c.lower() for c in _GENE_COL_CANDIDATES]:
-            out = out.reset_index()
-            cols = list(out.columns)
-            gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
-
     ren = {}
-    if gene_col is not None:
-        ren[gene_col] = "Gene"
     if logfc_col is not None:
         ren[logfc_col] = "logFC"
     if pval_col is not None:
@@ -367,9 +402,6 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     out = out.rename(columns=ren)
 
-    if "Gene" in out.columns:
-        out["Gene"] = out["Gene"].astype(str).str.strip().str.upper()
-
     for c in ["logFC", "pval", "padj", "stat", "baseMean"]:
         if c in out.columns:
             out[c] = pd.to_numeric(out[c], errors="coerce")
@@ -377,121 +409,149 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str]]:
+def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, List[str]]]:
     """
-    Loads all discovered DEG tables.
-    Returns (tables, errors, symbol_to_ensg, ensg_to_symbol).
+    Load all discovered DEG tables.
+
+    Returns:
+      tables: {InVitroKey: normalised_df}
+      errors: list[str]
+      ens_to_symbol, symbol_to_ens: mapping dicts
     """
+    ens_to_symbol, symbol_to_ens = load_gene_mapping()
+
     files = discover_invitro_deg_files()
     tables: Dict[InVitroKey, pd.DataFrame] = {}
     errors: List[str] = []
 
-    symbol_to_ensg, ensg_to_symbol = _load_gene_mapping()
-
-    for key, fp in files.items():
-        df, err = _read_deg_file_safe(fp)
+    for key, paths in files.items():
+        df, err = _read_parquet_or_csv(paths)
         if err is not None:
             errors.append(err)
             continue
-        tables[key] = normalise_deg_table(df)
-
-    return tables, errors, symbol_to_ensg, ensg_to_symbol
-
-
-# -----------------------------------------------------------------------------
-# Gene-centric summaries + direction consensus between lines
-# -----------------------------------------------------------------------------
-
-def _get_gene_row(df: pd.DataFrame, gene_id: str) -> Optional[pd.Series]:
-    if df is None or df.empty or "Gene" not in df.columns:
-        return None
-    g = str(gene_id).strip().upper()
-    hit = df.loc[df["Gene"] == g]
-    if hit.empty:
-        return None
-    return hit.iloc[0]
-
-
-def gene_summary_table(
-    tables: Dict[InVitroKey, pd.DataFrame],
-    query: str,
-    symbol_to_ensg: Dict[str, str],
-    ensg_to_symbol: Dict[str, str],
-) -> pd.DataFrame:
-    """
-    Per-dataset summary for the queried gene.
-    Query can be a symbol or Ensembl ID.
-    """
-    gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
-    if not gene_id:
-        return pd.DataFrame()
-
-    rows = []
-    for k, df in tables.items():
-        r = _get_gene_row(df, gene_id)
-        label = CONTRAST_LABELS.get(k.contrast, k.contrast)
-
-        if r is None:
-            rows.append({
-                "iHeps line": k.line,
-                "Contrast": label,
-                "Gene ID": gene_id,
-                "Gene symbol": (resolved_symbol or ensg_to_symbol.get(gene_id)),
-                "logFC": np.nan,
-                "padj": np.nan,
-                "pval": np.nan,
-                "Direction": "missing",
-            })
+        norm = normalise_deg_table(df, ens_to_symbol)
+        if norm is None or norm.empty:
+            errors.append(f"Loaded {list(paths.values())[0].name} but normalisation produced an empty table (missing 'Gene' column?).")
             continue
+        tables[key] = norm
 
-        logfc = float(r["logFC"]) if "logFC" in r and pd.notna(r["logFC"]) else np.nan
-        padj = float(r["padj"]) if "padj" in r and pd.notna(r["padj"]) else np.nan
-        pval = float(r["pval"]) if "pval" in r and pd.notna(r["pval"]) else np.nan
+    return tables, errors, ens_to_symbol, symbol_to_ens
 
-        direction = (
-            "Up in model" if pd.notna(logfc) and logfc > 0
-            else "Down in model" if pd.notna(logfc) and logfc < 0
-            else "missing"
-        )
 
-        rows.append({
-            "iHeps line": k.line,
-            "Contrast": label,
-            "Gene ID": gene_id,
-            "Gene symbol": (resolved_symbol or ensg_to_symbol.get(gene_id)),
-            "logFC": logfc,
-            "padj": padj,
-            "pval": pval,
-            "Direction": direction,
-        })
+# -----------------------------------------------------------------------------
+# Gene lookup + summaries
+# -----------------------------------------------------------------------------
+
+def _resolve_query_to_ensembl(query: str, symbol_to_ens: Dict[str, List[str]]) -> List[str]:
+    q = str(query).strip().upper()
+    if not q:
+        return []
+    if q.startswith("ENSG"):
+        return [_normalise_ensembl_id(q)]
+    if symbol_to_ens and q in symbol_to_ens:
+        return [_normalise_ensembl_id(x) for x in symbol_to_ens[q]]
+    return []
+
+
+def _get_gene_row(df: pd.DataFrame, query: str, symbol_to_ens: Dict[str, List[str]]) -> Optional[pd.Series]:
+    if df is None or df.empty:
+        return None
+    ens_hits = _resolve_query_to_ensembl(query, symbol_to_ens)
+
+    if ens_hits and "Ensembl" in df.columns:
+        hit = df.loc[df["Ensembl"].isin(ens_hits)]
+        if not hit.empty:
+            return hit.iloc[0]
+
+    # fall back to display name matching (could be Ensembl if unmapped)
+    if "Gene" in df.columns:
+        q = str(query).strip().upper()
+        hit2 = df.loc[df["Gene"] == q]
+        if not hit2.empty:
+            return hit2.iloc[0]
+
+    return None
+
+
+def gene_summary_table(tables: Dict[InVitroKey, pd.DataFrame], query: str,
+                       symbol_to_ens: Dict[str, List[str]], ens_to_symbol: Dict[str, str]) -> pd.DataFrame:
+    """
+    6-row summary for the selected query (symbol or Ensembl):
+      line x contrast, with logFC/padj/pval + direction
+    """
+    rows = []
+
+    # decide "display gene" for header
+    q = str(query).strip().upper()
+    ens_resolved = _resolve_query_to_ensembl(q, symbol_to_ens)
+    display_gene = q
+    if ens_resolved:
+        # if user typed ENSG, show symbol if available
+        sym = ens_to_symbol.get(ens_resolved[0], "")
+        display_gene = sym if sym else ens_resolved[0]
+
+    for contrast in _CONTRAST_ORDER:
+        for line in _LINE_ORDER:
+            k = InVitroKey(line=line, contrast=contrast)
+            df = tables.get(k)
+            r = _get_gene_row(df, q, symbol_to_ens) if df is not None else None
+
+            if r is None:
+                rows.append({
+                    "Contrast": _CONTRAST_LABELS.get(contrast, contrast),
+                    "iHeps line": line,
+                    "Gene": display_gene,
+                    "Ensembl": (ens_resolved[0] if ens_resolved else np.nan),
+                    "logFC": np.nan,
+                    "padj": np.nan,
+                    "pval": np.nan,
+                    "Direction": "missing",
+                })
+                continue
+
+            logfc = float(r["logFC"]) if "logFC" in r and pd.notna(r["logFC"]) else np.nan
+            padj = float(r["padj"]) if "padj" in r and pd.notna(r["padj"]) else np.nan
+            pval = float(r["pval"]) if "pval" in r and pd.notna(r["pval"]) else np.nan
+            ensg = str(r["Ensembl"]) if "Ensembl" in r and pd.notna(r["Ensembl"]) else (ens_resolved[0] if ens_resolved else "")
+
+            direction = "Up in model" if pd.notna(logfc) and logfc > 0 else "Down in model" if pd.notna(logfc) and logfc < 0 else "missing"
+
+            rows.append({
+                "Contrast": _CONTRAST_LABELS.get(contrast, contrast),
+                "iHeps line": line,
+                "Gene": str(r.get("Gene", display_gene)),
+                "Ensembl": ensg,
+                "logFC": logfc,
+                "padj": padj,
+                "pval": pval,
+                "Direction": direction,
+            })
 
     out = pd.DataFrame(rows)
-    if out.empty:
-        return out
 
-    # Stable ordering: line then contrast order
-    contrast_order = [CONTRAST_LABELS[c] for c in CONTRAST_TOKENS]
-    out["__crank__"] = out["Contrast"].map(lambda x: contrast_order.index(x) if x in contrast_order else 999)
-    out = out.sort_values(["iHeps line", "__crank__"], ascending=[True, True]).drop(columns=["__crank__"])
+    # order nicely
+    out["__c_rank__"] = out["Contrast"].map({v: i for i, v in enumerate([_CONTRAST_LABELS[c] for c in _CONTRAST_ORDER])})
+    out["__l_rank__"] = out["iHeps line"].map({v: i for i, v in enumerate(_LINE_ORDER)})
+    out = out.sort_values(["__c_rank__", "__l_rank__"]).drop(columns=["__c_rank__", "__l_rank__"])
+
     return out
 
 
-def direction_consensus_by_contrast(summary_df: pd.DataFrame) -> pd.DataFrame:
+def gene_direction_consensus(summary_df: pd.DataFrame) -> pd.DataFrame:
     """
-    For each contrast, compare direction between 1b and 5a (even if non-significant).
-    Returns a small table: Contrast | Direction 1b | Direction 5a | Consensus
+    For the gene: per contrast, compare direction (sign of logFC) between 1b and 5a.
     """
     if summary_df is None or summary_df.empty:
         return pd.DataFrame()
 
-    need = {"iHeps line", "Contrast", "logFC"}
-    if not need.issubset(set(summary_df.columns)):
+    tmp = summary_df.copy()
+    # pivot by line
+    piv = tmp.pivot(index="Contrast", columns="iHeps line", values="logFC").reset_index()
+    if piv.empty:
         return pd.DataFrame()
 
-    df = summary_df.copy()
-
-    def _dir_from_logfc(x):
-        if pd.isna(x):
+    def _dir(x):
+        if x is None or (isinstance(x, float) and np.isnan(x)):
             return "missing"
         if float(x) > 0:
             return "Up"
@@ -499,41 +559,92 @@ def direction_consensus_by_contrast(summary_df: pd.DataFrame) -> pd.DataFrame:
             return "Down"
         return "0"
 
-    df["__dir__"] = df["logFC"].apply(_dir_from_logfc)
+    out = pd.DataFrame({
+        "Contrast": piv["Contrast"],
+        "logFC_1b": piv.get("1b"),
+        "logFC_5a": piv.get("5a"),
+    })
+    out["Direction_1b"] = out["logFC_1b"].apply(_dir)
+    out["Direction_5a"] = out["logFC_5a"].apply(_dir)
+    out["Agreement"] = np.where(
+        (out["Direction_1b"].isin(["Up", "Down"])) & (out["Direction_1b"] == out["Direction_5a"]),
+        "Yes",
+        np.where(out["Direction_1b"].eq("missing") | out["Direction_5a"].eq("missing"), "missing", "No")
+    )
 
-    piv = df.pivot_table(index="Contrast", columns="iHeps line", values="__dir__", aggfunc="first")
-    piv = piv.reset_index()
+    return out[["Contrast", "Direction_1b", "Direction_5a", "Agreement", "logFC_1b", "logFC_5a"]]
 
-    # Ensure columns exist
-    if "1b" not in piv.columns:
-        piv["1b"] = "missing"
-    if "5a" not in piv.columns:
-        piv["5a"] = "missing"
 
-    def _cons(r):
-        d1 = r.get("1b", "missing")
-        d2 = r.get("5a", "missing")
-        if d1 == "missing" or d2 == "missing":
-            return "missing"
-        if d1 == d2:
-            return f"Agree ({d1})"
-        return "Disagree"
+def contrast_global_direction_concordance(tables: Dict[InVitroKey, pd.DataFrame]) -> pd.DataFrame:
+    """
+    Genome-wide direction concordance between 1b and 5a for each contrast.
+    Uses all genes with non-missing logFC in both lines; significance is ignored.
+    """
+    rows = []
+    for contrast in _CONTRAST_ORDER:
+        k1 = InVitroKey(line="1b", contrast=contrast)
+        k2 = InVitroKey(line="5a", contrast=contrast)
+        d1 = tables.get(k1)
+        d2 = tables.get(k2)
+        if d1 is None or d2 is None or d1.empty or d2.empty:
+            rows.append({
+                "Contrast": _CONTRAST_LABELS.get(contrast, contrast),
+                "n_overlap": 0,
+                "n_compared": 0,
+                "agreement_pct": np.nan,
+                "note": "missing dataset(s)",
+            })
+            continue
 
-    piv["Consensus"] = piv.apply(_cons, axis=1)
-    piv = piv.rename(columns={"1b": "Direction 1b", "5a": "Direction 5a"})
-    # Contrast order
-    contrast_order = [CONTRAST_LABELS[c] for c in CONTRAST_TOKENS]
-    piv["__crank__"] = piv["Contrast"].map(lambda x: contrast_order.index(x) if x in contrast_order else 999)
-    piv = piv.sort_values("__crank__").drop(columns=["__crank__"])
-    return piv
+        m = d1[["Ensembl", "logFC"]].merge(d2[["Ensembl", "logFC"]], on="Ensembl", suffixes=("_1b", "_5a"))
+        m = m.dropna(subset=["logFC_1b", "logFC_5a"])
+        if m.empty:
+            rows.append({
+                "Contrast": _CONTRAST_LABELS.get(contrast, contrast),
+                "n_overlap": int(d1["Ensembl"].nunique()),
+                "n_compared": 0,
+                "agreement_pct": np.nan,
+                "note": "no comparable genes (missing logFC?)",
+            })
+            continue
+
+        # compare sign only, treat 0 as neither
+        s1 = np.sign(m["logFC_1b"].astype(float))
+        s2 = np.sign(m["logFC_5a"].astype(float))
+        comp = (s1 != 0) & (s2 != 0)
+        m2 = m.loc[comp].copy()
+
+        if m2.empty:
+            rows.append({
+                "Contrast": _CONTRAST_LABELS.get(contrast, contrast),
+                "n_overlap": int(m.shape[0]),
+                "n_compared": 0,
+                "agreement_pct": np.nan,
+                "note": "all zeros or missing",
+            })
+            continue
+
+        agree = (np.sign(m2["logFC_1b"]) == np.sign(m2["logFC_5a"])).mean() * 100.0
+        rows.append({
+            "Contrast": _CONTRAST_LABELS.get(contrast, contrast),
+            "n_overlap": int(m.shape[0]),
+            "n_compared": int(m2.shape[0]),
+            "agreement_pct": float(agree),
+            "note": "",
+        })
+
+    out = pd.DataFrame(rows)
+    return out
 
 
 # -----------------------------------------------------------------------------
 # Plots
 # -----------------------------------------------------------------------------
 
-def make_gene_logfc_heatmap(summary_df: pd.DataFrame, label: str) -> Optional[go.Figure]:
-    if summary_df is None or summary_df.empty or "logFC" not in summary_df.columns:
+def make_gene_logfc_heatmap(summary_df: pd.DataFrame, gene_label: str) -> Optional[go.Figure]:
+    if summary_df is None or summary_df.empty:
+        return None
+    if "logFC" not in summary_df.columns:
         return None
 
     mat = summary_df.pivot(index="iHeps line", columns="Contrast", values="logFC")
@@ -548,34 +659,37 @@ def make_gene_logfc_heatmap(summary_df: pd.DataFrame, label: str) -> Optional[go
         hovertemplate="Line: %{y}<br>Contrast: %{x}<br>logFC: %{z:.3f}<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text=f"{label} logFC across iHeps lines and contrasts", font=dict(size=14)),
+        title=dict(text=f"{gene_label} logFC across iHeps lines and contrasts", font=dict(size=14)),
         height=280,
         margin=dict(l=40, r=20, t=60, b=40),
     )
     return fig
 
 
-def make_gene_dotplot(summary_df: pd.DataFrame, label: str) -> Optional[go.Figure]:
+def make_gene_dotplot(summary_df: pd.DataFrame, gene_label: str) -> Optional[go.Figure]:
     if summary_df is None or summary_df.empty:
         return None
-    if "padj" not in summary_df.columns or "logFC" not in summary_df.columns:
+    if "logFC" not in summary_df.columns:
         return None
 
     df = summary_df.copy()
 
     def neglog10(x):
         try:
-            if x is None or (isinstance(x, float) and math.isnan(x)) or float(x) <= 0:
+            if x is None or (isinstance(x, float) and math.isnan(x)) or x <= 0:
                 return np.nan
             return -math.log10(float(x))
         except Exception:
             return np.nan
 
-    df["neglog10_padj"] = df["padj"].apply(neglog10)
+    if "padj" in df.columns:
+        df["neglog10_padj"] = df["padj"].apply(neglog10)
+    else:
+        df["neglog10_padj"] = np.nan
 
     fig = go.Figure()
     for _, r in df.iterrows():
-        sz = r["neglog10_padj"]
+        sz = r.get("neglog10_padj", np.nan)
         size = 8 if pd.isna(sz) else float(min(20, 6 + 3.0 * sz))
         fig.add_trace(go.Scatter(
             x=[r["Contrast"]],
@@ -583,35 +697,29 @@ def make_gene_dotplot(summary_df: pd.DataFrame, label: str) -> Optional[go.Figur
             mode="markers",
             marker=dict(size=size, line=dict(width=1, color="white")),
             hovertemplate=(
-                f"Line: {r['iHeps line']}<br>"
-                f"Contrast: {r['Contrast']}<br>"
-                f"logFC: {r['logFC'] if pd.notna(r['logFC']) else 'missing'}<br>"
-                f"padj: {r['padj'] if pd.notna(r['padj']) else 'missing'}<extra></extra>"
+                "Line: " + str(r["iHeps line"]) + "<br>"
+                "Contrast: " + str(r["Contrast"]) + "<br>"
+                "logFC: " + (f"{r['logFC']:.3f}" if pd.notna(r["logFC"]) else "missing") + "<br>"
+                "padj: " + (f"{r['padj']:.3g}" if ("padj" in r and pd.notna(r["padj"])) else "missing") +
+                "<extra></extra>"
             ),
             showlegend=False,
         ))
 
     fig.add_hline(y=0, line_dash="dash", line_width=1)
     fig.update_layout(
-        title=dict(text=f"{label} effect size (logFC) with significance (dot size)", font=dict(size=14)),
+        title=dict(text=f"{gene_label} effect size (logFC) with significance (dot size)", font=dict(size=14)),
         xaxis_title="Contrast",
         yaxis_title="logFC (model vs HCM)",
         height=360,
-        margin=dict(l=40, r=20, t=60, b=80),
+        margin=dict(l=40, r=20, t=60, b=90),
     )
     return fig
 
 
-def make_volcano(
-    df: pd.DataFrame,
-    title: str,
-    highlight_gene_id: Optional[str] = None,
-    highlight_label: Optional[str] = None,
-    ensg_to_symbol: Optional[Dict[str, str]] = None,
-    fdr_thresh: float = 0.05,
-    abs_logfc_thresh: float = 1.0,
-) -> Optional[go.Figure]:
-    if df is None or df.empty or "logFC" not in df.columns or "Gene" not in df.columns:
+def make_volcano(df: pd.DataFrame, title: str, highlight_gene: Optional[str] = None,
+                fdr_thresh: float = 0.05, abs_logfc_thresh: float = 1.0) -> Optional[go.Figure]:
+    if df is None or df.empty or "logFC" not in df.columns:
         return None
 
     tmp = df.copy()
@@ -630,50 +738,46 @@ def make_volcano(
     with np.errstate(divide="ignore", invalid="ignore"):
         tmp["neglog10p"] = -np.log10(p)
 
-    # Optional symbol column for hover
-    sym = None
-    if ensg_to_symbol:
-        sym = tmp["Gene"].map(lambda g: ensg_to_symbol.get(str(g).upper(), ""))
-    tmp["Symbol"] = sym if sym is not None else ""
-
     fig = go.Figure()
     fig.add_trace(go.Scattergl(
         x=tmp["logFC"],
         y=tmp["neglog10p"],
         mode="markers",
         marker=dict(size=4),
-        text=tmp["Symbol"].where(tmp["Symbol"].astype(str) != "", tmp["Gene"]),
+        # IMPORTANT: do NOT use f-strings here; Plotly placeholders look like %{y:.3f}
         hovertemplate=(
             "Gene: %{text}<br>"
             "logFC: %{x:.3f}<br>"
-            f"{y_label}: %{y:.3f}<extra></extra>"
+            + y_label + ": %{y:.3f}<extra></extra>"
         ),
-        showlegend=False,
+        text=tmp["Gene"] if "Gene" in tmp.columns else (tmp["Ensembl"] if "Ensembl" in tmp.columns else None),
+        showlegend=False
     ))
 
+    # thresholds (visual)
     fig.add_vline(x=abs_logfc_thresh, line_dash="dash", line_width=1)
     fig.add_vline(x=-abs_logfc_thresh, line_dash="dash", line_width=1)
     if fdr_thresh and fdr_thresh > 0:
-        fig.add_hline(y=-math.log10(fdr_thresh), line_dash="dash", line_width=1)
+        fig.add_hline(y=-math.log10(float(fdr_thresh)), line_dash="dash", line_width=1)
 
-    if highlight_gene_id:
-        g = str(highlight_gene_id).strip().upper()
-        hit = tmp.loc[tmp["Gene"] == g]
+    if highlight_gene and "Gene" in tmp.columns:
+        g = str(highlight_gene).strip().upper()
+        # highlight by symbol OR Ensembl
+        hit = tmp.loc[(tmp["Gene"] == g) | (tmp.get("Ensembl", pd.Series("", index=tmp.index)) == _normalise_ensembl_id(g))]
         if not hit.empty:
-            label = highlight_label or (ensg_to_symbol.get(g) if ensg_to_symbol else g) or g
             fig.add_trace(go.Scatter(
                 x=hit["logFC"],
                 y=hit["neglog10p"],
                 mode="markers+text",
-                text=[label],
+                text=[hit.iloc[0]["Gene"]],
                 textposition="top center",
                 marker=dict(size=10),
                 hovertemplate=(
                     "Gene: %{text}<br>"
                     "logFC: %{x:.3f}<br>"
-                    f"{y_label}: %{y:.3f}<extra></extra>"
+                    + y_label + ": %{y:.3f}<extra></extra>"
                 ),
-                showlegend=False,
+                showlegend=False
             ))
 
     fig.update_layout(
@@ -681,31 +785,23 @@ def make_volcano(
         xaxis_title="logFC (model vs HCM)",
         yaxis_title=y_label,
         height=420,
-        margin=dict(l=50, r=20, t=60, b=50),
+        margin=dict(l=50, r=20, t=60, b=50)
     )
     return fig
 
 
-def top_deg_tables(
-    df: pd.DataFrame,
-    ensg_to_symbol: Optional[Dict[str, str]] = None,
-    n: int = 25,
-    padj_thresh: float = 0.05
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if df is None or df.empty or "logFC" not in df.columns or "Gene" not in df.columns:
+def top_deg_tables(df: pd.DataFrame, n: int = 25, padj_thresh: float = 0.05) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if df is None or df.empty or "logFC" not in df.columns:
         return pd.DataFrame(), pd.DataFrame()
 
     tmp = df.copy()
     if "padj" in tmp.columns:
         tmp = tmp.loc[tmp["padj"].isna() | (tmp["padj"] <= float(padj_thresh))].copy()
 
-    if ensg_to_symbol:
-        tmp.insert(1, "Gene symbol", tmp["Gene"].map(lambda g: ensg_to_symbol.get(str(g).upper(), "")))
-
     up = tmp.sort_values("logFC", ascending=False).head(int(n)).copy()
     down = tmp.sort_values("logFC", ascending=True).head(int(n)).copy()
 
-    keep = [c for c in ["Gene", "Gene symbol", "logFC", "padj", "pval", "stat", "baseMean"] if c in tmp.columns]
+    keep = [c for c in ["Gene", "Ensembl", "logFC", "padj", "pval", "stat", "baseMean"] if c in tmp.columns]
     return up[keep] if keep else up, down[keep] if keep else down
 
 
@@ -717,128 +813,80 @@ def render_invitro_tab(query: str) -> None:
     """
     Streamlit rendering for the in vitro model tab.
     """
-    import streamlit as st  # local import keeps this module usable outside Streamlit
-
-    root = _find_stem_cell_model_dir()
-    if root is None:
-        st.warning("No in vitro data folder found. Expected: meta-liver-data/stem_cell_model/")
-        return
+    import streamlit as st  # local import keeps module usable outside Streamlit
 
     files = discover_invitro_deg_files()
     if not files:
-        st.warning(
-            "No in vitro DEG files were found in stem_cell_model/.\n\n"
-            "Accepted names include:\n"
-            "  processed_degs_1b_OAPAvsHCM.parquet\n"
-            "  OAPAvsHCM_1b.parquet\n"
-            "and the same with .csv."
-        )
-        st.caption(f"Looking in: {root}")
-        # Show what's actually there to help debug
-        try:
-            present = sorted([p.name for p in root.iterdir() if p.is_file()])
-            if present:
-                st.caption("Files detected in stem_cell_model/:")
-                st.code("\n".join(present))
-        except Exception:
-            pass
+        st.warning("No in vitro DEG files were found. Expected: data_dir/stem_cell_model/ with OAPAvsHCM_1b.(parquet|csv) etc.")
         return
 
-    tables, errors, symbol_to_ensg, ensg_to_symbol = load_all_invitro_deg_tables()
+    tables, errors, ens_to_symbol, symbol_to_ens = load_all_invitro_deg_tables()
     if errors:
         st.error(errors[0])
         if len(errors) > 1:
-            st.info("More read errors were encountered for other files as well.")
+            st.caption(f"(+{len(errors)-1} more load/parse errors)")
         return
 
     if not tables:
         st.warning("In vitro DEG files were found, but none could be loaded.")
         return
 
-    # Quick availability panel
-    st.markdown("### Dataset availability")
-    avail_rows = []
-    for c in CONTRAST_TOKENS:
-        for l in LINE_TOKENS:
-            hit = [k for k in files.keys() if k.contrast == c and k.line == l]
-            avail_rows.append({
-                "iHeps line": l,
-                "Contrast": CONTRAST_LABELS[c],
-                "File": files[hit[0]].name if hit else "missing",
-            })
-    st.dataframe(pd.DataFrame(avail_rows), use_container_width=True, hide_index=True)
-
-    st.markdown("---")
+    st.markdown("### In vitro (stem-cell-derived) MASLD model")
+    st.caption("Two iHeps lines (1b, 5a) under three perturbations vs HCM. PBMCs were not sequenced.")
 
     view = st.radio("Choose view", ["Gene summary", "Volcano explorer"], index=0, horizontal=True)
 
+    q = str(query).strip().upper()
     if view == "Gene summary":
-        st.markdown("### Gene summary")
-        st.caption("Direction consensus is computed from logFC sign between 1b and 5a for the same contrast (significance not required).")
+        # Summary table
+        summary = gene_summary_table(tables, q, symbol_to_ens, ens_to_symbol)
 
-        summ = gene_summary_table(tables, query, symbol_to_ensg, ensg_to_symbol)
-        if summ is None or summ.empty:
-            st.warning("No rows could be generated for this query.")
-            return
+        # pick label for titles
+        gene_label = summary["Gene"].dropna().iloc[0] if not summary.empty else q
 
-        gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
-        label = resolved_symbol or ensg_to_symbol.get(gene_id) or str(query).strip().upper()
-        st.dataframe(summ, use_container_width=True, hide_index=True)
+        st.markdown(f"#### {gene_label}")
+        st.dataframe(summary, use_container_width=True, hide_index=True)
 
-        cons = direction_consensus_by_contrast(summ)
-        if cons is not None and not cons.empty:
-            st.markdown("### Direction consensus between lines (1b vs 5a)")
-            st.dataframe(cons, use_container_width=True, hide_index=True)
+        st.markdown("#### Direction agreement between 1b and 5a (per contrast)")
+        cons = gene_direction_consensus(summary)
+        st.dataframe(cons, use_container_width=True, hide_index=True)
 
-        fig_hm = make_gene_logfc_heatmap(summ, label)
+        st.markdown("#### Genome-wide direction concordance between 1b and 5a (per contrast)")
+        global_cons = contrast_global_direction_concordance(tables)
+        st.dataframe(global_cons, use_container_width=True, hide_index=True)
+
+        fig_hm = make_gene_logfc_heatmap(summary, gene_label)
         if fig_hm is not None:
             st.plotly_chart(fig_hm, use_container_width=True)
 
-        fig_dot = make_gene_dotplot(summ, label)
+        fig_dot = make_gene_dotplot(summary, gene_label)
         if fig_dot is not None:
             st.plotly_chart(fig_dot, use_container_width=True)
 
-        st.markdown("### Contrast notes")
-        for lbl, expl in CONTRAST_HELP.items():
+        st.markdown("#### Contrast notes")
+        for lbl, expl in _CONTRAST_HELP.items():
             st.caption(f"{lbl}: {expl}")
 
         return
 
     # Volcano explorer
-    st.markdown("### Volcano explorer")
-    lines = sorted({k.line for k in tables.keys()})
-    contrasts = [c for c in CONTRAST_TOKENS if any(k.contrast == c for k in tables.keys())]
+    st.markdown("#### Volcano explorer")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        line_sel = st.selectbox("iHeps line", options=lines, index=0)
-    with c2:
-        contrast_sel = st.selectbox("Contrast", options=[CONTRAST_LABELS[c] for c in contrasts], index=0)
+    # build options in the exact desired order
+    options = []
+    for contrast in _CONTRAST_ORDER:
+        for line in _LINE_ORDER:
+            options.append((contrast, line))
 
-    contrast_token = None
-    for c in contrasts:
-        if CONTRAST_LABELS[c] == contrast_sel:
-            contrast_token = c
-            break
-    if contrast_token is None:
-        contrast_token = contrasts[0]
+    labels = [f"{c}_{l}" for c, l in options]
+    sel = st.selectbox("Dataset", options=list(range(len(labels))), format_func=lambda i: labels[i], index=0)
+    contrast_token, line_sel = options[int(sel)]
 
-    key = None
-    for k in tables.keys():
-        if k.line == line_sel and k.contrast == contrast_token:
-            key = k
-            break
-    if key is None:
-        st.warning("Selected dataset is missing.")
-        return
-
+    key = InVitroKey(line=line_sel, contrast=contrast_token)
     df = tables.get(key)
     if df is None or df.empty:
-        st.warning("Selected dataset is empty.")
+        st.warning("Selected dataset is empty or missing.")
         return
-
-    gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
-    label = resolved_symbol or ensg_to_symbol.get(gene_id) or str(query).strip().upper()
 
     t1, t2, t3 = st.columns(3)
     with t1:
@@ -848,21 +896,13 @@ def render_invitro_tab(query: str) -> None:
     with t3:
         topn = st.number_input("Top N genes (tables)", min_value=5, max_value=200, value=25, step=5)
 
-    title = f"{line_sel} — {CONTRAST_LABELS.get(contrast_token, contrast_token)}"
-    fig = make_volcano(
-        df,
-        title=title,
-        highlight_gene_id=gene_id,
-        highlight_label=label,
-        ensg_to_symbol=ensg_to_symbol,
-        fdr_thresh=float(fdr),
-        abs_logfc_thresh=float(lfc_thr),
-    )
+    title = f"{line_sel} — {_CONTRAST_LABELS.get(contrast_token, contrast_token)}"
+    fig = make_volcano(df, title=title, highlight_gene=q, fdr_thresh=float(fdr), abs_logfc_thresh=float(lfc_thr))
     if fig is not None:
         st.plotly_chart(fig, use_container_width=True)
 
-    up, down = top_deg_tables(df, ensg_to_symbol=ensg_to_symbol, n=int(topn), padj_thresh=float(fdr))
-    st.markdown("### Top genes (FDR-filtered where available)")
+    up, down = top_deg_tables(df, n=int(topn), padj_thresh=float(fdr))
+    st.markdown("#### Top genes (FDR-filtered where available)")
     c_up, c_down = st.columns(2)
     with c_up:
         st.markdown("Upregulated")
