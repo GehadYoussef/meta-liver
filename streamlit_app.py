@@ -18,7 +18,8 @@ from kg_analysis import (
 )
 from wgcna_ppi_analysis import (
     load_wgcna_module_data, get_gene_module, get_module_genes,
-    get_coexpressed_partners, find_ppi_interactors, get_network_stats
+    get_coexpressed_partners, find_ppi_interactors, get_network_stats,
+    load_wcgna_mod_trait_cor, load_wcgna_mod_trait_pval, load_wcgna_pathways
 )
 
 # -----------------------------------------------------------------------------
@@ -56,11 +57,16 @@ def load_all_data():
     kg_data = load_kg_data()
     wgcna_module_data = load_wgcna_module_data()
     ppi_data = load_ppi_data()
-    return single_omics, kg_data, wgcna_module_data, ppi_data
+
+    wcgna_cor = load_wcgna_mod_trait_cor()
+    wcgna_pval = load_wcgna_mod_trait_pval()
+    wcgna_pathways = load_wcgna_pathways()
+
+    return single_omics, kg_data, wgcna_module_data, ppi_data, wcgna_cor, wcgna_pval, wcgna_pathways
 
 
 try:
-    single_omics_data, kg_data, wgcna_module_data, ppi_data = load_all_data()
+    single_omics_data, kg_data, wgcna_module_data, ppi_data, wcgna_cor, wcgna_pval, wcgna_pathways = load_all_data()
     data_loaded = True
 except Exception as e:
     st.error(f"Error loading data: {e}")
@@ -69,6 +75,9 @@ except Exception as e:
     kg_data = {}
     wgcna_module_data = {}
     ppi_data = {}
+    wcgna_cor = pd.DataFrame()
+    wcgna_pval = pd.DataFrame()
+    wcgna_pathways = {}
 
 
 # =============================================================================
@@ -138,7 +147,6 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
 
     fig = go.Figure()
 
-    # stems
     for m in vals:
         fig.add_trace(go.Scatter(
             x=[0.5, m[auc_key]],
@@ -149,17 +157,13 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
             hoverinfo="skip"
         ))
 
-    # points
     for m in vals:
         style = _marker_style(m.get("direction"))
         lfc = m.get("lfc")
         size = 10 + abs(lfc if lfc is not None else 0.0) * 1.5
         size = float(min(size, 16))
 
-        hover = (
-            f"<b>{m['study']}</b>"
-            f"<br>{auc_key}: {m[auc_key]:.3f}"
-        )
+        hover = f"<b>{m['study']}</b><br>{auc_key}: {m[auc_key]:.3f}"
         if m.get("auc_raw") is not None:
             hover += f"<br>AUC_raw: {m['auc_raw']:.3f}"
         if m.get("auc_disc") is not None:
@@ -360,7 +364,6 @@ def _prepare_cluster_table(df: pd.DataFrame, sort_key: str, top_n: int) -> pd.Da
 
     tmp = df.copy()
 
-    # Add numeric helpers for robust sorting (the kg_analysis tables are formatted strings)
     pct_cols = ["Composite %ile", "PR %ile", "Bet %ile", "Eigen %ile"]
     num_cols = ["PageRank", "Betweenness", "Eigen"]
     for c in pct_cols:
@@ -383,14 +386,56 @@ def _prepare_cluster_table(df: pd.DataFrame, sort_key: str, top_n: int) -> pd.Da
 
     col = sort_map.get(sort_key, sort_key)
     if col in tmp.columns:
-        # Descending for metrics, ascending for Name
         asc = True if sort_key == "Name" else False
         tmp = tmp.sort_values(col, ascending=asc, na_position="last")
 
-    # Remove helper cols before display
     tmp = tmp.head(int(top_n)).copy()
     tmp = tmp[[c for c in tmp.columns if not c.startswith("__")]]
     return tmp
+
+
+# =============================================================================
+# WGCNA DISPLAY HELPERS (MODULE–TRAIT + PATHWAYS)
+# =============================================================================
+
+def _match_module_row(df: pd.DataFrame, module: str) -> str | None:
+    if df is None or df.empty:
+        return None
+    m = str(module).strip()
+    candidates = [m, m.lower(), m.upper(), f"ME{m}", f"ME{m.lower()}", f"ME{m.upper()}"]
+    for c in candidates:
+        if c in df.index:
+            return c
+    idx_lower = {str(i).lower(): i for i in df.index}
+    for c in candidates:
+        key = str(c).lower()
+        if key in idx_lower:
+            return idx_lower[key]
+    return None
+
+
+def _module_trait_table(module_name: str, cor_df: pd.DataFrame, pval_df: pd.DataFrame) -> pd.DataFrame | None:
+    if cor_df is None or cor_df.empty:
+        return None
+
+    row_key = _match_module_row(cor_df, module_name)
+    if row_key is None:
+        return None
+
+    cor_row = cor_df.loc[row_key].copy()
+    out = cor_row.reset_index()
+    out.columns = ["Trait", "Correlation"]
+
+    if pval_df is not None and not pval_df.empty:
+        p_key = _match_module_row(pval_df, module_name)
+        if p_key is not None:
+            p_row = pval_df.loc[p_key].reset_index()
+            p_row.columns = ["Trait", "P-value"]
+            out = out.merge(p_row, on="Trait", how="left")
+
+    out["__abs_corr__"] = pd.to_numeric(out["Correlation"], errors="coerce").abs()
+    out = out.sort_values("__abs_corr__", ascending=False).drop(columns=["__abs_corr__"])
+    return out
 
 
 # =============================================================================
@@ -400,7 +445,6 @@ def _prepare_cluster_table(df: pd.DataFrame, sort_key: str, top_n: int) -> pd.Da
 st.sidebar.markdown("## 🔬 Meta Liver")
 search_query = st.sidebar.text_input("Search gene:", placeholder="e.g., SAA1, TP53, IL6").strip().upper()
 
-# Debug: confirm which single_omics_analysis.py is actually being imported
 st.sidebar.caption(f"single_omics_analysis loaded from: {getattr(soa, '__file__', 'unknown')}")
 
 if data_loaded:
@@ -421,6 +465,21 @@ if data_loaded:
         st.sidebar.success(f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)")
     else:
         st.sidebar.warning("⚠ WGCNA modules not available")
+
+    if isinstance(wcgna_cor, pd.DataFrame) and not wcgna_cor.empty:
+        st.sidebar.success("✓ WGCNA moduleTraitCor loaded")
+    else:
+        st.sidebar.warning("⚠ moduleTraitCor not available")
+
+    if isinstance(wcgna_pval, pd.DataFrame) and not wcgna_pval.empty:
+        st.sidebar.success("✓ WGCNA moduleTraitPvalue loaded")
+    else:
+        st.sidebar.warning("⚠ moduleTraitPvalue not available")
+
+    if isinstance(wcgna_pathways, dict) and len(wcgna_pathways) > 0:
+        st.sidebar.success(f"✓ WGCNA pathways loaded ({len(wcgna_pathways)} modules)")
+    else:
+        st.sidebar.warning("⚠ WGCNA pathways not available")
 
     if ppi_data:
         st.sidebar.success("✓ PPI networks loaded")
@@ -456,7 +515,6 @@ else:
     if not single_omics_data:
         st.error("No studies data found!")
     else:
-        # Always use the module's scoring logic (no duplicated scoring logic here)
         consistency = soa.compute_consistency_score(search_query, single_omics_data)
 
         if consistency is None:
@@ -493,7 +551,6 @@ else:
                     "AUC-disc IQR": "Interquartile range of AUC-disc across studies (lower = more stable).",
                 }
 
-                # Headline metrics
                 col1, col2, col3, col4 = st.columns(4)
 
                 with col1:
@@ -516,7 +573,6 @@ else:
                 st.info(f"📊 **{consistency['interpretation']}**")
                 st.markdown("---")
 
-                # Score components shown directly (no pull-down)
                 c1, c2, c3, c4 = st.columns(4)
 
                 with c1:
@@ -537,10 +593,8 @@ else:
 
                 st.markdown("---")
 
-                # Diagnostics (useful for debugging)
                 d1, d2, d3 = st.columns(3)
 
-                # AUC-disc IQR (if not returned, compute quickly from values)
                 auc_disc_vals = []
                 try:
                     auc_disc_vals = [max(a, 1.0 - a) for a in consistency.get("auc_values", []) if a is not None and not np.isnan(a)]
@@ -565,7 +619,6 @@ else:
 
                 st.markdown("---")
 
-                # NEW PLOTS (raw + disc + distribution)
                 metrics = _collect_gene_metrics(search_query, single_omics_data)
 
                 left, right = st.columns(2)
@@ -646,7 +699,6 @@ else:
                     if kg_info:
                         cluster_id = kg_info.get("cluster", None)
 
-                        # Percentile-first headline (more interpretable than raw scales)
                         h1, h2, h3, h4 = st.columns(4)
                         with h1:
                             st.metric("Cluster", "N/A" if cluster_id is None else str(cluster_id))
@@ -665,7 +717,6 @@ else:
                             st.metric("Eigenvector", _fmt_pct(kg_info.get("eigen_percentile")))
                             st.caption(f"raw: {_fmt_num(kg_info.get('eigen'), decimals=6, sci_if_small=True)}")
                         with h6:
-                            # Helpful to avoid “is this whole graph?” confusion
                             st.caption("Percentiles computed across the MASH subgraph nodes table.")
 
                         st.markdown("---")
@@ -681,7 +732,6 @@ else:
                         )
                         st.info(f"📍 {interpretation}")
 
-                        # Keep min/max and raw details, but hide them by default (less overwhelming)
                         with st.expander("Show raw centrality values and subgraph ranges"):
                             st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
                             st.write(f"Composite score: {_fmt_num(kg_info.get('composite'), decimals=6)}")
@@ -725,7 +775,6 @@ else:
                         else:
                             st.markdown("**Nodes in Cluster**")
 
-                            # Cluster neighbour controls (useful for large clusters)
                             ctl1, ctl2 = st.columns(2)
                             with ctl1:
                                 top_n = st.slider("Show top N per table", 10, 300, 50, step=10, key="kg_top_n")
@@ -779,13 +828,31 @@ else:
                 if wgcna_module_data:
                     gene_module_info = get_gene_module(search_query, wgcna_module_data)
                     if gene_module_info:
-                        st.markdown(f"**Module Assignment:** {gene_module_info['module']}")
-                        module_genes = get_module_genes(gene_module_info["module"], wgcna_module_data)
+                        module_name = gene_module_info["module"]
+                        st.markdown(f"**Module Assignment:** {module_name}")
+
+                        module_genes = get_module_genes(module_name, wgcna_module_data)
                         if module_genes is not None:
-                            st.markdown(f"Top genes in module {gene_module_info['module']}:")
+                            st.markdown(f"Top genes in module {module_name}:")
                             st.dataframe(module_genes.head(15), use_container_width=True)
                         else:
-                            st.info(f"No other genes found in module {gene_module_info['module']}")
+                            st.info(f"No other genes found in module {module_name}")
+
+                        with st.expander("Module–trait relationships (WGCNA)"):
+                            mt = _module_trait_table(module_name, wcgna_cor, wcgna_pval)
+                            if mt is None or mt.empty:
+                                st.info("Module–trait tables not available for this module (check module index names).")
+                            else:
+                                st.dataframe(mt, use_container_width=True, hide_index=True)
+
+                        with st.expander("Pathways / enrichment (module)"):
+                            key = str(module_name).strip().lower()
+                            dfp = (wcgna_pathways or {}).get(key)
+                            if dfp is None or dfp.empty:
+                                st.info(f"No enrichment table found for module '{module_name}' in wcgna/pathways/")
+                            else:
+                                st.dataframe(dfp, use_container_width=True, hide_index=True)
+
                     else:
                         st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
                 else:

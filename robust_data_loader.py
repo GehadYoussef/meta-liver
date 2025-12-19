@@ -4,7 +4,7 @@ Robust Data Loader for Meta Liver
 Purpose
 - Auto-detects the data directory at runtime
 - Finds folders/files case-insensitively
-- Loads WGCNA, single-omics, knowledge graph, and PPI tables
+- Loads WGCNA (supports both 'wgcna' and 'wcgna'), single-omics, knowledge graph, and PPI tables
 - Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
 
 Usage (in Streamlit)
@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Dict
 import warnings
+import re
 import pandas as pd
 
 
@@ -81,6 +82,17 @@ def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
     return None
 
 
+def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
+    """
+    Support both folder spellings:
+    - preferred in your repo: 'wcgna'
+    - legacy/other exports: 'wgcna'
+    """
+    if data_dir is None:
+        return None
+    return find_subfolder(data_dir, "wcgna") or find_subfolder(data_dir, "wgcna")
+
+
 # ============================================================================
 # SAFE READERS
 # ============================================================================
@@ -116,7 +128,7 @@ def _load_first_existing(directory: Path, candidates: list[str], *, index_col: O
 
 
 # ============================================================================
-# WGCNA LOADERS
+# WGCNA LOADERS (supports wcgna/ and wgcna/)
 # ============================================================================
 
 def load_wgcna_expr() -> pd.DataFrame:
@@ -125,7 +137,7 @@ def load_wgcna_expr() -> pd.DataFrame:
     if data_dir is None:
         return pd.DataFrame()
 
-    wgcna_dir = find_subfolder(data_dir, "wgcna")
+    wgcna_dir = _find_wgcna_dir(data_dir)
     if wgcna_dir is None:
         return pd.DataFrame()
 
@@ -142,7 +154,7 @@ def load_wgcna_mes() -> pd.DataFrame:
     if data_dir is None:
         return pd.DataFrame()
 
-    wgcna_dir = find_subfolder(data_dir, "wgcna")
+    wgcna_dir = _find_wgcna_dir(data_dir)
     if wgcna_dir is None:
         return pd.DataFrame()
 
@@ -159,7 +171,7 @@ def load_wgcna_mod_trait_cor() -> pd.DataFrame:
     if data_dir is None:
         return pd.DataFrame()
 
-    wgcna_dir = find_subfolder(data_dir, "wgcna")
+    wgcna_dir = _find_wgcna_dir(data_dir)
     if wgcna_dir is None:
         return pd.DataFrame()
 
@@ -176,7 +188,7 @@ def load_wgcna_mod_trait_pval() -> pd.DataFrame:
     if data_dir is None:
         return pd.DataFrame()
 
-    wgcna_dir = find_subfolder(data_dir, "wgcna")
+    wgcna_dir = _find_wgcna_dir(data_dir)
     if wgcna_dir is None:
         return pd.DataFrame()
 
@@ -185,6 +197,86 @@ def load_wgcna_mod_trait_pval() -> pd.DataFrame:
         ["moduleTraitPvalue.parquet", "moduleTraitPvalue.csv"],
         index_col=0
     )
+
+
+def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
+    """
+    Load all pathway/enrichment tables under <wgcna_dir>/pathways/.
+
+    Returns:
+      dict keyed by module (lowercase), e.g. 'black' -> dataframe
+
+    Module key is inferred from filename:
+      - takes first token split on _ - space, e.g. 'black_enrichment.csv' -> 'black'
+      - if no token can be inferred, uses file stem.
+    """
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return {}
+
+    pathways_dir = find_subfolder(wgcna_dir, "pathways")
+    if pathways_dir is None or not pathways_dir.exists():
+        return {}
+
+    out: Dict[str, pd.DataFrame] = {}
+    for file_path in pathways_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+            continue
+
+        df = _read_table(file_path, index_col=None)
+        if df.empty:
+            continue
+
+        # drop common junk index col from exports
+        if "Unnamed: 0" in df.columns:
+            df = df.drop(columns=["Unnamed: 0"])
+
+        stem = file_path.stem.strip()
+        if not stem:
+            continue
+
+        tok = re.split(r"[_\-\s]+", stem)[0].strip()
+        module_key = (tok if tok else stem).lower()
+
+        if module_key not in out:
+            out[module_key] = df
+
+    return out
+
+
+def load_wgcna_module_trait_heatmap_pdf_path() -> Optional[Path]:
+    """
+    Return a Path to the module-trait heatmap PDF if present, else None.
+    Looks for:
+      - module-trait-relationships-heatmap.pdf
+      - moduleTraitRelationshipsHeatmap.pdf (common variations)
+    """
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return None
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return None
+
+    candidates = [
+        "module-trait-relationships-heatmap.pdf",
+        "module_trait_relationships_heatmap.pdf",
+        "moduleTraitRelationshipsHeatmap.pdf",
+        "moduleTraitRelationships_heatmap.pdf",
+        "heatmap.pdf",
+    ]
+    for name in candidates:
+        fp = find_file(wgcna_dir, name)
+        if fp is not None and fp.exists():
+            return fp
+    return None
 
 
 # ============================================================================
@@ -278,6 +370,8 @@ def check_data_availability() -> Dict[str, bool]:
     mes_ok = False
     cor_ok = False
     pval_ok = False
+    pathways_ok = False
+    heatmap_ok = False
     single_ok = False
     kg_ok = False
     ppi_ok = False
@@ -287,6 +381,8 @@ def check_data_availability() -> Dict[str, bool]:
         mes_ok = not load_wgcna_mes().empty
         cor_ok = not load_wgcna_mod_trait_cor().empty
         pval_ok = not load_wgcna_mod_trait_pval().empty
+        pathways_ok = len(load_wgcna_pathways()) > 0
+        heatmap_ok = load_wgcna_module_trait_heatmap_pdf_path() is not None
         single_ok = len(load_single_omics_studies()) > 0
         kg_ok = len(load_kg_data()) > 0
         ppi_ok = len(load_ppi_data()) > 0
@@ -297,6 +393,8 @@ def check_data_availability() -> Dict[str, bool]:
         "wgcna_mes": mes_ok,
         "wgcna_mod_trait_cor": cor_ok,
         "wgcna_mod_trait_pval": pval_ok,
+        "wgcna_pathways": pathways_ok,
+        "wgcna_heatmap_pdf": heatmap_ok,
         "single_omics": single_ok,
         "knowledge_graphs": kg_ok,
         "ppi_networks": ppi_ok,
@@ -326,6 +424,9 @@ def get_data_summary() -> str:
 
     lines.append("✓ Module-Trait Correlations: Available" if avail["wgcna_mod_trait_cor"] else "✗ Module-Trait Correlations: Not found")
     lines.append("✓ Module-Trait P-values: Available" if avail["wgcna_mod_trait_pval"] else "✗ Module-Trait P-values: Not found")
+
+    lines.append("✓ Pathways/Enrichment: Available" if avail["wgcna_pathways"] else "✗ Pathways/Enrichment: Not found")
+    lines.append("✓ Module–trait heatmap PDF: Available" if avail["wgcna_heatmap_pdf"] else "✗ Module–trait heatmap PDF: Not found")
 
     if avail["single_omics"]:
         studies = load_single_omics_studies()
