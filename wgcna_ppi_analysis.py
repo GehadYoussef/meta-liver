@@ -5,8 +5,15 @@ Supports:
 1) WGCNA module gene mapping files from <data_dir>/(wgcna|wcgna)/modules/
 2) Module–trait matrices from <data_dir>/(wgcna|wcgna)/ (moduleTraitCor / moduleTraitPvalue)
 3) Enrichment/pathway tables from <data_dir>/(wgcna|wcgna)/pathways/
-4) Basic co-expression (correlation) helper on an expression matrix
-5) Simple PPI neighbour lookup and degree stats across one or more PPI tables
+4) Active drugs table from <data_dir>/(wgcna|wcgna)/active_drugs.(parquet|csv|xlsx)
+5) Basic co-expression (correlation) helper on an expression matrix
+6) Simple PPI neighbour lookup and degree stats across one or more PPI tables
+
+Notes on active_drugs:
+- Expected columns include:
+  - "Drug Targets" (comma-separated gene symbols)
+  - "Drug Name", "DrugBank_Accession", and optionally "distance", "z-score"
+- Matching is case-insensitive and uses whole-token matching after splitting targets.
 """
 
 from __future__ import annotations
@@ -14,15 +21,15 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Iterable, Tuple
 
 import numpy as np
 import pandas as pd
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # PATH HELPERS
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def find_data_dir() -> Optional[Path]:
     """Find data directory."""
@@ -87,9 +94,9 @@ def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
     return find_subfolder(data_dir, "wgcna") or find_subfolder(data_dir, "wcgna")
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # WGCNA MODULE GENE MAPPINGS
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
     """
@@ -131,7 +138,6 @@ def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
     for file_path in candidates:
         try:
             df = pd.read_parquet(file_path) if file_path.suffix.lower() == ".parquet" else pd.read_csv(file_path)
-
             if df is None or df.empty:
                 continue
 
@@ -140,7 +146,6 @@ def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
                 if str(col).lower() in ["hgnc_symbol", "symbol", "gene", "gene_symbol", "hgnc", "genesymbol"]:
                     gene_col = col
                     break
-
             if gene_col is None:
                 continue
 
@@ -183,8 +188,219 @@ def get_gene_module(gene_name: str, module_data: Dict[str, pd.DataFrame]) -> Opt
     return None
 
 
-def get_module_genes(module_name: str, module_data: Dict[str, pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """Get all genes in a specific WGCNA module; returns dataframe with Gene (+ optional Ensembl ID)."""
+# ---------------------------------------------------------------------
+# ACTIVE DRUGS (gene -> drugs via "Drug Targets" column)
+# ---------------------------------------------------------------------
+
+def load_wgcna_active_drugs() -> pd.DataFrame:
+    """
+    Load <data_dir>/(wgcna|wcgna)/active_drugs.(parquet|csv|xlsx|xls).
+
+    Returns empty DataFrame if not found.
+    """
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return pd.DataFrame()
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return pd.DataFrame()
+
+    fp = (
+        find_file(wgcna_dir, "active_drugs.parquet")
+        or find_file(wgcna_dir, "active_drugs.csv")
+        or find_file(wgcna_dir, "active_drugs.xlsx")
+        or find_file(wgcna_dir, "active_drugs.xls")
+    )
+    if fp is None:
+        return pd.DataFrame()
+
+    try:
+        if fp.suffix.lower() == ".parquet":
+            df = pd.read_parquet(fp)
+        elif fp.suffix.lower() == ".csv":
+            df = pd.read_csv(fp)
+        else:
+            df = pd.read_excel(fp)
+    except Exception as e:
+        print(f"DEBUG: Failed to read active_drugs from {fp}: {e}", file=sys.stderr)
+        return pd.DataFrame()
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # Normalise column names a bit (keep originals too)
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+
+def _pick_col(df: pd.DataFrame, candidates: Iterable[str]) -> Optional[str]:
+    cols_lower = {str(c).lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in cols_lower:
+            return cols_lower[cand.lower()]
+    return None
+
+
+def _infer_targets_col(active_drugs: pd.DataFrame) -> Optional[str]:
+    """
+    Prefer exact 'Drug Targets', otherwise pick the first column containing 'target'.
+    """
+    if active_drugs is None or active_drugs.empty:
+        return None
+
+    exact = _pick_col(active_drugs, ["Drug Targets", "drug_targets", "targets", "Target", "Targets"])
+    if exact is not None:
+        return exact
+
+    for c in active_drugs.columns:
+        if "target" in str(c).lower():
+            return c
+
+    return None
+
+
+def _split_targets(val: Any) -> set[str]:
+    """
+    Split a targets string into tokens (gene symbols), tolerant to separators.
+    """
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return set()
+
+    s = str(val).strip()
+    if not s:
+        return set()
+
+    # Common separators: comma, semicolon, pipe, slash, newline
+    parts = re.split(r"[,\n;\|/]+", s)
+    out = set()
+    for p in parts:
+        t = p.strip().upper()
+        # Keep conservative token cleaning
+        t = re.sub(r"\s+", "", t)
+        if t:
+            out.add(t)
+    return out
+
+
+def build_gene_to_drugs_index(active_drugs: pd.DataFrame) -> Dict[str, list[int]]:
+    """
+    Build index: gene_symbol -> list of row indices in active_drugs where gene appears in targets.
+
+    This is designed to be built once (e.g., at app load) and reused.
+    """
+    idx: Dict[str, list[int]] = {}
+
+    if active_drugs is None or active_drugs.empty:
+        return idx
+
+    targets_col = _infer_targets_col(active_drugs)
+    if targets_col is None:
+        return idx
+
+    for i, val in active_drugs[targets_col].items():
+        genes = _split_targets(val)
+        for g in genes:
+            idx.setdefault(g, []).append(i)
+
+    return idx
+
+
+def summarise_drugs_for_genes(
+    genes: Iterable[str],
+    active_drugs: pd.DataFrame,
+    gene_to_rows: Optional[Dict[str, list[int]]] = None,
+    top_n: int = 5
+) -> pd.DataFrame:
+    """
+    For each gene, return a 1-row summary with drug columns:
+      Gene, n_drugs, Top drugs, Top DrugBank IDs, Best distance, Best z-score
+    """
+    if active_drugs is None or active_drugs.empty:
+        return pd.DataFrame({"Gene": [str(g).strip().upper() for g in genes], "n_drugs": 0})
+
+    if gene_to_rows is None:
+        gene_to_rows = build_gene_to_drugs_index(active_drugs)
+
+    col_name = _pick_col(active_drugs, ["Drug Name", "drug name", "name", "Drug"])
+    col_dbid = _pick_col(active_drugs, ["DrugBank_Accession", "drugbank_accession", "DrugBank", "DrugBank ID"])
+    col_dist = _pick_col(active_drugs, ["distance", "Distance"])
+    col_z = _pick_col(active_drugs, ["z-score", "zscore", "Z-score", "Z Score", "z score"])
+
+    rows = []
+    for g in genes:
+        gene = str(g).strip().upper()
+        hit_rows = gene_to_rows.get(gene, []) if gene_to_rows else []
+
+        if not hit_rows:
+            rows.append({
+                "Gene": gene,
+                "n_drugs": 0,
+                "Top drugs": "",
+                "Top DrugBank IDs": "",
+                "Best distance": np.nan,
+                "Best z-score": np.nan,
+            })
+            continue
+
+        sub = active_drugs.loc[hit_rows].copy()
+
+        # Try to sort by distance (ascending), then z-score (ascending; more negative usually "better")
+        sort_cols = []
+        if col_dist is not None:
+            sub[col_dist] = pd.to_numeric(sub[col_dist], errors="coerce")
+            sort_cols.append(col_dist)
+        if col_z is not None:
+            sub[col_z] = pd.to_numeric(sub[col_z], errors="coerce")
+            sort_cols.append(col_z)
+
+        if sort_cols:
+            sub = sub.sort_values(sort_cols, ascending=[True] * len(sort_cols), na_position="last")
+
+        top = sub.head(int(top_n))
+
+        top_names = []
+        if col_name is not None:
+            top_names = [str(x) for x in top[col_name].fillna("").tolist() if str(x).strip()]
+
+        top_ids = []
+        if col_dbid is not None:
+            top_ids = [str(x) for x in top[col_dbid].fillna("").tolist() if str(x).strip()]
+
+        best_dist = float(top[col_dist].dropna().iloc[0]) if col_dist is not None and top[col_dist].notna().any() else np.nan
+        best_z = float(top[col_z].dropna().iloc[0]) if col_z is not None and top[col_z].notna().any() else np.nan
+
+        rows.append({
+            "Gene": gene,
+            "n_drugs": int(len(hit_rows)),
+            "Top drugs": ", ".join(top_names[:int(top_n)]),
+            "Top DrugBank IDs": ", ".join(top_ids[:int(top_n)]),
+            "Best distance": best_dist,
+            "Best z-score": best_z,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def get_module_genes(
+    module_name: str,
+    module_data: Dict[str, pd.DataFrame],
+    active_drugs: Optional[pd.DataFrame] = None,
+    gene_to_drugs_index: Optional[Dict[str, list[int]]] = None,
+    top_n_genes: Optional[int] = None,
+    drugs_top_n: int = 5,
+    replace_ensembl_with_drugs_for_module: str = "brown"
+) -> Optional[pd.DataFrame]:
+    """
+    Get genes in a WGCNA module.
+
+    Default behaviour:
+      - returns Gene (+ optional Ensembl ID) if available.
+
+    If active_drugs is provided AND module_name matches replace_ensembl_with_drugs_for_module (default 'brown'):
+      - returns Gene + drug summary columns instead of Ensembl ID.
+    """
     if not module_data or module_name not in module_data:
         return None
 
@@ -193,12 +409,38 @@ def get_module_genes(module_name: str, module_data: Dict[str, pd.DataFrame]) -> 
         return None
 
     if "hgnc_symbol" in gene_df.columns:
+        base = gene_df.copy()
+        base["hgnc_symbol"] = base["hgnc_symbol"].astype(str).str.strip().str.upper()
+        genes = base["hgnc_symbol"].tolist()
+
+        if top_n_genes is not None:
+            genes = genes[:int(top_n_genes)]
+
+        # Replace Ensembl with drug columns for the requested module (e.g. brown)
+        if (
+            active_drugs is not None
+            and not active_drugs.empty
+            and str(module_name).strip().lower() == str(replace_ensembl_with_drugs_for_module).strip().lower()
+        ):
+            drug_tbl = summarise_drugs_for_genes(
+                genes=genes,
+                active_drugs=active_drugs,
+                gene_to_rows=gene_to_drugs_index,
+                top_n=drugs_top_n
+            )
+            return drug_tbl
+
+        # Otherwise show Gene (+ Ensembl if present)
         display_cols = ["hgnc_symbol"]
-        if "ensembl_gene_id" in gene_df.columns:
+        if "ensembl_gene_id" in base.columns:
             display_cols.append("ensembl_gene_id")
 
-        result = gene_df[display_cols].copy()
+        result = base[display_cols].copy()
         result.columns = ["Gene", "Ensembl ID"] if len(display_cols) > 1 else ["Gene"]
+
+        if top_n_genes is not None:
+            result = result.head(int(top_n_genes))
+
         return result
 
     return gene_df
@@ -211,9 +453,9 @@ def get_all_modules(module_data: Dict[str, pd.DataFrame]) -> list[str]:
     return sorted(module_data.keys())
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # MODULE–TRAIT MATRICES (moduleTraitCor / moduleTraitPvalue)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def _standardise_module_trait_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure module is in the index and traits are columns; handles common export patterns."""
@@ -281,9 +523,9 @@ def load_wcgna_mod_trait_pval() -> pd.DataFrame:
     return load_wgcna_mod_trait_pval()
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # PATHWAYS / ENRICHMENT TABLES
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
     """
@@ -291,7 +533,8 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
 
     Behaviour:
     - Reads .csv or .parquet
-    - Infers module from filename stem: first token before '_' or '-' or space (e.g. 'black_enrichment' -> 'black')
+    - Infers module from filename stem: first token before '_' or '-' or space
+      (e.g. 'black_enrichment' -> 'black')
     - Returns dict keyed by module (lowercase)
     """
     out: Dict[str, pd.DataFrame] = {}
@@ -342,9 +585,9 @@ def load_wcgna_pathways() -> Dict[str, pd.DataFrame]:
     return load_wgcna_pathways()
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # CO-EXPRESSION HELPERS
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def get_coexpressed_partners(gene_name: str, expr_df: pd.DataFrame, top_n: int = 15) -> Optional[pd.DataFrame]:
     """
@@ -387,9 +630,9 @@ def get_coexpressed_partners(gene_name: str, expr_df: pd.DataFrame, top_n: int =
         return None
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # PPI HELPERS
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 def find_ppi_interactors(gene_name: str, ppi_data: Dict[str, pd.DataFrame]) -> Optional[pd.DataFrame]:
     """

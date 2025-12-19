@@ -27,8 +27,9 @@ from kg_analysis import (
 )
 from wgcna_ppi_analysis import (
     load_wgcna_module_data, get_gene_module, get_module_genes,
-    get_coexpressed_partners, find_ppi_interactors, get_network_stats,
-    load_wgcna_mod_trait_cor, load_wgcna_mod_trait_pval, load_wgcna_pathways
+    find_ppi_interactors, get_network_stats,
+    load_wgcna_mod_trait_cor, load_wgcna_mod_trait_pval, load_wgcna_pathways,
+    load_wgcna_active_drugs, build_gene_to_drugs_index
 )
 
 import single_omics_analysis as soa
@@ -81,11 +82,24 @@ def load_all_data():
     wgcna_pval = load_wgcna_mod_trait_pval()
     wgcna_pathways = load_wgcna_pathways()
 
-    return single_omics, kg_data, wgcna_module_data, ppi_data, wgcna_cor, wgcna_pval, wgcna_pathways
+    active_drugs = load_wgcna_active_drugs()
+    gene_to_drugs = build_gene_to_drugs_index(active_drugs) if active_drugs is not None and not active_drugs.empty else {}
+
+    return single_omics, kg_data, wgcna_module_data, ppi_data, wgcna_cor, wgcna_pval, wgcna_pathways, active_drugs, gene_to_drugs
 
 
 try:
-    single_omics_data, kg_data, wgcna_module_data, ppi_data, wgcna_cor, wgcna_pval, wgcna_pathways = load_all_data()
+    (
+        single_omics_data,
+        kg_data,
+        wgcna_module_data,
+        ppi_data,
+        wgcna_cor,
+        wgcna_pval,
+        wgcna_pathways,
+        active_drugs_df,
+        gene_to_drugs,
+    ) = load_all_data()
     data_loaded = True
 except Exception as e:
     st.error(f"Error loading data: {e}")
@@ -97,6 +111,8 @@ except Exception as e:
     wgcna_cor = pd.DataFrame()
     wgcna_pval = pd.DataFrame()
     wgcna_pathways = {}
+    active_drugs_df = pd.DataFrame()
+    gene_to_drugs = {}
 
 
 # =============================================================================
@@ -457,6 +473,50 @@ def _module_trait_table(module_name: str, cor_df: pd.DataFrame, pval_df: pd.Data
     return out
 
 
+def _annotate_genes_with_drugs(gene_df: pd.DataFrame, gene_to_drugs_map: dict, max_drugs_per_gene: int) -> pd.DataFrame:
+    """
+    Replaces 'Ensembl ID' with drug-target context:
+    Gene | n_drugs | Drugs (up to max_drugs_per_gene)
+    """
+    if gene_df is None or gene_df.empty:
+        return gene_df
+
+    if gene_to_drugs_map is None or len(gene_to_drugs_map) == 0:
+        return gene_df
+
+    if "Gene" not in gene_df.columns:
+        return gene_df
+
+    out = gene_df.copy()
+    if "Ensembl ID" in out.columns:
+        out = out.drop(columns=["Ensembl ID"])
+
+    def _fmt_drugs(g: str) -> str:
+        g0 = str(g).strip().upper()
+        recs = gene_to_drugs_map.get(g0, [])
+        if not recs:
+            return ""
+        parts = []
+        for r in recs[: int(max_drugs_per_gene)]:
+            nm = str(r.get("Drug Name", "")).strip()
+            acc = str(r.get("DrugBank_Accession", "")).strip()
+            if nm and acc and acc.lower() != "nan":
+                parts.append(f"{nm} ({acc})")
+            elif nm:
+                parts.append(nm)
+            elif acc and acc.lower() != "nan":
+                parts.append(acc)
+        return "; ".join(parts)
+
+    def _n_drugs(g: str) -> int:
+        g0 = str(g).strip().upper()
+        return int(len(gene_to_drugs_map.get(g0, [])))
+
+    out.insert(1, "n_drugs", out["Gene"].map(_n_drugs))
+    out.insert(2, "Drugs", out["Gene"].map(_fmt_drugs))
+    return out
+
+
 # =============================================================================
 # MAIN APP
 # =============================================================================
@@ -501,6 +561,11 @@ if data_loaded:
     else:
         st.sidebar.warning("⚠ WGCNA pathways not available")
 
+    if isinstance(active_drugs_df, pd.DataFrame) and not active_drugs_df.empty:
+        st.sidebar.success("✓ Active drugs loaded")
+    else:
+        st.sidebar.warning("⚠ Active drugs not available")
+
     if ppi_data:
         st.sidebar.success("✓ PPI networks loaded")
     else:
@@ -515,15 +580,14 @@ if not search_query:
     st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
 
     st.markdown(f"""
-Meta Liver is an interactive companion to the study cited below. It supports gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, and WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), with optional protein–protein interaction (PPI) neighbourhood context.
+Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, and WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), with optional protein–protein interaction (PPI) neighbourhood context.
 
-**How to use:** enter a gene symbol in the sidebar search box to open the three analysis tabs for that gene.
+Enter a gene symbol in the sidebar to open the three analysis tabs for that gene.
 
-**Citation (please cite if you use this app):**  
+If you use this app, please cite:  
 {APP_CITATION}  
 doi: [{APP_DOI}]({APP_DOI_URL})
 
-**Team:**  
 {APP_TEAM}
 """)
 else:
@@ -792,7 +856,7 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
             # -----------------------------------------------------------------
             with tab_wgcna:
                 st.markdown("""
-This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment, module–trait relationships, and module-specific enrichment tables, and then shows direct PPI interactors and local network statistics for the selected gene.
+This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment, module–trait relationships, and module-specific enrichment tables, then shows direct PPI interactors and local network statistics for the selected gene.
 """)
                 st.markdown("---")
 
@@ -806,7 +870,28 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                         module_genes = get_module_genes(module_name, wgcna_module_data)
                         if module_genes is not None:
                             st.markdown(f"Top genes in module {module_name}:")
-                            st.dataframe(module_genes.head(15), use_container_width=True)
+
+                            show_top_genes = st.slider(
+                                "Show top N genes",
+                                min_value=5,
+                                max_value=200,
+                                value=15,
+                                step=5,
+                                key="wgcna_top_n_genes"
+                            )
+
+                            max_drugs_per_gene = st.slider(
+                                "Show up to N drugs per gene",
+                                min_value=1,
+                                max_value=25,
+                                value=5,
+                                step=1,
+                                key="wgcna_max_drugs_per_gene"
+                            )
+
+                            view_df = module_genes.head(int(show_top_genes)).copy()
+                            view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, max_drugs_per_gene)
+                            st.dataframe(view_df, use_container_width=True, hide_index=True)
                         else:
                             st.info(f"No other genes found in module {module_name}")
 
