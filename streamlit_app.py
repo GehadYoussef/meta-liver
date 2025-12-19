@@ -214,6 +214,7 @@ def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
 
         auc_oriented = None
         if auc_raw is not None:
+            # "Oriented" here means: align so MAFLD is treated as the "positive" class
             auc_oriented = float(1.0 - auc_raw) if direction == "Healthy" else float(auc_raw)
 
         out.append({
@@ -558,56 +559,7 @@ def _annotate_genes_with_drugs(gene_df: pd.DataFrame, gene_to_drugs_map: dict, m
 # =============================================================================
 
 st.sidebar.markdown("## 🔬 Meta Liver")
-
-search_query = st.sidebar.text_input(
-    "Search gene:",
-    placeholder="e.g., SAA1, TP53, IL6"
-).strip().upper()
-
-# ---- SIDEBAR "TOGGLE" (always visible when gene is entered) ----
-# This is placed IMMEDIATELY under the gene input so it doesn't get pushed down.
-if search_query:
-    if hasattr(st, "toggle"):
-        use_auc_disc = st.sidebar.toggle(
-            "Use discriminative AUROC (AUC-disc)",
-            value=True,
-            key="use_auc_disc_toggle"
-        )
-    else:
-        use_auc_disc = st.sidebar.checkbox(
-            "Use discriminative AUROC (AUC-disc)",
-            value=True,
-            key="use_auc_disc_toggle"
-        )
-
-    # Optional: oriented view switch (kept as a second switch so you still have a "toggle" UX)
-    if hasattr(st, "toggle"):
-        use_oriented = st.sidebar.toggle(
-            "Use MAFLD-oriented AUROC (diagnostic)",
-            value=False,
-            key="use_auc_oriented_toggle"
-        )
-    else:
-        use_oriented = st.sidebar.checkbox(
-            "Use MAFLD-oriented AUROC (diagnostic)",
-            value=False,
-            key="use_auc_oriented_toggle"
-        )
-
-    # Priority: oriented overrides disc/raw because it's a distinct transformation
-    if use_oriented:
-        auc_key = "auc_oriented"
-        auc_view_label = "Oriented (MAFLD-positive)"
-    else:
-        if use_auc_disc:
-            auc_key = "auc_disc"
-            auc_view_label = "Discriminative (AUC-disc)"
-        else:
-            auc_key = "auc_raw"
-            auc_view_label = "Raw (as reported)"
-else:
-    auc_key = "auc_disc"
-    auc_view_label = "Discriminative (AUC-disc)"
+search_query = st.sidebar.text_input("Search gene:", placeholder="e.g., SAA1, TP53, IL6").strip().upper()
 
 st.sidebar.caption(f"single_omics_analysis loaded from: {getattr(soa, '__file__', 'unknown')}")
 st.sidebar.caption(f"Citation: doi:{APP_DOI}")
@@ -784,19 +736,31 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
 
                 st.markdown("---")
 
-                metrics = _collect_gene_metrics(search_query, single_omics_data)
-
-                subtitle = (
-                    "AUC-disc = max(AUC, 1−AUC)." if auc_key == "auc_disc"
-                    else "Raw AUROC values as stored in each study table." if auc_key == "auc_raw"
-                    else "AUROC aligned so MAFLD is treated as ‘positive’ (diagnostic)."
+                # ---- NEW: AUROC VIEW TOGGLE (this is the "toggle" you were expecting) ----
+                auc_view = st.radio(
+                    "AUROC view (plots)",
+                    ["Discriminative (AUC-disc)", "Raw (as reported)", "Oriented (MAFLD-positive)"],
+                    index=0,
+                    horizontal=True,
+                    key="omics_auc_view_toggle"
                 )
+
+                auc_key_map = {
+                    "Discriminative (AUC-disc)": "auc_disc",
+                    "Raw (as reported)": "auc_raw",
+                    "Oriented (MAFLD-positive)": "auc_oriented",
+                }
+                auc_key = auc_key_map[auc_view]
+
+                metrics = _collect_gene_metrics(search_query, single_omics_data)
 
                 fig = make_lollipop(
                     metrics,
                     auc_key=auc_key,
-                    title=f"AUROC Across Studies ({auc_view_label})",
-                    subtitle=subtitle
+                    title=f"AUROC Across Studies ({auc_view})",
+                    subtitle=("AUC-disc = max(AUC, 1−AUC)." if auc_key == "auc_disc"
+                              else "Raw AUROC values as stored in each study table." if auc_key == "auc_raw"
+                              else "AUROC aligned so MAFLD is treated as ‘positive’.")
                 )
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
@@ -809,7 +773,7 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
                 fig_scatter = make_scatter_auc_logfc(
                     metrics,
                     auc_key=auc_key,
-                    title=f"Concordance: {auc_view_label} vs logFC",
+                    title=f"Concordance: {auc_view} vs logFC",
                     subtitle="Checks whether discriminative signal aligns with up/down regulation."
                 )
                 if fig_scatter:
