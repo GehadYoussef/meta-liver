@@ -209,13 +209,27 @@ def discover_invitro_deg_files() -> Dict[InVitroKey, Path]:
 # Gene mapping
 # -----------------------------------------------------------------------------
 
+def _norm_colname(c: str) -> str:
+    if c is None:
+        return ""
+    s = str(c)
+    s = s.lstrip("\ufeff").strip()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
 def _find_gene_mapping_file(root: Path) -> Optional[Path]:
     direct = root / GENE_MAPPING_FILENAME
     if direct.exists() and direct.is_file():
         return direct
 
-    hits = sorted([p for p in root.rglob("*") if p.is_file() and p.name.lower() == GENE_MAPPING_FILENAME.lower()])
-    return hits[0] if hits else None
+    hits = [p for p in root.rglob("*") if p.is_file() and p.name.lower() == GENE_MAPPING_FILENAME.lower()]
+    if not hits:
+        return None
+
+    # Prefer the largest mapping file (usually the complete one) if multiple exist
+    hits_sorted = sorted(hits, key=lambda p: p.stat().st_size if p.exists() else 0, reverse=True)
+    return hits_sorted[0]
 
 
 def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
@@ -232,9 +246,21 @@ def _load_gene_mapping() -> Tuple[Dict[str, str], Dict[str, str]]:
     except Exception:
         return {}, {}
 
-    cols = {c.lower(): c for c in gm.columns}
-    ensg_col = cols.get("gene stable id") or cols.get("ensembl id") or cols.get("ensembl_id") or cols.get("ensembl")
-    sym_col = cols.get("gene name") or cols.get("symbol") or cols.get("gene_symbol") or cols.get("gene")
+    # Normalise headers to avoid BOM/whitespace issues
+    gm = gm.rename(columns={c: _norm_colname(c) for c in gm.columns})
+
+    cols = {str(c).lower(): c for c in gm.columns}
+
+    def _get(*names: str) -> Optional[str]:
+        for n in names:
+            if n in gm.columns:
+                return n
+            if n.lower() in cols:
+                return cols[n.lower()]
+        return None
+
+    ensg_col = _get("Gene stable ID", "Ensembl ID", "ensembl_id", "ensembl", "Ensembl gene id", "GeneID", "gene_id")
+    sym_col = _get("Gene name", "Symbol", "gene_symbol", "gene", "HGNC symbol", "hgnc_symbol")
 
     if ensg_col is None or sym_col is None:
         return {}, {}
@@ -284,7 +310,6 @@ _GENE_COL_CANDIDATES = [
     "ensg", "ensembl",
     "feature", "id",
     "Name", "NAME",
-    # common “unnamed first column” patterns
     "Unnamed: 0", "Unnamed: 0.1", "__index_level_0__", "index", "level_0",
 ]
 
@@ -343,15 +368,6 @@ def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[st
         return None, f"Could not read {path.name}: {type(e).__name__}: {e}"
 
 
-def _gene_col_is_effectively_empty(series: pd.Series) -> bool:
-    try:
-        s = series.astype(str).str.strip().str.upper()
-        s = s.replace({"NAN": "", "NONE": ""}, regex=False)
-        return bool((s == "").mean() > 0.9)
-    except Exception:
-        return True
-
-
 def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
@@ -400,6 +416,7 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = pd.to_numeric(out[c], errors="coerce")
 
     return out
+
 
 def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str]]:
     files = discover_invitro_deg_files()
@@ -798,12 +815,21 @@ def render_invitro_tab(query: str) -> None:
         st.markdown("### Gene summary")
         st.caption("Direction consensus is computed from logFC sign between 1b and 5a for the same contrast (significance not required).")
 
+        # Show whether the query resolved to an Ensembl ID (so you can debug mapping immediately)
+        gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
+        if gene_id:
+            if resolved_symbol and _looks_like_ensembl(gene_id):
+                st.caption(f"Query resolved to: {resolved_symbol} → {gene_id}")
+            elif _looks_like_ensembl(gene_id):
+                st.caption(f"Query resolved to Ensembl ID: {gene_id}")
+            else:
+                st.caption(f"Query used as-is: {gene_id}")
+
         summ = gene_summary_table(tables, query, symbol_to_ensg, ensg_to_symbol)
         if summ is None or summ.empty:
             st.warning("No rows could be generated for this query.")
             return
 
-        gene_id, resolved_symbol = _resolve_query_to_gene_id(query, symbol_to_ensg)
         label = resolved_symbol or ensg_to_symbol.get(gene_id) or str(query).strip().upper()
 
         st.dataframe(summ, use_container_width=True, hide_index=True)
