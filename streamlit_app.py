@@ -32,7 +32,11 @@ from wgcna_ppi_analysis import (
     load_wgcna_active_drugs, build_gene_to_drugs_index
 )
 
+import invitro_analysis as iva
+iva = importlib.reload(iva)
+
 import single_omics_analysis as soa
+
 soa = importlib.reload(soa)
 
 
@@ -607,6 +611,17 @@ if data_loaded:
         st.sidebar.success("✓ PPI networks loaded")
     else:
         st.sidebar.warning("⚠ PPI networks not available")
+
+
+    # In vitro stem cell MASLD model (DEG tables)
+    try:
+        invitro_files = iva.discover_invitro_deg_files()
+        if invitro_files:
+            st.sidebar.success(f"✓ In vitro model DEGs found ({len(invitro_files)})")
+        else:
+            st.sidebar.warning("⚠ In vitro model DEGs not found (expected: stem_cell_model/*.parquet)")
+    except Exception as e:
+        st.sidebar.warning(f"⚠ In vitro model check failed: {e}")
 else:
     st.sidebar.error("✗ Error loading data")
 
@@ -638,10 +653,11 @@ else:
         if consistency is None:
             st.warning(f"Gene '{search_query}' not found in any study")
         else:
-            tab_omics, tab_kg, tab_wgcna = st.tabs([
+            tab_omics, tab_kg, tab_wgcna, tab_invitro = st.tabs([
                 "Single-Omics Evidence",
                 "MAFLD Knowledge Graph",
-                "WGCNA Fibrosis Stage Networks"
+                "WGCNA Fibrosis Stage Networks",
+                "In vitro MASLD model"
             ])
 
             # -----------------------------------------------------------------
@@ -983,6 +999,17 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                     st.info("⚠ PPI network data not available")
 
 st.markdown("---")
+
+            # -----------------------------------------------------------------
+            # TAB 4: IN VITRO STEM CELL MASLD MODEL (iHeps)
+            # -----------------------------------------------------------------
+            with tab_invitro:
+                st.markdown("""
+This tab summarises differential expression from a human stem cell-derived MASLD model using induced hepatocytes (iHeps).
+Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA** (oleic and palmitic acid), **OA+PA + Resistin/Myostatin** (adipose- and muscle-derived signals), and **OA+PA + Resistin/Myostatin + PBMC co-culture** (immune cells not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
+""")
+                st.markdown("---")
+                iva.render_invitro_tab(search_query)
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 11px;'>"
     "<p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks</p>"
