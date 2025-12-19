@@ -85,7 +85,17 @@ def load_all_data():
     active_drugs = load_wgcna_active_drugs()
     gene_to_drugs = build_gene_to_drugs_index(active_drugs) if active_drugs is not None and not active_drugs.empty else {}
 
-    return single_omics, kg_data, wgcna_module_data, ppi_data, wgcna_cor, wgcna_pval, wgcna_pathways, active_drugs, gene_to_drugs
+    return (
+        single_omics,
+        kg_data,
+        wgcna_module_data,
+        ppi_data,
+        wgcna_cor,
+        wgcna_pval,
+        wgcna_pathways,
+        active_drugs,
+        gene_to_drugs,
+    )
 
 
 try:
@@ -133,19 +143,23 @@ def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
         auc, lfc, direction = soa.extract_metrics_from_row(row)
 
         auc_raw = None
-        if auc is not None and not np.isnan(auc) and 0.0 <= float(auc) <= 1.0:
-            auc_raw = float(auc)
+        try:
+            if auc is not None and not np.isnan(auc) and 0.0 <= float(auc) <= 1.0:
+                auc_raw = float(auc)
+        except Exception:
+            auc_raw = None
 
         lfc_val = None
-        if lfc is not None and not np.isnan(lfc):
-            lfc_val = float(lfc)
+        try:
+            if lfc is not None and not np.isnan(lfc):
+                lfc_val = float(lfc)
+        except Exception:
+            lfc_val = None
 
-        # Discriminative (orientation-invariant)
         auc_disc = None
         if auc_raw is not None:
             auc_disc = float(max(auc_raw, 1.0 - auc_raw))
 
-        # Oriented (align MAFLD as "positive") — diagnostic only
         auc_oriented = None
         if auc_raw is not None:
             if direction == "Healthy":
@@ -179,7 +193,6 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
         return None
 
     vals = sorted(vals, key=lambda x: x[auc_key])
-
     fig = go.Figure()
 
     for m in vals:

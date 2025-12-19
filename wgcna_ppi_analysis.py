@@ -107,7 +107,6 @@ def _read_active_drugs_excel(fp: Path) -> pd.DataFrame:
             break
 
     if header_idx is None:
-        # Fallback: try normal header row
         return pd.read_excel(fp)
 
     df = raw.iloc[header_idx + 1 :].copy()
@@ -122,11 +121,8 @@ def _standardise_active_drugs(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = df.copy()
-
-    # Trim column names
     out.columns = [str(c).strip() for c in out.columns]
 
-    # Map possible column variants to canonical names
     col_map = {}
     lower_cols = {str(c).lower(): c for c in out.columns}
 
@@ -156,12 +152,10 @@ def _standardise_active_drugs(df: pd.DataFrame) -> pd.DataFrame:
     if col_map:
         out = out.rename(columns=col_map)
 
-    # Ensure expected columns exist
     for c in ["DrugBank_Accession", "Drug Name", "Drug Targets"]:
         if c not in out.columns:
             out[c] = np.nan
 
-    # Coerce types
     out["DrugBank_Accession"] = out["DrugBank_Accession"].astype(str).str.strip()
     out["Drug Name"] = out["Drug Name"].astype(str).str.strip()
     out["Drug Targets"] = out["Drug Targets"].astype(str).str.strip()
@@ -171,7 +165,6 @@ def _standardise_active_drugs(df: pd.DataFrame) -> pd.DataFrame:
     if "z-score" in out.columns:
         out["z-score"] = pd.to_numeric(out["z-score"], errors="coerce")
 
-    # Drop fully empty rows (common after messy exports)
     out = out.dropna(how="all")
     return out
 
@@ -229,7 +222,6 @@ def build_gene_to_drugs_index(active_drugs_df: pd.DataFrame) -> Dict[str, List[D
     if targets_col is None:
         return {}
 
-    # Optional columns
     has_ind = "Indication" in df.columns
     has_moa = "Mechanism of Action" in df.columns
 
@@ -264,7 +256,6 @@ def build_gene_to_drugs_index(active_drugs_df: pd.DataFrame) -> Dict[str, List[D
         for g in targets:
             gene_to_drugs.setdefault(g, []).append(rec)
 
-    # Sort each gene's drug list
     def _sort_key(r: Dict[str, Any]):
         z = r.get("z-score", np.nan)
         d = r.get("distance", np.nan)
@@ -322,7 +313,6 @@ def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
     for file_path in candidates:
         try:
             df = pd.read_parquet(file_path) if file_path.suffix.lower() == ".parquet" else pd.read_csv(file_path)
-
             if df is None or df.empty:
                 continue
 
@@ -463,7 +453,6 @@ def load_wgcna_mod_trait_pval() -> pd.DataFrame:
     return _standardise_module_trait_matrix(df)
 
 
-# Backwards-compatible aliases (your streamlit_app.py may still import these names)
 def load_wcgna_mod_trait_cor() -> pd.DataFrame:
     return load_wgcna_mod_trait_cor()
 
@@ -528,7 +517,6 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
     return out
 
 
-# Backwards-compatible alias
 def load_wcgna_pathways() -> Dict[str, pd.DataFrame]:
     return load_wgcna_pathways()
 
