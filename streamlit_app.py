@@ -998,18 +998,22 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                 else:
                     st.info("⚠ PPI network data not available")
 
-st.markdown("---")
-
             # -----------------------------------------------------------------
             # TAB 4: IN VITRO STEM CELL MASLD MODEL (iHeps)
             # -----------------------------------------------------------------
             with tab_invitro:
                 st.markdown("""
 This tab summarises differential expression from a human stem cell-derived MASLD model using induced hepatocytes (iHeps).
-Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA** (oleic and palmitic acid), **OA+PA + Resistin/Myostatin** (adipose- and muscle-derived signals), and **OA+PA + Resistin/Myostatin + PBMC co-culture** (immune cells not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
+
+Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA** (oleic and palmitic acid),
+**OA+PA + Resistin/Myostatin** (adipose- and muscle-derived signals), and **OA+PA + Resistin/Myostatin + PBMC co-culture**
+(immune cells were not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
 """)
-                st.markdown("---")
+                st.markdown('---')
                 iva.render_invitro_tab(search_query)
+
+st.markdown("---")
+
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 11px;'>"
     "<p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks</p>"
