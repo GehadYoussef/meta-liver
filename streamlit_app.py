@@ -1,7 +1,9 @@
 """
 Meta Liver - Interactive Streamlit App for Liver Genomics Analysis
-Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | Co-expression and PPI Networks
+Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks
 """
+
+from __future__ import annotations
 
 import sys
 import importlib
@@ -12,6 +14,13 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 
+# -----------------------------------------------------------------------------
+# IMPORTANT: force imports from THIS app folder first (Streamlit Cloud safety)
+# -----------------------------------------------------------------------------
+APP_DIR = Path(__file__).resolve().parent
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
 from robust_data_loader import load_single_omics_studies, load_kg_data, load_ppi_data
 from kg_analysis import (
     get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
@@ -19,17 +28,8 @@ from kg_analysis import (
 from wgcna_ppi_analysis import (
     load_wgcna_module_data, get_gene_module, get_module_genes,
     get_coexpressed_partners, find_ppi_interactors, get_network_stats,
-    load_wcgna_mod_trait_cor, load_wcgna_mod_trait_pval, load_wcgna_pathways
+    load_wgcna_mod_trait_cor, load_wgcna_mod_trait_pval, load_wgcna_pathways
 )
-
-# -----------------------------------------------------------------------------
-# IMPORTANT: always import the *local* single_omics_analysis.py from this app folder
-# and always call its functions (no duplicated scoring logic in this file).
-# This prevents stale/other-module versions silently "winning".
-# -----------------------------------------------------------------------------
-APP_DIR = Path(__file__).resolve().parent
-if str(APP_DIR) not in sys.path:
-    sys.path.insert(0, str(APP_DIR))
 
 import single_omics_analysis as soa
 soa = importlib.reload(soa)
@@ -46,6 +46,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+APP_CITATION = (
+    "Weihs J, Baldo F, Cardinali A, Youssef G, Ludwik K, Haep N, Tang P, Kumar P, "
+    "Engelmann C, Quach S, Meindl M, Kucklick M, Engelmann S, Chillian B, Rothe M, "
+    "Meierhofer D, Lurje I, Hammerich L, Ramachandran P, Kendall TJ, Fallowfield JA, "
+    "Stachelscheid H, Sauer I, Tacke F, Bufler P, Hudert C, Han N, Rezvani M. "
+    "Combined stem cell and predictive models reveal flavin cofactors as targets in metabolic liver dysfunction. "
+    "bioRxiv 2024.10.10.617610. doi: 10.1101/2024.10.10.617610"
+)
+
+APP_TEAM = (
+    "Computational biology: Professor Namshik Han (University of Cambridge) and team; "
+    "Dr Gehad Youssef led the single-omics analysis, Dr Fatima Baldo led the knowledge graph work, "
+    "and Dr Alessandra Cardinali led the WGCNA analyses. "
+    "Experimental models: Dr Milad Rezvani (Charité) and team; Dr Julian Weihs led the MAFLD in vitro model."
+)
+
 
 # =============================================================================
 # DATA LOADING
@@ -58,15 +74,15 @@ def load_all_data():
     wgcna_module_data = load_wgcna_module_data()
     ppi_data = load_ppi_data()
 
-    wcgna_cor = load_wcgna_mod_trait_cor()
-    wcgna_pval = load_wcgna_mod_trait_pval()
-    wcgna_pathways = load_wcgna_pathways()
+    wgcna_cor = load_wgcna_mod_trait_cor()
+    wgcna_pval = load_wgcna_mod_trait_pval()
+    wgcna_pathways = load_wgcna_pathways()
 
-    return single_omics, kg_data, wgcna_module_data, ppi_data, wcgna_cor, wcgna_pval, wcgna_pathways
+    return single_omics, kg_data, wgcna_module_data, ppi_data, wgcna_cor, wgcna_pval, wgcna_pathways
 
 
 try:
-    single_omics_data, kg_data, wgcna_module_data, ppi_data, wcgna_cor, wcgna_pval, wcgna_pathways = load_all_data()
+    single_omics_data, kg_data, wgcna_module_data, ppi_data, wgcna_cor, wgcna_pval, wgcna_pathways = load_all_data()
     data_loaded = True
 except Exception as e:
     st.error(f"Error loading data: {e}")
@@ -75,9 +91,9 @@ except Exception as e:
     kg_data = {}
     wgcna_module_data = {}
     ppi_data = {}
-    wcgna_cor = pd.DataFrame()
-    wcgna_pval = pd.DataFrame()
-    wcgna_pathways = {}
+    wgcna_cor = pd.DataFrame()
+    wgcna_pval = pd.DataFrame()
+    wgcna_pathways = {}
 
 
 # =============================================================================
@@ -86,7 +102,7 @@ except Exception as e:
 
 def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
     """
-    Returns per-study dicts: study, auc_raw, auc_disc, auc_oriented, lfc, direction
+    Returns per-study dicts: study, auc_raw, auc_disc, auc_oriented, lfc, direction.
     Uses soa.find_gene_in_study + soa.extract_metrics_from_row for consistency.
     """
     out = []
@@ -446,6 +462,7 @@ st.sidebar.markdown("## 🔬 Meta Liver")
 search_query = st.sidebar.text_input("Search gene:", placeholder="e.g., SAA1, TP53, IL6").strip().upper()
 
 st.sidebar.caption(f"single_omics_analysis loaded from: {getattr(soa, '__file__', 'unknown')}")
+st.sidebar.caption("Citation: doi:10.1101/2024.10.10.617610")
 
 if data_loaded:
     if single_omics_data:
@@ -466,18 +483,18 @@ if data_loaded:
     else:
         st.sidebar.warning("⚠ WGCNA modules not available")
 
-    if isinstance(wcgna_cor, pd.DataFrame) and not wcgna_cor.empty:
+    if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty:
         st.sidebar.success("✓ WGCNA moduleTraitCor loaded")
     else:
         st.sidebar.warning("⚠ moduleTraitCor not available")
 
-    if isinstance(wcgna_pval, pd.DataFrame) and not wcgna_pval.empty:
+    if isinstance(wgcna_pval, pd.DataFrame) and not wgcna_pval.empty:
         st.sidebar.success("✓ WGCNA moduleTraitPvalue loaded")
     else:
         st.sidebar.warning("⚠ moduleTraitPvalue not available")
 
-    if isinstance(wcgna_pathways, dict) and len(wcgna_pathways) > 0:
-        st.sidebar.success(f"✓ WGCNA pathways loaded ({len(wcgna_pathways)} modules)")
+    if isinstance(wgcna_pathways, dict) and len(wgcna_pathways) > 0:
+        st.sidebar.success(f"✓ WGCNA pathways loaded ({len(wgcna_pathways)} modules)")
     else:
         st.sidebar.warning("⚠ WGCNA pathways not available")
 
@@ -492,22 +509,19 @@ st.sidebar.markdown("---")
 
 if not search_query:
     st.title("🔬 Meta Liver")
-    st.markdown("*Hypothesis Engine for Liver Genomics*")
+    st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
 
     st.markdown("""
-    ## Single-Omics Analysis
+    Meta Liver is an interactive companion to the study below. It enables gene-centric exploration of single-omics signal strength and consistency, network context within a MAFLD/MASH knowledge graph, and WGCNA module structure (including fibrosis stage–stratified analyses where available), with optional PPI neighbourhood context.
 
-    Search for a gene to see:
-    - Evidence Score (discriminative AUROC + stability + direction agreement + study count)
-    - AUROC Across Studies (raw + discriminative)
-    - Concordance: AUROC vs logFC
-    - Detailed per-study results
+    **How to use:** enter a gene symbol in the sidebar search box to open the three analysis tabs for that gene.
 
-    ### Try searching for:
-    - SAA1
-    - TP53
-    - IL6
-    - TNF
+    **Citation (please cite if you use this app):**  
+    Combined stem cell and predictive models reveal flavin cofactors as targets in metabolic liver dysfunction. bioRxiv 2024.10.10.617610. doi: [10.1101/2024.10.10.617610](https://doi.org/10.1101/2024.10.10.617610)
+
+    **Team:**  
+    Computational biology: Professor Namshik Han (University of Cambridge) and team; Dr Gehad Youssef led the single-omics analysis, Dr Fatima Baldo led the knowledge graph work, and Dr Alessandra Cardinali led the WGCNA analyses.  
+    Experimental models: Dr Milad Rezvani (Charité) and team; Dr Julian Weihs led the MAFLD in vitro model.
     """)
 else:
     st.title(f"🔬 {search_query}")
@@ -520,10 +534,10 @@ else:
         if consistency is None:
             st.warning(f"Gene '{search_query}' not found in any study")
         else:
-            tab_omics, tab_kg, tab_coexpr = st.tabs([
+            tab_omics, tab_kg, tab_wgcna = st.tabs([
                 "Single-Omics Evidence",
                 "MAFLD Knowledge Graph",
-                "Co-expression and PPI Networks"
+                "WGCNA Fibrosis Stage Networks"
             ])
 
             # -----------------------------------------------------------------
@@ -531,9 +545,9 @@ else:
             # -----------------------------------------------------------------
             with tab_omics:
                 st.markdown("""
-                This tab summarises gene-level evidence across the single-omics data sets.
-                AUC is per-study discriminative performance, logFC indicates direction (MAFLD vs Healthy), and the Evidence Score
-                summarises strength, stability, direction agreement, and study support.
+                This tab summarises gene-level evidence across the single-omics datasets. AUROC reflects per-study discriminative
+                performance, logFC indicates direction (MAFLD vs Healthy), and the Evidence Score summarises strength, stability,
+                direction agreement, and study support.
                 """)
                 st.markdown("---")
 
@@ -686,10 +700,10 @@ else:
             # -----------------------------------------------------------------
             with tab_kg:
                 st.markdown("""
-                This tab places the selected gene in its network context within the MAFLD MASH subgraph.
-                We report whether the gene is present in the subgraph, its assigned cluster, and centrality
-                metrics (PageRank, betweenness, eigenvector) to indicate whether it behaves as a hub or a
-                peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations.
+                This tab places the selected gene in its network context within the MAFLD/MASH subgraph.
+                It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness,
+                eigenvector) indicating whether it behaves as a hub or peripheral node. The cluster view lists co-clustered
+                genes, drugs, and disease annotations.
                 """)
                 st.markdown("---")
 
@@ -731,44 +745,6 @@ else:
                             composite_pct=kg_info.get("composite_percentile"),
                         )
                         st.info(f"📍 {interpretation}")
-
-                        with st.expander("Show raw centrality values and subgraph ranges"):
-                            st.markdown("**Composite Centrality (Weighted Geo-Mean of Percentiles)**")
-                            st.write(f"Composite score: {_fmt_num(kg_info.get('composite'), decimals=6)}")
-                            st.write(
-                                f"Min/Max (subgraph): "
-                                f"{_fmt_num(kg_info.get('composite_min'), decimals=6)} – {_fmt_num(kg_info.get('composite_max'), decimals=6)}"
-                            )
-                            st.write(f"Percentile: {_fmt_pct(kg_info.get('composite_percentile'))}")
-                            st.write("*Weights: PageRank 50%, Betweenness 25%, Eigenvector 25%*")
-
-                            st.markdown("---")
-                            st.markdown("**Individual Metrics – MASH Subgraph Context**")
-
-                            c1, c2, c3 = st.columns(3)
-
-                            with c1:
-                                st.write("**PageRank**")
-                                st.write(f"Min: {_fmt_num(kg_info.get('pagerank_min'), decimals=4)}")
-                                st.write(f"Max: {_fmt_num(kg_info.get('pagerank_max'), decimals=4)}")
-                                st.write(f"Your node: {_fmt_num(kg_info.get('pagerank'), decimals=4)}")
-                                st.write(f"Percentile: {_fmt_pct(kg_info.get('pagerank_percentile'))}")
-
-                            with c2:
-                                st.write("**Betweenness**")
-                                st.write(f"Min: {_fmt_num(kg_info.get('bet_min'), decimals=4)}")
-                                st.write(f"Max: {_fmt_num(kg_info.get('bet_max'), decimals=4)}")
-                                st.write(f"Your node: {_fmt_num_commas(kg_info.get('betweenness'), decimals=4)}")
-                                st.write(f"Percentile: {_fmt_pct(kg_info.get('bet_percentile'))}")
-
-                            with c3:
-                                st.write("**Eigenvector**")
-                                st.write(f"Min: {_fmt_num(kg_info.get('eigen_min'), decimals=6)}")
-                                st.write(f"Max: {_fmt_num(kg_info.get('eigen_max'), decimals=6)}")
-                                st.write(f"Your node: {_fmt_num(kg_info.get('eigen'), decimals=6, sci_if_small=True)}")
-                                st.write(f"Percentile: {_fmt_pct(kg_info.get('eigen_percentile'))}")
-
-                        st.markdown("---")
 
                         if cluster_id is None or str(cluster_id).strip() == "" or str(cluster_id).lower() == "nan":
                             st.warning("Cluster ID missing for this node; cannot display cluster neighbours.")
@@ -814,13 +790,14 @@ else:
                     st.warning("⚠ Knowledge graph data not loaded")
 
             # -----------------------------------------------------------------
-            # TAB 3: CO-EXPRESSION AND PPI NETWORKS
+            # TAB 3: WGCNA FIBROSIS STAGE NETWORKS
             # -----------------------------------------------------------------
-            with tab_coexpr:
+            with tab_wgcna:
                 st.markdown("""
-                This tab summarises the gene's systems-level context from WGCNA module membership
-                and protein–protein interaction (PPI) networks. We report the WGCNA module assignment
-                and highlight co-expressed partners, then show direct PPI interactors and local network stats.
+                This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage
+                (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment,
+                module–trait relationships, and module-specific enrichment tables, and then shows direct PPI interactors and local
+                network statistics for the selected gene.
                 """)
                 st.markdown("---")
 
@@ -839,7 +816,7 @@ else:
                             st.info(f"No other genes found in module {module_name}")
 
                         with st.expander("Module–trait relationships (WGCNA)"):
-                            mt = _module_trait_table(module_name, wcgna_cor, wcgna_pval)
+                            mt = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
                             if mt is None or mt.empty:
                                 st.info("Module–trait tables not available for this module (check module index names).")
                             else:
@@ -847,9 +824,9 @@ else:
 
                         with st.expander("Pathways / enrichment (module)"):
                             key = str(module_name).strip().lower()
-                            dfp = (wcgna_pathways or {}).get(key)
+                            dfp = (wgcna_pathways or {}).get(key)
                             if dfp is None or dfp.empty:
-                                st.info(f"No enrichment table found for module '{module_name}' in wcgna/pathways/")
+                                st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
                             else:
                                 st.dataframe(dfp, use_container_width=True, hide_index=True)
 
@@ -859,7 +836,7 @@ else:
                     st.info("⚠ WGCNA module data not available")
 
                 st.markdown("---")
-                st.markdown("**Protein-Protein Interaction Network**")
+                st.markdown("**Protein–Protein Interaction Network**")
                 if ppi_data:
                     ppi_df = find_ppi_interactors(search_query, ppi_data)
                     if ppi_df is not None:
@@ -880,7 +857,8 @@ else:
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 11px;'>"
-    "<p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | Co-expression and PPI Networks</p>"
+    "<p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks</p>"
+    "<p>doi: <a href='https://doi.org/10.1101/2024.10.10.617610' target='_blank'>10.1101/2024.10.10.617610</a></p>"
     "</div>",
     unsafe_allow_html=True
 )
