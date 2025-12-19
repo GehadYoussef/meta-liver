@@ -284,8 +284,10 @@ _GENE_COL_CANDIDATES = [
     "ensg", "ensembl",
     "feature", "id",
     "Name", "NAME",
-    "Unnamed: 0", "Unnamed: 0.1", "__index_level_0__", "index", "level_0", "",
+    # common “unnamed first column” patterns
+    "Unnamed: 0", "Unnamed: 0.1", "__index_level_0__", "index", "level_0",
 ]
+
 _LOGFC_COL_CANDIDATES = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
 _PVAL_COL_CANDIDATES = ["pvalue", "pval", "PValue", "p_value"]
 _PADJ_COL_CANDIDATES = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
@@ -351,58 +353,12 @@ def _gene_col_is_effectively_empty(series: pd.Series) -> bool:
 
 
 def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Standardises key columns to:
-      Gene, logFC, pval, padj, stat, baseMean
-    Leaves any other columns intact.
-    """
     if df is None or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
 
-    gene_present = ("Gene" in out.columns) and (not _gene_col_is_effectively_empty(out["Gene"]))
-
-    # Promote index to Gene if it looks like ENSG and Gene is missing/empty.
-    try:
-        if (not gene_present) and (not isinstance(out.index, pd.RangeIndex)):
-            idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
-            if len(idx_vals) > 0 and float(idx_vals.map(_looks_like_ensembl).mean()) >= 0.3:
-                out = out.reset_index()
-                out = out.rename(columns={out.columns[0]: "Gene"})
-                gene_present = True
-    except Exception:
-        pass
-
-    cols = list(out.columns)
-
-    gene_col = "Gene" if gene_present else _pick_col(cols, _GENE_COL_CANDIDATES)
-    if (not gene_present) and (gene_col is None):
-        gene_col = _autodetect_gene_col_by_values(out)
-
-    logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
-    pval_col = _pick_col(cols, _PVAL_COL_CANDIDATES)
-    padj_col = _pick_col(cols, _PADJ_COL_CANDIDATES)
-    stat_col = _pick_col(cols, _STAT_COL_CANDIDATES)
-    base_col = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
-
-    ren: Dict[str, str] = {}
-    if gene_col is not None:
-        ren[gene_col] = "Gene"
-    if logfc_col is not None:
-        ren[logfc_col] = "logFC"
-    if pval_col is not None:
-        ren[pval_col] = "pval"
-    if padj_col is not None:
-        ren[padj_col] = "padj"
-    if stat_col is not None:
-        ren[stat_col] = "stat"
-    if base_col is not None:
-        ren[base_col] = "baseMean"
-
-    out = out.rename(columns=ren)
-
-    # Final safety net: if still no Gene, try promoting index again (non-RangeIndex).
+    # 1) If gene IDs are in the index, promote them (only works if index is meaningful)
     try:
         if "Gene" not in out.columns and not isinstance(out.index, pd.RangeIndex):
             idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
@@ -412,6 +368,30 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         pass
 
+    cols = list(out.columns)
+
+    # 2) Pick gene column by name OR by values (ENSG-like detection)
+    gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
+    if gene_col is None:
+        gene_col = _autodetect_gene_col_by_values(out)
+
+    logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
+    pval_col  = _pick_col(cols, _PVAL_COL_CANDIDATES)
+    padj_col  = _pick_col(cols, _PADJ_COL_CANDIDATES)
+    stat_col  = _pick_col(cols, _STAT_COL_CANDIDATES)
+    base_col  = _pick_col(cols, _BASEMEAN_COL_CANDIDATES)
+
+    ren: Dict[str, str] = {}
+    if gene_col is not None:  ren[gene_col] = "Gene"
+    if logfc_col is not None: ren[logfc_col] = "logFC"
+    if pval_col is not None:  ren[pval_col] = "pval"
+    if padj_col is not None:  ren[padj_col] = "padj"
+    if stat_col is not None:  ren[stat_col] = "stat"
+    if base_col is not None:  ren[base_col] = "baseMean"
+
+    out = out.rename(columns=ren)
+
+    # 3) Normalise identifiers + numeric columns
     if "Gene" in out.columns:
         out["Gene"] = out["Gene"].astype(str).map(_clean_gene_id)
 
@@ -420,7 +400,6 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = pd.to_numeric(out[c], errors="coerce")
 
     return out
-
 
 def load_all_invitro_deg_tables() -> Tuple[Dict[InVitroKey, pd.DataFrame], List[str], Dict[str, str], Dict[str, str]]:
     files = discover_invitro_deg_files()
