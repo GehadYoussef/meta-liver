@@ -4,7 +4,7 @@ Robust Data Loader for Meta Liver
 Purpose
 - Auto-detects the data directory at runtime
 - Finds folders/files case-insensitively
-- Loads WGCNA (supports both 'wgcna' and 'wcgna'), single-omics, knowledge graph, and PPI tables
+- Loads WGCNA (supports both 'wgcna' and legacy 'wcgna'), single-omics, knowledge graph, and PPI tables
 - Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
 
 Usage (in Streamlit)
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, Dict
 import warnings
 import re
+
 import pandas as pd
 
 
@@ -54,7 +55,7 @@ def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
         if item.is_dir() and item.name.lower() == pat:
             return item
 
-    # Fall back to deeper search (optional but useful if structure varies)
+    # Fall back to deeper search (useful if structure varies)
     for item in parent.rglob("*"):
         if item.is_dir() and item.name.lower() == pat:
             return item
@@ -84,7 +85,7 @@ def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
 
 def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
     """
-    Prefer 'wgcna' (you renamed to this), but still accept legacy 'wcgna'.
+    Prefer 'wgcna' (current), but still accept legacy 'wcgna'.
     """
     if data_dir is None:
         return None
@@ -101,9 +102,10 @@ def _read_table(file_path: Path, *, index_col: Optional[int] = None) -> pd.DataF
         return pd.DataFrame()
 
     try:
-        if file_path.suffix.lower() == ".parquet":
+        suf = file_path.suffix.lower()
+        if suf == ".parquet":
             return pd.read_parquet(file_path)
-        if file_path.suffix.lower() == ".csv":
+        if suf == ".csv":
             return pd.read_csv(file_path, index_col=index_col)
         return pd.DataFrame()
     except Exception as e:

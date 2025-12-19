@@ -1,10 +1,10 @@
 """
 WGCNA and PPI Network Analysis Module
 
-This module currently supports:
-1) WGCNA module gene mapping files from <data_dir>/wcgna/modules/
-2) Module–trait matrices from <data_dir>/wcgna/ (moduleTraitCor / moduleTraitPvalue)
-3) Enrichment/pathway tables from <data_dir>/wcgna/pathways/
+Supports:
+1) WGCNA module gene mapping files from <data_dir>/(wgcna|wcgna)/modules/
+2) Module–trait matrices from <data_dir>/(wgcna|wcgna)/ (moduleTraitCor / moduleTraitPvalue)
+3) Enrichment/pathway tables from <data_dir>/(wgcna|wcgna)/pathways/
 4) Basic co-expression (correlation) helper on an expression matrix
 5) Simple PPI neighbour lookup and degree stats across one or more PPI tables
 """
@@ -37,21 +37,22 @@ def find_data_dir() -> Optional[Path]:
 
     for path in possible_dirs:
         if path.exists():
-            return path
+            return path.resolve()
     return None
 
 
 def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
     """Find subfolder (case-insensitive)."""
-    if not parent.exists():
+    if parent is None or not parent.exists():
         return None
 
     exact_path = parent / folder_pattern
-    if exact_path.exists():
+    if exact_path.exists() and exact_path.is_dir():
         return exact_path
 
+    pat = folder_pattern.lower()
     for item in parent.iterdir():
-        if item.is_dir() and item.name.lower() == folder_pattern.lower():
+        if item.is_dir() and item.name.lower() == pat:
             return item
 
     return None
@@ -59,11 +60,11 @@ def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
 
 def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
     """Find file in directory (case-insensitive; substring match allowed)."""
-    if not directory.exists():
+    if directory is None or not directory.exists():
         return None
 
     exact_path = directory / filename_pattern
-    if exact_path.exists():
+    if exact_path.exists() and exact_path.is_file():
         return exact_path
 
     pat = filename_pattern.lower()
@@ -79,13 +80,20 @@ def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
     return None
 
 
+def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
+    """Prefer wgcna/, but accept legacy wcgna/."""
+    if data_dir is None:
+        return None
+    return find_subfolder(data_dir, "wgcna") or find_subfolder(data_dir, "wcgna")
+
+
 # -----------------------------------------------------------------------------
 # WGCNA MODULE GENE MAPPINGS
 # -----------------------------------------------------------------------------
 
 def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
     """
-    Load per-module gene mapping files from <data_dir>/wcgna/modules/.
+    Load per-module gene mapping files from <data_dir>/(wgcna|wcgna)/modules/.
 
     Accepts .parquet and .csv with flexible gene-symbol column names.
     Normalises the gene symbol column to 'hgnc_symbol' (upper-case).
@@ -100,12 +108,12 @@ def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
         print("DEBUG: data_dir not found", file=sys.stderr)
         return {}
 
-    wcgna_dir = find_subfolder(data_dir, "wcgna")
-    if wcgna_dir is None:
-        print(f"DEBUG: wcgna folder not found under {data_dir}", file=sys.stderr)
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        print(f"DEBUG: wgcna/wcgna folder not found under {data_dir}", file=sys.stderr)
         return {}
 
-    modules_dir = wcgna_dir / "modules"
+    modules_dir = wgcna_dir / "modules"
     if not modules_dir.exists():
         print(f"DEBUG: modules folder not found: {modules_dir}", file=sys.stderr)
         return {}
@@ -158,10 +166,7 @@ def load_wgcna_module_data() -> Dict[str, pd.DataFrame]:
 
 
 def get_gene_module(gene_name: str, module_data: Dict[str, pd.DataFrame]) -> Optional[Dict[str, Any]]:
-    """
-    Find which WGCNA module a gene belongs to.
-    Returns module name and first matching row.
-    """
+    """Find which WGCNA module a gene belongs to; returns module name and first matching row."""
     if not module_data:
         return None
 
@@ -179,10 +184,7 @@ def get_gene_module(gene_name: str, module_data: Dict[str, pd.DataFrame]) -> Opt
 
 
 def get_module_genes(module_name: str, module_data: Dict[str, pd.DataFrame]) -> Optional[pd.DataFrame]:
-    """
-    Get all genes in a specific WGCNA module.
-    Returns a dataframe with Gene (+ optional Ensembl ID).
-    """
+    """Get all genes in a specific WGCNA module; returns dataframe with Gene (+ optional Ensembl ID)."""
     if not module_data or module_name not in module_data:
         return None
 
@@ -214,10 +216,7 @@ def get_all_modules(module_data: Dict[str, pd.DataFrame]) -> list[str]:
 # -----------------------------------------------------------------------------
 
 def _standardise_module_trait_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure module is in the index and traits are columns.
-    Handles common patterns from CSV/Parquet exports.
-    """
+    """Ensure module is in the index and traits are columns; handles common export patterns."""
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -237,53 +236,62 @@ def _standardise_module_trait_matrix(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_wcgna_mod_trait_cor() -> pd.DataFrame:
-    """Load <data_dir>/wcgna/moduleTraitCor.(parquet|csv)."""
+def load_wgcna_mod_trait_cor() -> pd.DataFrame:
+    """Load <data_dir>/(wgcna|wcgna)/moduleTraitCor.(parquet|csv)."""
     data_dir = find_data_dir()
     if data_dir is None:
         return pd.DataFrame()
 
-    wcgna_dir = find_subfolder(data_dir, "wcgna")
-    if wcgna_dir is None:
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
         return pd.DataFrame()
 
-    fp = find_file(wcgna_dir, "moduleTraitCor.parquet") or find_file(wcgna_dir, "moduleTraitCor.csv")
+    fp = find_file(wgcna_dir, "moduleTraitCor.parquet") or find_file(wgcna_dir, "moduleTraitCor.csv")
     if fp is None:
         return pd.DataFrame()
 
     df = pd.read_parquet(fp) if fp.suffix.lower() == ".parquet" else pd.read_csv(fp)
     return _standardise_module_trait_matrix(df)
+
+
+def load_wgcna_mod_trait_pval() -> pd.DataFrame:
+    """Load <data_dir>/(wgcna|wcgna)/moduleTraitPvalue.(parquet|csv)."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return pd.DataFrame()
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return pd.DataFrame()
+
+    fp = find_file(wgcna_dir, "moduleTraitPvalue.parquet") or find_file(wgcna_dir, "moduleTraitPvalue.csv")
+    if fp is None:
+        return pd.DataFrame()
+
+    df = pd.read_parquet(fp) if fp.suffix.lower() == ".parquet" else pd.read_csv(fp)
+    return _standardise_module_trait_matrix(df)
+
+
+# Backwards-compatible aliases (your streamlit_app.py may still import these names)
+def load_wcgna_mod_trait_cor() -> pd.DataFrame:
+    return load_wgcna_mod_trait_cor()
 
 
 def load_wcgna_mod_trait_pval() -> pd.DataFrame:
-    """Load <data_dir>/wcgna/moduleTraitPvalue.(parquet|csv)."""
-    data_dir = find_data_dir()
-    if data_dir is None:
-        return pd.DataFrame()
-
-    wcgna_dir = find_subfolder(data_dir, "wcgna")
-    if wcgna_dir is None:
-        return pd.DataFrame()
-
-    fp = find_file(wcgna_dir, "moduleTraitPvalue.parquet") or find_file(wcgna_dir, "moduleTraitPvalue.csv")
-    if fp is None:
-        return pd.DataFrame()
-
-    df = pd.read_parquet(fp) if fp.suffix.lower() == ".parquet" else pd.read_csv(fp)
-    return _standardise_module_trait_matrix(df)
+    return load_wgcna_mod_trait_pval()
 
 
 # -----------------------------------------------------------------------------
 # PATHWAYS / ENRICHMENT TABLES
 # -----------------------------------------------------------------------------
 
-def load_wcgna_pathways() -> Dict[str, pd.DataFrame]:
+def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
     """
-    Load enrichment/pathway outputs from <data_dir>/wcgna/pathways/.
+    Load enrichment/pathway outputs from <data_dir>/(wgcna|wcgna)/pathways/.
 
     Behaviour:
     - Reads .csv or .parquet
-    - Infers module from filename stem: first token before '_' or '-' (e.g. 'black_enrichment' -> 'black')
+    - Infers module from filename stem: first token before '_' or '-' or space (e.g. 'black_enrichment' -> 'black')
     - Returns dict keyed by module (lowercase)
     """
     out: Dict[str, pd.DataFrame] = {}
@@ -292,11 +300,11 @@ def load_wcgna_pathways() -> Dict[str, pd.DataFrame]:
     if data_dir is None:
         return out
 
-    wcgna_dir = find_subfolder(data_dir, "wcgna")
-    if wcgna_dir is None:
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
         return out
 
-    pathways_dir = wcgna_dir / "pathways"
+    pathways_dir = wgcna_dir / "pathways"
     if not pathways_dir.exists():
         return out
 
@@ -327,6 +335,11 @@ def load_wcgna_pathways() -> Dict[str, pd.DataFrame]:
             continue
 
     return out
+
+
+# Backwards-compatible alias
+def load_wcgna_pathways() -> Dict[str, pd.DataFrame]:
+    return load_wgcna_pathways()
 
 
 # -----------------------------------------------------------------------------
@@ -421,9 +434,7 @@ def find_ppi_interactors(gene_name: str, ppi_data: Dict[str, pd.DataFrame]) -> O
 
 
 def get_network_stats(gene_name: str, ppi_data: Dict[str, pd.DataFrame]) -> Optional[Dict[str, Any]]:
-    """
-    Get a minimal local network statistic: degree (count of direct edges).
-    """
+    """Get a minimal local network statistic: degree (count of direct edges)."""
     if not ppi_data:
         return None
 
