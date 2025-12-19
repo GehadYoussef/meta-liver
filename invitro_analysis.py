@@ -357,18 +357,35 @@ def _autodetect_gene_col_by_values(df: pd.DataFrame) -> Optional[str]:
 
 
 def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
+    """
+    Read CSV/Parquet robustly.
+
+    Key fix:
+    - For CSVs where the Ensembl IDs are stored in an unnamed first column, keep it
+      (do NOT treat it as an index at read time), then normalise_deg_table() will
+      detect/rename it to 'Gene'.
+    """
     try:
         if path.suffix.lower() == ".csv":
-            return pd.read_csv(path), None
+            df = pd.read_csv(path)
+
+            # Some CSV exports store Ensembl IDs in an unnamed first column.
+            # pandas will call it "Unnamed: 0" (or similar). We keep it and let
+            # normalise_deg_table() turn it into 'Gene'.
+            return df, None
+
         if path.suffix.lower() == ".parquet":
-            return pd.read_parquet(path), None
+            df = pd.read_parquet(path)
+            return df, None
+
         return None, f"Unsupported file type: {path.name}"
+
     except Exception as e:
         if path.suffix.lower() == ".parquet":
             msg = (
                 f"Could not read parquet file: {path.name}\n\n"
                 f"Underlying error: {type(e).__name__}: {e}\n\n"
-                "Fix: add a parquet engine to your environment, for example in requirements.txt:\n"
+                "Fix: add a parquet engine to your environment, for example include this in requirements.txt:\n"
                 "  pyarrow\n"
                 "Then redeploy/restart the app."
             )
@@ -376,30 +393,50 @@ def _read_deg_file_safe(path: Path) -> Tuple[Optional[pd.DataFrame], Optional[st
         return None, f"Could not read {path.name}: {type(e).__name__}: {e}"
 
 
+
 def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Standardises key columns to:
       Gene, logFC, pval, padj, stat, baseMean
-    Leaves any other columns intact.
+
+    Key fixes:
+    - If Ensembl IDs are in the index, reset_index() and name it 'Gene'
+    - If Ensembl IDs are in an unnamed first column (e.g. 'Unnamed: 0' or ''), rename it to 'Gene'
+    - If we still can't find a gene column by name, auto-detect by ENSG-like values
+    - Strip Ensembl version suffixes (ENSG... .12 -> ENSG...)
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
 
-    # If gene is in the index but unnamed, and values look Ensembl-like, reset it
+    # 1) If Ensembl IDs are in the index (common with parquet), materialise them
     try:
-        if "Gene" not in out.columns:
-            idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
-            if len(idx_vals) > 0 and float(idx_vals.map(_looks_like_ensembl).mean()) >= 0.3:
-                out = out.reset_index().rename(columns={"index": "Gene"})
+        idx_vals = pd.Series(out.index).astype(str).map(_clean_gene_id)
+        if len(idx_vals) > 0 and float(idx_vals.map(_looks_like_ensembl).mean()) >= 0.3:
+            out = out.reset_index()
+            # pandas names this column "index" unless index.name exists
+            first_col = out.columns[0]
+            out = out.rename(columns={first_col: "Gene"})
     except Exception:
         pass
 
     cols = list(out.columns)
 
+    # 2) If the first column is unnamed and looks like ENSG..., treat it as Gene
+    if cols:
+        c0 = cols[0]
+        c0_str = str(c0)
+        if c0_str.strip() == "" or c0_str.lower().startswith("unnamed"):
+            s = out[c0].head(min(200, len(out))).astype(str).map(_clean_gene_id)
+            if len(s) > 0 and float(s.map(_looks_like_ensembl).mean()) >= 0.3:
+                out = out.rename(columns={c0: "Gene"})
+
+    cols = list(out.columns)
+
+    # 3) Pick/auto-detect a gene column if not yet called 'Gene'
     gene_col = _pick_col(cols, _GENE_COL_CANDIDATES)
-    if gene_col is None:
+    if gene_col is None and "Gene" not in cols:
         gene_col = _autodetect_gene_col_by_values(out)
 
     logfc_col = _pick_col(cols, _LOGFC_COL_CANDIDATES)
@@ -424,7 +461,7 @@ def normalise_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     out = out.rename(columns=ren)
 
-    # Normalise Gene column for matching
+    # 4) Final clean-up: standardise Gene IDs for matching
     if "Gene" in out.columns:
         out["Gene"] = out["Gene"].astype(str).map(_clean_gene_id)
 
