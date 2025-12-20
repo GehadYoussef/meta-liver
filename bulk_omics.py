@@ -290,16 +290,26 @@ def _signed_z_from_two_sided_p(p: np.ndarray, lfc: np.ndarray) -> np.ndarray:
 
 def _z_to_p_two_sided(z: np.ndarray) -> np.ndarray:
     """
-    Two-sided p from z using erfc; vectorised.
+    Two-sided p from z.
+    Uses scipy.special.erfc if available; otherwise falls back to math.erfc element-wise.
     """
     z = np.asarray(z, dtype=float)
     out = np.full_like(z, np.nan, dtype=float)
+
     ok = np.isfinite(z)
     if not np.any(ok):
         return out
-    za = np.abs(z[ok])
-    out[ok] = np.clip(np.erfc(za / math.sqrt(2.0)), 0.0, 1.0)
+
+    za = np.abs(z[ok]) / math.sqrt(2.0)
+
+    try:
+        from scipy.special import erfc as sp_erfc  # type: ignore
+        out[ok] = np.clip(sp_erfc(za), 0.0, 1.0)
+    except Exception:
+        out[ok] = np.clip(np.array([math.erfc(float(v)) for v in za], dtype=float), 0.0, 1.0)
+
     return out
+
 
 
 # -----------------------------------------------------------------------------
