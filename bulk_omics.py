@@ -28,11 +28,9 @@ This module:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 import math
-import re
 
 import numpy as np
 import pandas as pd
@@ -206,7 +204,7 @@ def load_bulk_omics() -> Dict[str, Dict[str, pd.DataFrame]]:
 def _p_to_z_two_sided(p: float, sign: float) -> float:
     """
     Convert a two-sided p-value to a signed z score.
-    Uses normal quantile via scipy if available; otherwise uses a stable approximation.
+    Uses a stable normal inverse CDF approximation (Acklam-ish).
     """
     if p is None or (isinstance(p, float) and (math.isnan(p) or p <= 0 or p > 1)):
         return float("nan")
@@ -215,10 +213,7 @@ def _p_to_z_two_sided(p: float, sign: float) -> float:
     p = min(max(float(p), 1e-300), 1.0)
     u = 1.0 - (p / 2.0)
 
-    # Normal inverse CDF approximation (Acklam-ish rational approximation)
-    # Good enough for meta combination in-app.
     def _norm_ppf(u_: float) -> float:
-        # Coefficients
         a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
              1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
         b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
@@ -245,7 +240,7 @@ def _p_to_z_two_sided(p: float, sign: float) -> float:
                (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1)
 
     z = _norm_ppf(u)
-    sgn = 1.0 if sign >= 0 else -1.0
+    sgn = 1.0 if float(sign) >= 0 else -1.0
     return sgn * float(z)
 
 
@@ -392,7 +387,6 @@ def direction_agreement(per_study: pd.DataFrame) -> float:
     s = pd.to_numeric(per_study["log2FoldChange"], errors="coerce").dropna()
     if s.empty:
         return float("nan")
-    # majority sign agreement proportion
     signs = np.sign(s.values)
     pos = float((signs > 0).mean())
     neg = float((signs < 0).mean())
@@ -457,7 +451,6 @@ def top_genes_for_contrast(
         return pd.DataFrame()
 
     rows = []
-    # Keep it fast: sample if huge
     for g in all_syms:
         summ = bulk_gene_summary(studies, g)
         if summ["n_studies"] < int(min_studies):
@@ -470,7 +463,8 @@ def top_genes_for_contrast(
         if meta_p is None or (isinstance(meta_p, float) and (math.isnan(meta_p) or meta_p <= 0)):
             score = float("nan")
         else:
-            score = float((-math.log10(float(meta_p))) * abs(float(meta_lfc)) * float(agree if not math.isnan(float(agree)) else 0.0))
+            a = float(agree) if pd.notna(agree) else 0.0
+            score = float((-math.log10(float(meta_p))) * abs(float(meta_lfc)) * a)
 
         rows.append({
             "Symbol": g,
@@ -510,7 +504,6 @@ def render_bulk_omics_tab(query: str) -> None:
     st.markdown("### Dataset availability")
     st.caption(f"Bulk Omics root: {root}")
 
-    # availability table
     avail_rows = []
     for contrast, studies in data.items():
         avail_rows.append({"Contrast": contrast, "Study tables": len(studies)})
