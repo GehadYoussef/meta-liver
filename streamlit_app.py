@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import importlib
+import inspect
 from pathlib import Path
 
 import streamlit as st
@@ -31,8 +32,13 @@ from robust_data_loader import (
     load_single_omics_studies,
     load_kg_data,
     load_ppi_data,
-    load_bulk_omics_tables,
 )
+
+# Robust bulk loader import (prevents the ImportError you saw if the name differs)
+try:
+    from robust_data_loader import load_bulk_omics_tables  # if you defined this alias
+except ImportError:
+    from robust_data_loader import load_bulk_omics_studies as load_bulk_omics_tables  # canonical name
 
 from kg_analysis import (
     get_gene_kg_info,
@@ -130,7 +136,11 @@ def load_all_data():
     wgcna_pathways = load_wgcna_pathways()
 
     active_drugs = load_wgcna_active_drugs()
-    gene_to_drugs = build_gene_to_drugs_index(active_drugs) if active_drugs is not None and not active_drugs.empty else {}
+    gene_to_drugs = (
+        build_gene_to_drugs_index(active_drugs)
+        if active_drugs is not None and not active_drugs.empty
+        else {}
+    )
 
     bulk_omics_data = load_bulk_omics_tables()
 
@@ -266,7 +276,6 @@ def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
 
         auc_oriented = None
         if auc_raw is not None:
-            # align so MAFLD is treated as "positive"
             auc_oriented = float(1.0 - auc_raw) if direction == "Healthy" else float(auc_raw)
 
         out.append(
@@ -573,16 +582,10 @@ def _module_trait_table(module_name: str, cor_df: pd.DataFrame, pval_df: pd.Data
 
 
 def _annotate_genes_with_drugs(gene_df: pd.DataFrame, gene_to_drugs_map: dict, max_drugs_per_gene: int) -> pd.DataFrame:
-    """
-    Replaces 'Ensembl ID' with drug-target context:
-    Gene | n_drugs | Drugs (up to max_drugs_per_gene)
-    """
     if gene_df is None or gene_df.empty:
         return gene_df
-
     if gene_to_drugs_map is None or len(gene_to_drugs_map) == 0:
         return gene_df
-
     if "Gene" not in gene_df.columns:
         return gene_df
 
@@ -635,47 +638,17 @@ if data_loaded:
     else:
         st.sidebar.warning("⚠ No single-omics studies found")
 
-    if kg_data:
-        st.sidebar.success("✓ Knowledge graph loaded")
-    else:
-        st.sidebar.warning("⚠ Knowledge graph not available")
-
-    if wgcna_module_data:
-        st.sidebar.success(f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)")
-    else:
-        st.sidebar.warning("⚠ WGCNA modules not available")
-
-    if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty:
-        st.sidebar.success("✓ WGCNA moduleTraitCor loaded")
-    else:
-        st.sidebar.warning("⚠ moduleTraitCor not available")
-
-    if isinstance(wgcna_pval, pd.DataFrame) and not wgcna_pval.empty:
-        st.sidebar.success("✓ WGCNA moduleTraitPvalue loaded")
-    else:
-        st.sidebar.warning("⚠ moduleTraitPvalue not available")
-
-    if isinstance(wgcna_pathways, dict) and len(wgcna_pathways) > 0:
-        st.sidebar.success(f"✓ WGCNA pathways loaded ({len(wgcna_pathways)} modules)")
-    else:
-        st.sidebar.warning("⚠ WGCNA pathways not available")
-
-    if isinstance(active_drugs_df, pd.DataFrame) and not active_drugs_df.empty:
-        st.sidebar.success("✓ Active drugs loaded")
-    else:
-        st.sidebar.warning("⚠ Active drugs not available")
-
-    if ppi_data:
-        st.sidebar.success("✓ PPI networks loaded")
-    else:
-        st.sidebar.warning("⚠ PPI networks not available")
+    st.sidebar.success("✓ Knowledge graph loaded" if kg_data else "⚠ Knowledge graph not available")
+    st.sidebar.success(f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)" if wgcna_module_data else "⚠ WGCNA modules not available")
+    st.sidebar.success("✓ WGCNA moduleTraitCor loaded" if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty else "⚠ moduleTraitCor not available")
+    st.sidebar.success("✓ WGCNA moduleTraitPvalue loaded" if isinstance(wgcna_pval, pd.DataFrame) and not wgcna_pval.empty else "⚠ moduleTraitPvalue not available")
+    st.sidebar.success(f"✓ WGCNA pathways loaded ({len(wgcna_pathways)} modules)" if isinstance(wgcna_pathways, dict) and len(wgcna_pathways) > 0 else "⚠ WGCNA pathways not available")
+    st.sidebar.success("✓ Active drugs loaded" if isinstance(active_drugs_df, pd.DataFrame) and not active_drugs_df.empty else "⚠ Active drugs not available")
+    st.sidebar.success("✓ PPI networks loaded" if ppi_data else "⚠ PPI networks not available")
 
     try:
         invitro_files = iva.discover_invitro_deg_files()
-        if invitro_files:
-            st.sidebar.success(f"✓ In vitro model DEGs found ({len(invitro_files)})")
-        else:
-            st.sidebar.warning("⚠ In vitro model DEGs not found (expected: stem_cell_model/*.parquet)")
+        st.sidebar.success(f"✓ In vitro model DEGs found ({len(invitro_files)})" if invitro_files else "⚠ In vitro model DEGs not found (expected: stem_cell_model/*.parquet)")
     except Exception as e:
         st.sidebar.warning(f"⚠ In vitro model check failed: {e}")
 
@@ -692,7 +665,6 @@ st.sidebar.markdown("---")
 if not search_query:
     st.title("🔬 Meta Liver")
     st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
-
     st.markdown(
         f"""
 Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), in vitro MASLD model DEGs, and bulk tissue differential expression contrasts.
@@ -727,9 +699,6 @@ else:
                 ]
             )
 
-            # -----------------------------------------------------------------
-            # TAB 1: SINGLE-OMICS EVIDENCE
-            # -----------------------------------------------------------------
             with tab_omics:
                 st.markdown(
                     """
@@ -888,9 +857,6 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
                 else:
                     st.info("No per-study rows found for this gene.")
 
-            # -----------------------------------------------------------------
-            # TAB 2: MAFLD KNOWLEDGE GRAPH
-            # -----------------------------------------------------------------
             with tab_kg:
                 st.markdown(
                     """
@@ -949,7 +915,16 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
                             with ctl2:
                                 sort_key = st.selectbox(
                                     "Sort by",
-                                    ["Composite %ile", "PR %ile", "Bet %ile", "Eigen %ile", "PageRank (raw)", "Betweenness (raw)", "Eigen (raw)", "Name"],
+                                    [
+                                        "Composite %ile",
+                                        "PR %ile",
+                                        "Bet %ile",
+                                        "Eigen %ile",
+                                        "PageRank (raw)",
+                                        "Betweenness (raw)",
+                                        "Eigen (raw)",
+                                        "Name",
+                                    ],
                                     index=0,
                                     key="kg_sort_key",
                                 )
@@ -981,9 +956,6 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
                 else:
                     st.warning("⚠ Knowledge graph data not loaded")
 
-            # -----------------------------------------------------------------
-            # TAB 3: WGCNA FIBROSIS STAGE NETWORKS
-            # -----------------------------------------------------------------
             with tab_wgcna:
                 st.markdown(
                     """
@@ -1075,9 +1047,6 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                 else:
                     st.info("⚠ PPI network data not available")
 
-            # -----------------------------------------------------------------
-            # TAB 4: IN VITRO STEM CELL MASLD MODEL (iHeps)
-            # -----------------------------------------------------------------
             with tab_invitro:
                 st.markdown(
                     """
@@ -1091,11 +1060,18 @@ Healthy controls are labelled **HCM**. Disease modelling conditions include **OA
                 st.markdown("---")
                 iva.render_invitro_tab(search_query)
 
-            # -----------------------------------------------------------------
-            # TAB 5: BULK OMICS (TISSUE)
-            # -----------------------------------------------------------------
             with tab_bulk:
-                bo.render_bulk_omics_tab(search_query, bulk_data=bulk_omics_data)
+                # Call whichever signature your bulk_omics.py currently exposes.
+                sig = None
+                try:
+                    sig = inspect.signature(bo.render_bulk_omics_tab)
+                except Exception:
+                    sig = None
+
+                if sig is not None and "bulk_data" in sig.parameters:
+                    bo.render_bulk_omics_tab(search_query, bulk_data=bulk_omics_data)
+                else:
+                    bo.render_bulk_omics_tab(search_query)
 
 st.markdown("---")
 st.markdown(
