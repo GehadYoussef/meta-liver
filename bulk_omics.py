@@ -125,6 +125,7 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
     # Resolve duplicates by best significance then largest absolute effect
     if out["Symbol"].duplicated().any():
+
         def _rank_row(r) -> Tuple[float, float]:
             q = r.get("padj", float("nan"))
             p = r.get("pvalue", float("nan"))
@@ -204,8 +205,11 @@ def load_bulk_omics() -> Dict[str, Dict[str, pd.DataFrame]]:
 def _p_to_z_two_sided(p: float, sign: float) -> float:
     """
     Convert a two-sided p-value to a signed z score.
-    Robust to p-values reported as 0 (or extremely tiny) by clipping the
-    implied upper-tail probability away from {0,1}.
+
+    Fixes:
+    - Handles p==0 (common in exported tables due to underflow) by treating it as extremely small
+    - Avoids u==1.0 leading to log(0) in the tail approximation by clipping u away from {0,1}
+    - Uses log1p(-u) in the upper tail for stability
     """
     if p is None:
         return float("nan")
@@ -215,64 +219,194 @@ def _p_to_z_two_sided(p: float, sign: float) -> float:
     except Exception:
         return float("nan")
 
-    if math.isnan(p) or p <= 0 or p > 1:
-        # If p==0 due to rounding/formatting, treat as extremely significant
-        # rather than crashing.
-        if p == 0:
-            p = 0.0
-        else:
-            return float("nan")
+    if math.isnan(p) or p > 1.0:
+        return float("nan")
+
+    # Treat p==0 (or negative due to file quirks) as extremely small rather than dropping.
+    if p <= 0.0:
+        p = 0.0
 
     # Convert two-sided p to upper-tail probability u = 1 - p/2.
-    # IMPORTANT: for tiny p, 1 - p/2 may round to 1.0 in float arithmetic.
+    # For extremely small p, 1 - p/2 can round to exactly 1.0 in float arithmetic.
     u = 1.0 - (p / 2.0)
 
-    # Clip u away from {0,1} to avoid log(0) in the approximation.
-    # Use an eps that is large enough to survive float rounding near 1.0.
+    # Clip u away from {0,1} to avoid log(0). Use an eps that matters at float precision near 1.0.
     eps = 1e-15
     if not (0.0 < u < 1.0):
-        # p==0 -> u==1 exactly; clamp
         u = 1.0 - eps
     else:
         u = min(max(u, eps), 1.0 - eps)
 
     def _norm_ppf(u_: float) -> float:
-        # Same clipping inside, in case callers pass edge values.
-        eps2 = 1e-15
-        u_ = min(max(float(u_), eps2), 1.0 - eps2)
+        # Defensive clipping
+        u_ = min(max(float(u_), eps), 1.0 - eps)
 
-        # Coefficients
-        a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
-             1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
-        b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
-             6.680131188771972e+01, -1.328068155288572e+01]
-        c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
-             -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
-        d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
-             3.754408661907416e+00]
+        a = [
+            -3.969683028665376e01,
+            2.209460984245205e02,
+            -2.759285104469687e02,
+            1.383577518672690e02,
+            -3.066479806614716e01,
+            2.506628277459239e00,
+        ]
+        b = [
+            -5.447609879822406e01,
+            1.615858368580409e02,
+            -1.556989798598866e02,
+            6.680131188771972e01,
+            -1.328068155288572e01,
+        ]
+        c = [
+            -7.784894002430293e-03,
+            -3.223964580411365e-01,
+            -2.400758277161838e00,
+            -2.549732539343734e00,
+            4.374664141464968e00,
+            2.938163982698783e00,
+        ]
+        d = [
+            7.784695709041462e-03,
+            3.224671290700398e-01,
+            2.445134137142996e00,
+            3.754408661907416e00,
+        ]
 
         plow = 0.02425
-        phigh = 1 - plow
+        phigh = 1.0 - plow
 
         if u_ < plow:
             q = math.sqrt(-2.0 * math.log(u_))
-            return (((((c[0]*q + c[1])*q + c[2])*q + c[3])*q + c[4])*q + c[5]) / \
-                   ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0)
+            return (
+                (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+                / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+            )
 
         if u_ > phigh:
-            # Use log1p for numerical stability near 1.0
+            # Use log1p for stability near 1.0
             q = math.sqrt(-2.0 * math.log1p(-u_))
-            return -(((((c[0]*q + c[1])*q + c[2])*q + c[3])*q + c[4])*q + c[5]) / \
-                    ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0)
+            return -(
+                (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+                / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
+            )
 
         q = u_ - 0.5
-        r = q*q
-        return (((((a[0]*r + a[1])*r + a[2])*r + a[3])*r + a[4])*r + a[5]) * q / \
-               (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0)
+        r = q * q
+        return (
+            (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+            / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
+        )
 
     z = _norm_ppf(u)
     sgn = 1.0 if float(sign) >= 0 else -1.0
     return sgn * float(z)
+
+
+def _z_to_p_two_sided(z: float) -> float:
+    if z is None or (isinstance(z, float) and math.isnan(z)):
+        return float("nan")
+    z = abs(float(z))
+    p = math.erfc(z / math.sqrt(2.0))
+    return float(min(max(p, 0.0), 1.0))
+
+
+def meta_combine_stouffer(
+    per_study: pd.DataFrame,
+    *,
+    weight_mode: str = "equal",
+) -> Dict[str, float]:
+    """
+    Signed Stouffer meta across studies.
+
+    per_study columns expected: log2FoldChange, pvalue (or padj fallback).
+    """
+    if per_study is None or per_study.empty:
+        return {"meta_Z": float("nan"), "meta_p": float("nan")}
+
+    df = per_study.copy()
+
+    pcol = "padj" if "padj" in df.columns and df["padj"].notna().any() else "pvalue"
+    if pcol not in df.columns:
+        return {"meta_Z": float("nan"), "meta_p": float("nan")}
+
+    z_list: List[float] = []
+    w_list: List[float] = []
+
+    for _, r in df.iterrows():
+        lfc = r.get("log2FoldChange", float("nan"))
+        p = r.get(pcol, float("nan"))
+        if pd.isna(lfc) or pd.isna(p):
+            continue
+
+        z = _p_to_z_two_sided(float(p), sign=float(lfc))
+        if math.isnan(z):
+            continue
+
+        if weight_mode == "equal":
+            w = 1.0
+        elif weight_mode == "abs_z":
+            w = max(1.0, abs(z))
+        else:
+            w = 1.0
+
+        z_list.append(float(z))
+        w_list.append(float(w))
+
+    if not z_list:
+        return {"meta_Z": float("nan"), "meta_p": float("nan")}
+
+    z_arr = np.asarray(z_list, dtype=float)
+    w_arr = np.asarray(w_list, dtype=float)
+
+    Z = float(np.sum(w_arr * z_arr) / math.sqrt(float(np.sum(w_arr ** 2))))
+    p_meta = _z_to_p_two_sided(Z)
+    return {"meta_Z": float(Z), "meta_p": float(p_meta)}
+
+
+def meta_logfc_weighted(per_study: pd.DataFrame, *, weight_mode: str = "abs_z") -> float:
+    """
+    Compute a meta logFC as weighted average of per-study logFC.
+    Default weights follow abs(z) so stronger evidence contributes more.
+    """
+    if per_study is None or per_study.empty or "log2FoldChange" not in per_study.columns:
+        return float("nan")
+
+    df = per_study.copy()
+
+    pcol = (
+        "padj"
+        if "padj" in df.columns and df["padj"].notna().any()
+        else ("pvalue" if "pvalue" in df.columns else None)
+    )
+    if pcol is None:
+        return float(pd.to_numeric(df["log2FoldChange"], errors="coerce").mean())
+
+    vals: List[float] = []
+    ws: List[float] = []
+
+    for _, r in df.iterrows():
+        lfc = r.get("log2FoldChange", float("nan"))
+        p = r.get(pcol, float("nan"))
+        if pd.isna(lfc):
+            continue
+
+        w = 1.0
+        if weight_mode == "abs_z" and pd.notna(p):
+            z = _p_to_z_two_sided(float(p), sign=float(lfc))
+            if not math.isnan(z):
+                w = max(1.0, abs(z))
+
+        vals.append(float(lfc))
+        ws.append(float(w))
+
+    if not vals:
+        return float("nan")
+
+    v = np.asarray(vals, dtype=float)
+    w = np.asarray(ws, dtype=float)
+    denom = float(np.sum(w))
+    if denom <= 0:
+        return float("nan")
+    return float(np.sum(w * v) / denom)
 
 
 # -----------------------------------------------------------------------------
@@ -285,7 +419,7 @@ def per_study_gene_rows(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> p
         return pd.DataFrame()
 
     rows = []
-    for study_id, df in studies.items():
+    for study_id, df in (studies or {}).items():
         if df is None or df.empty or "Symbol" not in df.columns:
             continue
         hit = df.loc[df["Symbol"] == g]
@@ -303,7 +437,6 @@ def per_study_gene_rows(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> p
     rest = [c for c in out.columns if c not in front]
     out = out[front + rest]
 
-    # Nice sorting: most significant first
     sig = "padj" if "padj" in out.columns else ("pvalue" if "pvalue" in out.columns else None)
     if sig:
         out = out.sort_values(sig, ascending=True, na_position="last")
@@ -354,7 +487,7 @@ def bulk_gene_summary(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> Dic
 
 def list_all_symbols(studies: Dict[str, pd.DataFrame]) -> List[str]:
     syms = set()
-    for _, df in studies.items():
+    for _, df in (studies or {}).items():
         if df is None or df.empty or "Symbol" not in df.columns:
             continue
         vals = df["Symbol"].astype(str).map(_normalise_symbol)
@@ -395,14 +528,16 @@ def top_genes_for_contrast(
             a = float(agree) if pd.notna(agree) else 0.0
             score = float((-math.log10(float(meta_p))) * abs(float(meta_lfc)) * a)
 
-        rows.append({
-            "Symbol": g,
-            "n_studies": summ["n_studies"],
-            "meta_log2FoldChange": meta_lfc,
-            "meta_p": meta_p,
-            "agreement": agree,
-            "evidence_score": score,
-        })
+        rows.append(
+            {
+                "Symbol": g,
+                "n_studies": summ["n_studies"],
+                "meta_log2FoldChange": meta_lfc,
+                "meta_p": meta_p,
+                "agreement": agree,
+                "evidence_score": score,
+            }
+        )
 
     out = pd.DataFrame(rows)
     if out.empty:
@@ -416,7 +551,11 @@ def top_genes_for_contrast(
 # Streamlit UI entry point
 # -----------------------------------------------------------------------------
 
-def render_bulk_omics_tab(query: str) -> None:
+def render_bulk_omics_tab(
+    query: str,
+    *,
+    bulk_data: Optional[Dict[str, Dict[str, pd.DataFrame]]] = None,
+) -> None:
     import streamlit as st
 
     root = _find_bulk_omics_dir()
@@ -424,7 +563,7 @@ def render_bulk_omics_tab(query: str) -> None:
         st.warning("No Bulk Omics folder found. Expected: meta-liver-data/Bulk_Omics/")
         return
 
-    data = load_bulk_omics()
+    data = bulk_data if isinstance(bulk_data, dict) and len(bulk_data) > 0 else load_bulk_omics()
     if not data:
         st.warning("Bulk Omics folder found, but no valid TSV/CSV/Parquet DEG tables could be loaded.")
         st.caption(f"Looking in: {root}")
@@ -459,6 +598,7 @@ def render_bulk_omics_tab(query: str) -> None:
         if top.empty:
             st.info("No genes met the minimum study requirement.")
             return
+
         st.dataframe(top, use_container_width=True, hide_index=True)
         return
 
