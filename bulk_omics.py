@@ -20,10 +20,11 @@ Each DEG table should include (case-insensitive):
   - padj
 
 This module:
-  - loads all bulk DEG tables grouped by contrast folder (if bulk_data not provided)
+  - loads all bulk DEG tables grouped by contrast folder
   - normalises schemas and resolves duplicate gene symbols
   - supports gene-centric summary and meta-analysis across studies per contrast
-  - provides "top genes" ranking per contrast (fast vectorised)
+  - provides "top genes" ranking per contrast (fast vectorised implementation)
+  - provides gene-summary plots (forest-style log2FC CI; log2FC vs -log10(p))
 """
 
 from __future__ import annotations
@@ -130,6 +131,7 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
             q = r.get("padj", float("nan"))
             p = r.get("pvalue", float("nan"))
             lfc = r.get("log2FoldChange", float("nan"))
+
             best_sig = q if pd.notna(q) else (p if pd.notna(p) else float("inf"))
             abs_lfc = abs(lfc) if pd.notna(lfc) else 0.0
             return (best_sig, -abs_lfc)
@@ -142,7 +144,7 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # -----------------------------------------------------------------------------
-# Discovery + loading (only used if bulk_data not supplied from streamlit_app)
+# Discovery + loading
 # -----------------------------------------------------------------------------
 
 def _find_bulk_omics_dir() -> Optional[Path]:
@@ -197,19 +199,15 @@ def load_bulk_omics() -> Dict[str, Dict[str, pd.DataFrame]]:
 
 
 # -----------------------------------------------------------------------------
-# Numerics: fast normal inverse CDF (vectorised Acklam-ish)
+# Meta-analysis helpers (stable normal inverse CDF approximation; vectorised)
 # -----------------------------------------------------------------------------
 
-def _norm_ppf_vec(u: np.ndarray) -> np.ndarray:
+def _norm_ppf_approx(u: np.ndarray) -> np.ndarray:
     """
-    Vectorised inverse normal CDF approximation.
-    Input u in (0,1). Output z such that Phi(z)=u.
+    Vectorised Acklam-ish rational approximation to Φ^{-1}(u).
+    u must be in (0,1). Caller is responsible for clipping.
     """
     u = np.asarray(u, dtype=float)
-
-    # Keep away from 0/1 to avoid log(0) + float cancellation at u ~ 1
-    eps = 1e-15
-    u = np.clip(u, eps, 1.0 - eps)
 
     a = np.array(
         [-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
@@ -242,53 +240,70 @@ def _norm_ppf_vec(u: np.ndarray) -> np.ndarray:
     mid = ~(low | high)
 
     if np.any(low):
-        q = np.sqrt(-2.0 * np.log(u[low]))
-        num = (((((c[0]*q + c[1])*q + c[2])*q + c[3])*q + c[4])*q + c[5])
-        den = ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0)
+        ul = u[low]
+        q = np.sqrt(-2.0 * np.log(ul))
+        num = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+        den = ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
         z[low] = num / den
 
     if np.any(high):
-        q = np.sqrt(-2.0 * np.log1p(-u[high]))
-        num = (((((c[0]*q + c[1])*q + c[2])*q + c[3])*q + c[4])*q + c[5])
-        den = ((((d[0]*q + d[1])*q + d[2])*q + d[3])*q + 1.0)
+        uh = u[high]
+        q = np.sqrt(-2.0 * np.log(1.0 - uh))
+        num = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5])
+        den = ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0)
         z[high] = -(num / den)
 
     if np.any(mid):
-        q = u[mid] - 0.5
-        r = q*q
-        num = (((((a[0]*r + a[1])*r + a[2])*r + a[3])*r + a[4])*r + a[5]) * q
-        den = (((((b[0]*r + b[1])*r + b[2])*r + b[3])*r + b[4])*r + 1.0)
+        um = u[mid]
+        q = um - 0.5
+        r = q * q
+        num = (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q
+        den = (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0)
         z[mid] = num / den
 
     return z
 
 
-def _signed_z_from_two_sided_p(p: np.ndarray, sign: np.ndarray) -> np.ndarray:
+def _signed_z_from_two_sided_p(p: np.ndarray, lfc: np.ndarray) -> np.ndarray:
     """
-    p: two-sided p-values
-    sign: sign source (e.g. logFC); >=0 => positive z, <0 => negative z
+    Signed z from a two-sided p-value, with sign from log2FoldChange.
+    z = sign(lfc) * Φ^{-1}(1 - p/2)
     """
     p = np.asarray(p, dtype=float)
-    sign = np.asarray(sign, dtype=float)
+    lfc = np.asarray(lfc, dtype=float)
 
-    p = np.where(np.isfinite(p), p, np.nan)
-    p = np.clip(p, 0.0, 1.0)
+    ok = np.isfinite(p) & np.isfinite(lfc) & (p > 0.0) & (p <= 1.0)
+    z = np.full_like(p, np.nan, dtype=float)
+    if not np.any(ok):
+        return z
 
-    u = 1.0 - (p / 2.0)
-    z_abs = _norm_ppf_vec(u)
+    # Avoid u rounding to exactly 1.0 when p is extremely small
+    eps_u = 1e-16
+    u = 1.0 - (p[ok] / 2.0)
+    u = np.clip(u, eps_u, 1.0 - eps_u)
 
-    s = np.where(sign >= 0.0, 1.0, -1.0)
-    return s * z_abs
+    base = _norm_ppf_approx(u)
+    sgn = np.where(lfc[ok] >= 0.0, 1.0, -1.0)
+    z[ok] = sgn * base
+    return z
 
 
-def _p_from_z_two_sided(z: float) -> float:
-    if z is None or (isinstance(z, float) and math.isnan(z)):
-        return float("nan")
-    return float(min(max(math.erfc(abs(float(z)) / math.sqrt(2.0)), 0.0), 1.0))
+def _z_to_p_two_sided(z: np.ndarray) -> np.ndarray:
+    """
+    Two-sided p from z using erfc; vectorised.
+    """
+    z = np.asarray(z, dtype=float)
+    out = np.full_like(z, np.nan, dtype=float)
+    ok = np.isfinite(z)
+    if not np.any(ok):
+        return out
+    za = np.abs(z[ok])
+    out[ok] = np.clip(np.erfc(za / math.sqrt(2.0)), 0.0, 1.0)
+    return out
 
 
 # -----------------------------------------------------------------------------
-# Gene-centric summaries (single gene: OK to be simple)
+# Gene-centric summaries (single gene; simple and readable)
 # -----------------------------------------------------------------------------
 
 def per_study_gene_rows(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> pd.DataFrame:
@@ -315,7 +330,7 @@ def per_study_gene_rows(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> p
     rest = [c for c in out.columns if c not in front]
     out = out[front + rest]
 
-    sig = "padj" if "padj" in out.columns else ("pvalue" if "pvalue" in out.columns else None)
+    sig = "padj" if ("padj" in out.columns and out["padj"].notna().any()) else ("pvalue" if "pvalue" in out.columns else None)
     if sig:
         out = out.sort_values(sig, ascending=True, na_position="last")
     return out
@@ -328,63 +343,12 @@ def direction_agreement(per_study: pd.DataFrame) -> float:
     if s.empty:
         return float("nan")
     signs = np.sign(s.values)
+    signs = signs[signs != 0]
+    if signs.size == 0:
+        return float("nan")
     pos = float((signs > 0).mean())
     neg = float((signs < 0).mean())
     return float(max(pos, neg))
-
-
-def meta_combine_stouffer(per_study: pd.DataFrame, *, weight_mode: str = "abs_z") -> Dict[str, float]:
-    """
-    Signed Stouffer meta for a single gene (few rows, scalar path is fine).
-    Uses padj if present (and has any non-NA) else pvalue.
-    """
-    if per_study is None or per_study.empty:
-        return {"meta_Z": float("nan"), "meta_p": float("nan")}
-
-    df = per_study.copy()
-    pcol = "padj" if ("padj" in df.columns and df["padj"].notna().any()) else ("pvalue" if "pvalue" in df.columns else None)
-    if pcol is None or "log2FoldChange" not in df.columns:
-        return {"meta_Z": float("nan"), "meta_p": float("nan")}
-
-    p = pd.to_numeric(df[pcol], errors="coerce").to_numpy(dtype=float)
-    lfc = pd.to_numeric(df["log2FoldChange"], errors="coerce").to_numpy(dtype=float)
-
-    ok = np.isfinite(p) & np.isfinite(lfc)
-    if not np.any(ok):
-        return {"meta_Z": float("nan"), "meta_p": float("nan")}
-
-    z = _signed_z_from_two_sided_p(p[ok], lfc[ok])
-    if weight_mode == "abs_z":
-        w = np.maximum(1.0, np.abs(z))
-    else:
-        w = np.ones_like(z, dtype=float)
-
-    Z = float(np.sum(w * z) / math.sqrt(float(np.sum(w**2))))
-    return {"meta_Z": Z, "meta_p": _p_from_z_two_sided(Z)}
-
-
-def meta_logfc_weighted(per_study: pd.DataFrame, *, weight_mode: str = "abs_z") -> float:
-    if per_study is None or per_study.empty or "log2FoldChange" not in per_study.columns:
-        return float("nan")
-
-    df = per_study.copy()
-    lfc = pd.to_numeric(df["log2FoldChange"], errors="coerce").to_numpy(dtype=float)
-
-    pcol = "padj" if ("padj" in df.columns and df["padj"].notna().any()) else ("pvalue" if "pvalue" in df.columns else None)
-    if pcol is None:
-        return float(np.nanmean(lfc))
-
-    p = pd.to_numeric(df[pcol], errors="coerce").to_numpy(dtype=float)
-    ok = np.isfinite(lfc) & np.isfinite(p)
-    if not np.any(ok):
-        return float(np.nanmean(lfc))
-
-    z = _signed_z_from_two_sided_p(p[ok], lfc[ok])
-    w = np.ones_like(z, dtype=float)
-    if weight_mode == "abs_z":
-        w = np.maximum(1.0, np.abs(z))
-
-    return float(np.sum(w * lfc[ok]) / np.sum(w))
 
 
 def bulk_gene_summary(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> Dict[str, object]:
@@ -399,242 +363,389 @@ def bulk_gene_summary(studies: Dict[str, pd.DataFrame], gene_symbol: str) -> Dic
             "n_studies": 0,
         }
 
-    meta = meta_combine_stouffer(per, weight_mode="abs_z")
-    meta_lfc = meta_logfc_weighted(per, weight_mode="abs_z")
+    # row-wise p-eff: prefer padj, else pvalue
+    lfc = pd.to_numeric(per.get("log2FoldChange", np.nan), errors="coerce").to_numpy(dtype=float)
+    padj = pd.to_numeric(per.get("padj", np.nan), errors="coerce").to_numpy(dtype=float) if "padj" in per.columns else np.full_like(lfc, np.nan)
+    pval = pd.to_numeric(per.get("pvalue", np.nan), errors="coerce").to_numpy(dtype=float) if "pvalue" in per.columns else np.full_like(lfc, np.nan)
+    p_eff = np.where(np.isfinite(padj), padj, pval)
+
+    z = _signed_z_from_two_sided_p(p_eff, lfc)
+    ok = np.isfinite(z)
+    if not np.any(ok):
+        meta_Z = float("nan")
+        meta_p = float("nan")
+        meta_lfc = float(np.nanmean(lfc))
+    else:
+        w = np.maximum(1.0, np.abs(z[ok]))
+        meta_Z = float(np.sum(w * z[ok]) / math.sqrt(float(np.sum(w * w))))
+        meta_p = float(_z_to_p_two_sided(np.array([meta_Z], dtype=float))[0])
+
+        # logFC weighted by abs(z)
+        meta_lfc = float(np.sum(w * lfc[ok]) / np.sum(w))
+
     agree = direction_agreement(per)
 
     return {
         "per_study": per,
         "meta_log2FoldChange": meta_lfc,
-        "meta_p": meta["meta_p"],
-        "meta_Z": meta["meta_Z"],
+        "meta_p": meta_p,
+        "meta_Z": meta_Z,
         "agreement": agree,
         "n_studies": int(per["Study"].nunique()) if "Study" in per.columns else int(len(per)),
     }
 
 
 # -----------------------------------------------------------------------------
-# Fast top-genes: build one long table then groupby (vectorised)
+# Top genes per contrast (fast vectorised implementation)
 # -----------------------------------------------------------------------------
 
-def _build_long_for_contrast(studies: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+def _long_table_from_studies(studies: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     frames = []
     for study_id, df in (studies or {}).items():
-        if df is None or df.empty:
+        if df is None or df.empty or "Symbol" not in df.columns:
             continue
-        if "Symbol" not in df.columns or "log2FoldChange" not in df.columns:
-            continue
-        pcol = "padj" if ("padj" in df.columns and df["padj"].notna().any()) else ("pvalue" if "pvalue" in df.columns else None)
-        if pcol is None:
-            continue
-
-        tmp = df[["Symbol", "log2FoldChange", pcol]].copy()
-        tmp = tmp.rename(columns={pcol: "p"})
-        tmp["Study"] = study_id
-        frames.append(tmp)
+        cols = ["Symbol"]
+        if "log2FoldChange" in df.columns:
+            cols.append("log2FoldChange")
+        if "padj" in df.columns:
+            cols.append("padj")
+        if "pvalue" in df.columns:
+            cols.append("pvalue")
+        sub = df.loc[:, [c for c in cols if c in df.columns]].copy()
+        sub["Study"] = str(study_id)
+        frames.append(sub)
 
     if not frames:
         return pd.DataFrame()
 
     long = pd.concat(frames, ignore_index=True)
-    long["Symbol"] = long["Symbol"].astype(str).map(_normalise_symbol)
 
-    long["log2FoldChange"] = pd.to_numeric(long["log2FoldChange"], errors="coerce")
-    long["p"] = pd.to_numeric(long["p"], errors="coerce")
+    if "log2FoldChange" in long.columns:
+        long["log2FoldChange"] = pd.to_numeric(long["log2FoldChange"], errors="coerce")
+    if "padj" in long.columns:
+        long["padj"] = pd.to_numeric(long["padj"], errors="coerce")
+    if "pvalue" in long.columns:
+        long["pvalue"] = pd.to_numeric(long["pvalue"], errors="coerce")
 
-    long = long.dropna(subset=["Symbol", "log2FoldChange", "p"])
-    long = long.loc[long["Symbol"] != ""].copy()
+    # p_eff: prefer padj, else pvalue
+    padj = long["padj"].to_numpy(dtype=float) if "padj" in long.columns else np.full(len(long), np.nan, dtype=float)
+    pval = long["pvalue"].to_numpy(dtype=float) if "pvalue" in long.columns else np.full(len(long), np.nan, dtype=float)
+    long["p_eff"] = np.where(np.isfinite(padj), padj, pval)
+
     return long
 
 
-def compute_contrast_summary(studies: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+def top_genes_for_contrast(
+    studies: Dict[str, pd.DataFrame],
+    *,
+    min_studies: int = 2,
+    max_genes: int = 200,
+) -> pd.DataFrame:
     """
-    Returns a gene-level summary dataframe with:
-    Symbol, n_studies, meta_Z, meta_p, meta_log2FoldChange, agreement, evidence_score
+    Compute a ranked table of genes for one contrast.
+
+    Evidence score = (-log10(meta_p)) * |meta_logFC| * agreement
+
+    meta_p: signed Stouffer (signed z per study; weights ~ |z|)
+    meta_logFC: weighted mean logFC (weights ~ |z|)
+    agreement: majority sign proportion across studies
     """
-    long = _build_long_for_contrast(studies)
-    if long.empty:
+    if studies is None or not studies:
         return pd.DataFrame()
 
-    # z + weights
-    p = long["p"].to_numpy(dtype=float)
+    long = _long_table_from_studies(studies)
+    if long.empty or "Symbol" not in long.columns or "log2FoldChange" not in long.columns:
+        return pd.DataFrame()
+
     lfc = long["log2FoldChange"].to_numpy(dtype=float)
+    p_eff = pd.to_numeric(long["p_eff"], errors="coerce").to_numpy(dtype=float)
+    z = _signed_z_from_two_sided_p(p_eff, lfc)
 
-    z = _signed_z_from_two_sided_p(p, lfc)
-    w = np.maximum(1.0, np.abs(z))
+    long["z"] = z
+    long["w"] = np.where(np.isfinite(z), np.maximum(1.0, np.abs(z)), np.nan)
 
-    long["__z__"] = z
-    long["__w__"] = w
-    long["__wz__"] = w * z
-    long["__w2__"] = w * w
-    long["__wlfc__"] = w * lfc
-    long["__pos__"] = (lfc > 0).astype(np.int8)
-    long["__neg__"] = (lfc < 0).astype(np.int8)
+    # Keep only rows with needed values for meta
+    m = long[np.isfinite(long["z"]) & np.isfinite(long["w"]) & np.isfinite(long["log2FoldChange"])].copy()
+    if m.empty:
+        return pd.DataFrame()
 
-    g = long.groupby("Symbol", sort=False)
+    # Studies per gene
+    n_st = long.groupby("Symbol", dropna=False)["Study"].nunique()
+    n_st = n_st.rename("n_studies")
 
-    n_studies = g["Study"].nunique()
-    num = g["__wz__"].sum()
-    den = np.sqrt(g["__w2__"].sum())
-    Z = num / den
+    # Agreement per gene
+    sgn = np.sign(pd.to_numeric(long["log2FoldChange"], errors="coerce"))
+    long["_sgn_"] = sgn
+    g2 = long.dropna(subset=["_sgn_"]).copy()
+    g2 = g2[g2["_sgn_"] != 0]
+    if g2.empty:
+        agree = pd.Series(dtype=float, name="agreement")
+    else:
+        pos = g2.assign(_pos_=(g2["_sgn_"] > 0)).groupby("Symbol")["_pos_"].mean()
+        neg = g2.assign(_neg_=(g2["_sgn_"] < 0)).groupby("Symbol")["_neg_"].mean()
+        agree = pd.concat([pos, neg], axis=1).max(axis=1)
+        agree.name = "agreement"
 
-    # meta p (scalar erfc per gene; fast enough for ~10^4 genes)
-    Z_vals = Z.to_numpy(dtype=float)
-    meta_p = np.array([_p_from_z_two_sided(float(x)) for x in Z_vals], dtype=float)
-    meta_p = np.clip(meta_p, 1e-300, 1.0)
+    # Meta Z per gene: sum(w*z)/sqrt(sum(w^2))
+    m["wz"] = m["w"] * m["z"]
+    m["w2"] = m["w"] * m["w"]
 
-    meta_lfc = g["__wlfc__"].sum() / g["__w__"].sum()
+    sum_wz = m.groupby("Symbol")["wz"].sum()
+    sum_w2 = m.groupby("Symbol")["w2"].sum()
+    meta_Z = sum_wz / np.sqrt(sum_w2)
+    meta_Z.name = "meta_Z"
 
-    pos_frac = g["__pos__"].mean()
-    neg_frac = g["__neg__"].mean()
-    agreement = np.maximum(pos_frac, neg_frac)
+    meta_p = _z_to_p_two_sided(meta_Z.to_numpy(dtype=float))
+    meta_p = pd.Series(meta_p, index=meta_Z.index, name="meta_p")
 
-    # Evidence score = (-log10(meta_p)) * |meta_logFC| * agreement
-    score = (-np.log10(meta_p)) * np.abs(meta_lfc.to_numpy(dtype=float)) * agreement.to_numpy(dtype=float)
+    # Meta logFC per gene: sum(w*lfc)/sum(w)
+    m["wlfc"] = m["w"] * m["log2FoldChange"]
+    sum_wlfc = m.groupby("Symbol")["wlfc"].sum()
+    sum_w = m.groupby("Symbol")["w"].sum()
+    meta_lfc = sum_wlfc / sum_w
+    meta_lfc.name = "meta_log2FoldChange"
 
-    out = pd.DataFrame(
-        {
-            "Symbol": n_studies.index,
-            "n_studies": n_studies.to_numpy(dtype=int),
-            "meta_Z": Z_vals,
-            "meta_p": meta_p,
-            "meta_log2FoldChange": meta_lfc.to_numpy(dtype=float),
-            "agreement": agreement.to_numpy(dtype=float),
-            "evidence_score": score,
-        }
-    )
+    out = pd.concat([n_st, meta_lfc, meta_Z, meta_p, agree], axis=1).reset_index().rename(columns={"index": "Symbol"})
 
-    out = out.sort_values("evidence_score", ascending=False, na_position="last")
+    # Filter by min studies
+    out = out[out["n_studies"].fillna(0).astype(int) >= int(min_studies)].copy()
+    if out.empty:
+        return out
+
+    # Evidence score
+    mp = pd.to_numeric(out["meta_p"], errors="coerce").to_numpy(dtype=float)
+    ml = pd.to_numeric(out["meta_log2FoldChange"], errors="coerce").to_numpy(dtype=float)
+    ag = pd.to_numeric(out["agreement"], errors="coerce").to_numpy(dtype=float)
+
+    score = np.full(len(out), np.nan, dtype=float)
+    ok = np.isfinite(mp) & (mp > 0) & np.isfinite(ml) & np.isfinite(ag)
+    score[ok] = (-np.log10(mp[ok])) * np.abs(ml[ok]) * ag[ok]
+    out["evidence_score"] = score
+
+    out = out.sort_values("evidence_score", ascending=False, na_position="last").head(int(max_genes))
     return out
+
+
+# -----------------------------------------------------------------------------
+# Plot helpers (gene summary)
+# -----------------------------------------------------------------------------
+
+def _forest_plot_from_per_study(per: pd.DataFrame, *, contrast_label: str):
+    import plotly.graph_objects as go
+
+    if per is None or per.empty or "log2FoldChange" not in per.columns:
+        return None
+
+    df = per.copy()
+    lfc = pd.to_numeric(df["log2FoldChange"], errors="coerce").to_numpy(dtype=float)
+
+    padj = pd.to_numeric(df["padj"], errors="coerce").to_numpy(dtype=float) if "padj" in df.columns else np.full_like(lfc, np.nan)
+    pval = pd.to_numeric(df["pvalue"], errors="coerce").to_numpy(dtype=float) if "pvalue" in df.columns else np.full_like(lfc, np.nan)
+    p_eff = np.where(np.isfinite(padj), padj, pval)
+
+    ok = np.isfinite(lfc) & np.isfinite(p_eff) & (p_eff > 0) & (p_eff <= 1)
+    if not np.any(ok):
+        return None
+
+    z = _signed_z_from_two_sided_p(p_eff[ok], lfc[ok])
+    zabs = np.abs(z)
+
+    # Approx SE from Wald relationship: z ≈ lfc/SE => SE ≈ |lfc|/|z|
+    se = np.full_like(zabs, np.nan, dtype=float)
+    good = zabs > 1e-12
+    se[good] = np.abs(lfc[ok][good]) / zabs[good]
+
+    ci_lo = lfc[ok] - 1.96 * se
+    ci_hi = lfc[ok] + 1.96 * se
+
+    study = df.loc[ok, "Study"].astype(str).tolist() if "Study" in df.columns else [f"Study {i+1}" for i in range(int(ok.sum()))]
+
+    # Sort by effect for readability
+    order = np.argsort(lfc[ok])
+    study = [study[i] for i in order]
+    x = lfc[ok][order]
+    lo = ci_lo[order]
+    hi = ci_hi[order]
+
+    err_plus = hi - x
+    err_minus = x - lo
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=study,
+            mode="markers",
+            error_x=dict(type="data", symmetric=False, array=err_plus, arrayminus=err_minus, thickness=1),
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "log2FC=%{x:.3f}<br>"
+                "95% CI [%{customdata[0]:.3f}, %{customdata[1]:.3f}]<extra></extra>"
+            ),
+            customdata=np.column_stack([lo, hi]),
+        )
+    )
+    fig.add_vline(x=0, line_dash="dash", line_width=1)
+
+    fig.update_layout(
+        title=f"Forest-style view: per-study log2FC (approx 95% CI) — {contrast_label}",
+        xaxis_title="log2FoldChange",
+        yaxis_title="Study",
+        height=max(320, 26 * len(study) + 140),
+        margin=dict(l=80, r=20, t=50, b=40),
+    )
+    return fig
+
+
+def _scatter_logfc_vs_sig(per: pd.DataFrame, *, contrast_label: str):
+    import plotly.graph_objects as go
+
+    if per is None or per.empty or "log2FoldChange" not in per.columns:
+        return None
+
+    df = per.copy()
+    lfc = pd.to_numeric(df["log2FoldChange"], errors="coerce").to_numpy(dtype=float)
+
+    padj = pd.to_numeric(df["padj"], errors="coerce").to_numpy(dtype=float) if "padj" in df.columns else np.full_like(lfc, np.nan)
+    pval = pd.to_numeric(df["pvalue"], errors="coerce").to_numpy(dtype=float) if "pvalue" in df.columns else np.full_like(lfc, np.nan)
+    p_eff = np.where(np.isfinite(padj), padj, pval)
+
+    ok = np.isfinite(lfc) & np.isfinite(p_eff) & (p_eff > 0)
+    if not np.any(ok):
+        return None
+
+    y = -np.log10(p_eff[ok])
+    study = df.loc[ok, "Study"].astype(str).tolist() if "Study" in df.columns else [f"Study {i+1}" for i in range(int(ok.sum()))]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=lfc[ok],
+            y=y,
+            mode="markers+text",
+            text=study,
+            textposition="top center",
+            hovertemplate="<b>%{text}</b><br>log2FC=%{x:.3f}<br>-log10(p)=%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_vline(x=0, line_dash="dash", line_width=1)
+    fig.update_layout(
+        title=f"Per-study signal: log2FC vs −log10(p) — {contrast_label}",
+        xaxis_title="log2FoldChange",
+        yaxis_title="−log10(p) (padj if available, else pvalue)",
+        height=340,
+        margin=dict(l=60, r=20, t=50, b=40),
+    )
+    return fig
 
 
 # -----------------------------------------------------------------------------
 # Streamlit UI entry point
 # -----------------------------------------------------------------------------
 
-def render_bulk_omics_tab(query: str, *, bulk_data: Optional[Dict[str, Dict[str, pd.DataFrame]]] = None) -> None:
+def render_bulk_omics_tab(
+    query: str,
+    *,
+    bulk_data: Optional[Dict[str, Dict[str, pd.DataFrame]]] = None,
+) -> None:
     import streamlit as st
-    import plotly.graph_objects as go
 
-    # Use preloaded data if supplied (fastest, avoids re-reading disk)
-    if bulk_data is None:
-        root = _find_bulk_omics_dir()
-        if root is None or not root.exists():
-            st.warning("No Bulk Omics folder found. Expected: meta-liver-data/Bulk_Omics/")
-            return
-        data = load_bulk_omics()
-        if not data:
-            st.warning("Bulk Omics folder found, but no valid TSV/CSV/Parquet DEG tables could be loaded.")
+    def _st_df(df: pd.DataFrame, *, hide_index: bool = True):
+        try:
+            st.dataframe(df, width="stretch", hide_index=hide_index)
+        except TypeError:
+            st.dataframe(df, use_container_width=True, hide_index=hide_index)
+
+    def _st_plotly(fig):
+        try:
+            st.plotly_chart(fig, width="stretch")
+        except TypeError:
+            st.plotly_chart(fig, use_container_width=True)
+
+    root = _find_bulk_omics_dir()
+
+    # Prefer preloaded bulk_data (faster; avoids disk I/O inside tab)
+    data = bulk_data if isinstance(bulk_data, dict) and len(bulk_data) > 0 else load_bulk_omics()
+
+    if (bulk_data is None or (isinstance(bulk_data, dict) and len(bulk_data) == 0)) and (root is None or not root.exists()):
+        st.warning("No Bulk Omics folder found. Expected: meta-liver-data/Bulk_Omics/")
+        return
+
+    if not data:
+        st.warning("Bulk Omics found, but no valid TSV/CSV/Parquet DEG tables could be loaded.")
+        if root is not None:
             st.caption(f"Looking in: {root}")
-            return
-        st.caption(f"Bulk Omics root: {root}")
-    else:
-        data = bulk_data
-        if not data:
-            st.warning("Bulk-omics not available.")
-            return
-        st.caption("Bulk Omics source: preloaded tables (from robust_data_loader)")
+        return
 
     st.markdown("### Dataset availability")
-    avail_rows = [{"Contrast": c, "Study tables": len(v)} for c, v in (data or {}).items()]
-    st.dataframe(pd.DataFrame(avail_rows), width="stretch", hide_index=True)
+    if root is not None:
+        st.caption(f"Bulk Omics root: {root}")
+
+    avail_rows = []
+    for contrast, studies in data.items():
+        avail_rows.append({"Contrast": str(contrast), "Study tables": len(studies or {})})
+    _st_df(pd.DataFrame(avail_rows), hide_index=True)
 
     st.markdown("---")
 
     contrasts = sorted(list(data.keys()))
-    if not contrasts:
-        st.warning("No bulk contrasts found.")
-        return
-
     contrast_sel = st.selectbox("Contrast", options=contrasts, index=0)
-    studies = data.get(contrast_sel, {})
+
+    studies = data.get(contrast_sel, {}) or {}
     if not studies:
         st.warning("No study tables found for this contrast.")
         return
 
-    view = st.radio("Choose view", ["Gene summary", "Top genes"], index=0, horizontal=True, key="bulk_view")
-
-    # Cache per-contrast summary inside session_state (fast and avoids hashing huge dicts)
-    def _fingerprint(sts: Dict[str, pd.DataFrame]) -> Tuple[Tuple[str, int], ...]:
-        return tuple(sorted((k, int(v.shape[0])) for k, v in (sts or {}).items() if isinstance(v, pd.DataFrame)))
-
-    cache = st.session_state.setdefault("_bulk_omics_cache", {})
-    fp = _fingerprint(studies)
-    sum_key = f"summary::{contrast_sel}"
-
-    if sum_key in cache and cache[sum_key].get("fp") == fp:
-        summary_df = cache[sum_key]["df"]
-    else:
-        with st.spinner("Preparing bulk meta-summary for this contrast…"):
-            summary_df = compute_contrast_summary(studies)
-        cache[sum_key] = {"fp": fp, "df": summary_df}
+    view = st.radio("Choose view", ["Gene summary", "Top genes"], index=0, horizontal=True)
 
     if view == "Top genes":
-        st.markdown("### Top genes (meta + consistency)")
+        st.markdown(f"### Top genes (meta + consistency) — {contrast_sel}")
+        min_st = st.number_input("Minimum studies per gene", min_value=1, max_value=50, value=2, step=1)
+        max_g = st.number_input("Max genes to show", min_value=50, max_value=5000, value=200, step=50)
 
-        # Use a form so we do not recompute on every tiny widget change
-        with st.form(key=f"bulk_top_form::{contrast_sel}"):
-            min_st = st.number_input("Minimum studies per gene", min_value=1, max_value=20, value=2, step=1)
-            max_g = st.number_input("Max genes to show", min_value=50, max_value=2000, value=200, step=50)
-            submitted = st.form_submit_button("Compute")
+        with st.spinner("Scoring genes across studies..."):
+            top = top_genes_for_contrast(studies, min_studies=int(min_st), max_genes=int(max_g))
 
-        # Persist last result so the page does not look empty
-        last_key = f"top_last::{contrast_sel}"
-        if submitted or (last_key in cache):
-            if submitted:
-                if summary_df is None or summary_df.empty:
-                    st.info("No valid genes were found for meta-analysis in this contrast (check columns).")
-                    cache[last_key] = pd.DataFrame()
-                else:
-                    top = summary_df.loc[summary_df["n_studies"] >= int(min_st)].copy()
-                    top = top.head(int(max_g)).copy()
-                    cache[last_key] = top
-            else:
-                top = cache[last_key]
-
-            top = cache.get(last_key, pd.DataFrame())
-            if top is None or top.empty:
-                st.info("No genes met the minimum study requirement.")
-                return
-
-            # Simple volcano-style plot (meta logFC vs -log10(meta_p)), sized by agreement
-            y = -np.log10(np.clip(top["meta_p"].to_numpy(dtype=float), 1e-300, 1.0))
-            x = top["meta_log2FoldChange"].to_numpy(dtype=float)
-            size = 6.0 + 10.0 * np.clip(top["agreement"].to_numpy(dtype=float), 0.0, 1.0)
-
-            fig = go.Figure()
-            fig.add_trace(
-                go.Scattergl(
-                    x=x,
-                    y=y,
-                    mode="markers",
-                    marker=dict(size=size, opacity=0.75),
-                    text=top["Symbol"],
-                    hovertemplate=(
-                        "<b>%{text}</b><br>"
-                        "meta_log2FC=%{x:.3f}<br>"
-                        "-log10(meta_p)=%{y:.2f}<br>"
-                        "<extra></extra>"
-                    ),
-                )
-            )
-            fig.update_layout(
-                height=360,
-                xaxis_title="Meta log2FoldChange",
-                yaxis_title="-log10(meta p-value)",
-                title=f"Top genes: {contrast_sel}",
-                margin=dict(l=40, r=10, t=40, b=40),
-            )
-            st.plotly_chart(fig, width="stretch")
-
-            st.dataframe(top, width="stretch", hide_index=True)
+        if top.empty:
+            st.info("No genes met the minimum study requirement (or no usable p-values/logFC).")
             return
 
-        st.info("Adjust settings and click **Compute** to generate the ranked table and plot.")
+        _st_df(top, hide_index=True)
+
+        # Optional quick overview plot (helps sanity-check the ranking)
+        try:
+            import plotly.graph_objects as go
+
+            dfp = top.copy()
+            mp = pd.to_numeric(dfp["meta_p"], errors="coerce")
+            ml = pd.to_numeric(dfp["meta_log2FoldChange"], errors="coerce")
+            ok = mp.notna() & (mp > 0) & ml.notna()
+            if ok.sum() >= 5:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=ml[ok],
+                        y=-np.log10(mp[ok]),
+                        mode="markers",
+                        text=dfp.loc[ok, "Symbol"],
+                        hovertemplate="<b>%{text}</b><br>meta_log2FC=%{x:.3f}<br>-log10(meta_p)=%{y:.2f}<extra></extra>",
+                    )
+                )
+                fig.add_vline(x=0, line_dash="dash", line_width=1)
+                fig.update_layout(
+                    title=f"Top genes overview: meta log2FC vs −log10(meta p) — {contrast_sel}",
+                    xaxis_title="meta log2FoldChange",
+                    yaxis_title="−log10(meta p)",
+                    height=340,
+                    margin=dict(l=60, r=20, t=50, b=40),
+                )
+                _st_plotly(fig)
+        except Exception:
+            pass
+
         return
 
-    # Gene summary
-    st.markdown("### Gene summary")
+    st.markdown(f"### Gene summary — {contrast_sel}")
     gene = str(query).strip()
     if not gene:
         st.info("Enter a gene symbol in the search box above.")
@@ -647,6 +758,10 @@ def render_bulk_omics_tab(query: str, *, bulk_data: Optional[Dict[str, Dict[str,
         st.warning("Gene not found in any study tables for this contrast.")
         return
 
+    per_show = per.copy()
+    if "Contrast" not in per_show.columns:
+        per_show.insert(0, "Contrast", str(contrast_sel))
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Studies found", int(summ["n_studies"]))
@@ -657,9 +772,20 @@ def render_bulk_omics_tab(query: str, *, bulk_data: Optional[Dict[str, Dict[str,
     with c4:
         st.metric("Direction agreement", f"{100*summ['agreement']:.1f}%" if pd.notna(summ["agreement"]) else "missing")
 
-    st.dataframe(per, width="stretch", hide_index=True)
+    st.caption(f"Comparison / contrast shown here: **{contrast_sel}** (from the Bulk_Omics folder label).")
+
+    fig_forest = _forest_plot_from_per_study(per, contrast_label=str(contrast_sel))
+    if fig_forest is not None:
+        _st_plotly(fig_forest)
+
+    fig_sig = _scatter_logfc_vs_sig(per, contrast_label=str(contrast_sel))
+    if fig_sig is not None:
+        _st_plotly(fig_sig)
+
+    st.markdown("#### Per-study table")
+    _st_df(per_show, hide_index=True)
 
     st.caption(
         "Meta p-value uses a signed Stouffer combination of per-study p-values (padj if available, else pvalue), "
-        "with direction from log2FoldChange. Meta log2FC is a weighted average (weights ~ |z|)."
+        "with direction from log2FoldChange. Forest plot CI is an approximation derived from p-values (Wald-style)."
     )
