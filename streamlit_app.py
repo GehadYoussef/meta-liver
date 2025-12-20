@@ -1,6 +1,12 @@
 """
 Meta Liver - Interactive Streamlit App for Liver Genomics Analysis
-Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks
+
+Tabs:
+- Single-Omics Evidence
+- MAFLD Knowledge Graph
+- WGCNA Fibrosis Stage Networks
+- In vitro MASLD model (iHeps)
+- Bulk Omics (tissue)
 """
 
 from __future__ import annotations
@@ -21,23 +27,42 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from robust_data_loader import load_single_omics_studies, load_kg_data, load_ppi_data
-from kg_analysis import (
-    get_gene_kg_info, get_cluster_genes, get_cluster_drugs, get_cluster_diseases, interpret_centrality
+from robust_data_loader import (
+    load_single_omics_studies,
+    load_kg_data,
+    load_ppi_data,
+    load_bulk_omics_tables,
 )
+
+from kg_analysis import (
+    get_gene_kg_info,
+    get_cluster_genes,
+    get_cluster_drugs,
+    get_cluster_diseases,
+    interpret_centrality,
+)
+
 from wgcna_ppi_analysis import (
-    load_wgcna_module_data, get_gene_module, get_module_genes,
-    find_ppi_interactors, get_network_stats,
-    load_wgcna_mod_trait_cor, load_wgcna_mod_trait_pval, load_wgcna_pathways,
-    load_wgcna_active_drugs, build_gene_to_drugs_index
+    load_wgcna_module_data,
+    get_gene_module,
+    get_module_genes,
+    find_ppi_interactors,
+    get_network_stats,
+    load_wgcna_mod_trait_cor,
+    load_wgcna_mod_trait_pval,
+    load_wgcna_pathways,
+    load_wgcna_active_drugs,
+    build_gene_to_drugs_index,
 )
 
 import invitro_analysis as iva
 iva = importlib.reload(iva)
 
 import single_omics_analysis as soa
-
 soa = importlib.reload(soa)
+
+import bulk_omics as bo
+bo = importlib.reload(bo)
 
 
 # =============================================================================
@@ -48,7 +73,7 @@ st.set_page_config(
     page_title="Meta Liver",
     page_icon="🔬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 APP_DOI = "10.1101/2024.10.10.617610"
@@ -72,6 +97,24 @@ APP_TEAM = (
 
 
 # =============================================================================
+# STREAMLIT COMPAT SHIMS (avoid use_container_width deprecation warnings)
+# =============================================================================
+
+def _st_df(df: pd.DataFrame, *, hide_index: bool = True):
+    try:
+        st.dataframe(df, width="stretch", hide_index=hide_index)
+    except TypeError:
+        st.dataframe(df, use_container_width=True, hide_index=hide_index)
+
+
+def _st_plotly(fig: go.Figure):
+    try:
+        st.plotly_chart(fig, width="stretch")
+    except TypeError:
+        st.plotly_chart(fig, use_container_width=True)
+
+
+# =============================================================================
 # DATA LOADING
 # =============================================================================
 
@@ -89,6 +132,8 @@ def load_all_data():
     active_drugs = load_wgcna_active_drugs()
     gene_to_drugs = build_gene_to_drugs_index(active_drugs) if active_drugs is not None and not active_drugs.empty else {}
 
+    bulk_omics_data = load_bulk_omics_tables()
+
     return (
         single_omics,
         kg_data,
@@ -99,6 +144,7 @@ def load_all_data():
         wgcna_pathways,
         active_drugs,
         gene_to_drugs,
+        bulk_omics_data,
     )
 
 
@@ -113,6 +159,7 @@ try:
         wgcna_pathways,
         active_drugs_df,
         gene_to_drugs,
+        bulk_omics_data,
     ) = load_all_data()
     data_loaded = True
 except Exception as e:
@@ -127,6 +174,7 @@ except Exception as e:
     wgcna_pathways = {}
     active_drugs_df = pd.DataFrame()
     gene_to_drugs = {}
+    bulk_omics_data = {}
 
 
 # =============================================================================
@@ -184,7 +232,7 @@ def _fmt_num_commas(x: object, decimals: int = 2) -> str:
 
 
 # =============================================================================
-# PLOT HELPERS (RAW vs DISC vs ORIENTED)
+# PLOT HELPERS (RAW vs DISC vs ORIENTED)  [Single-omics tab]
 # =============================================================================
 
 def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
@@ -218,17 +266,19 @@ def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
 
         auc_oriented = None
         if auc_raw is not None:
-            # "Oriented" here means: align so MAFLD is treated as the "positive" class
+            # align so MAFLD is treated as "positive"
             auc_oriented = float(1.0 - auc_raw) if direction == "Healthy" else float(auc_raw)
 
-        out.append({
-            "study": study_name,
-            "auc_raw": auc_raw,
-            "auc_disc": auc_disc,
-            "auc_oriented": auc_oriented,
-            "lfc": lfc_val,
-            "direction": direction
-        })
+        out.append(
+            {
+                "study": study_name,
+                "auc_raw": auc_raw,
+                "auc_disc": auc_disc,
+                "auc_oriented": auc_oriented,
+                "lfc": lfc_val,
+                "direction": direction,
+            }
+        )
 
     return out
 
@@ -250,14 +300,16 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
     fig = go.Figure()
 
     for m in vals:
-        fig.add_trace(go.Scatter(
-            x=[0.5, m[auc_key]],
-            y=[m["study"], m["study"]],
-            mode="lines",
-            line=dict(color="#cccccc", width=1.5),
-            showlegend=False,
-            hoverinfo="skip"
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=[0.5, m[auc_key]],
+                y=[m["study"], m["study"]],
+                mode="lines",
+                line=dict(color="#cccccc", width=1.5),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
 
     for m in vals:
         style = _marker_style(m.get("direction"))
@@ -277,20 +329,22 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
         if m.get("direction") is not None:
             hover += f"<br>Direction: {m['direction']}"
 
-        fig.add_trace(go.Scatter(
-            x=[m[auc_key]],
-            y=[m["study"]],
-            mode="markers",
-            marker=dict(
-                size=size,
-                symbol=style["symbol"],
-                color=style["color"],
-                line=dict(color="white", width=1),
-            ),
-            hovertext=hover,
-            hoverinfo="text",
-            showlegend=False
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=[m[auc_key]],
+                y=[m["study"]],
+                mode="markers",
+                marker=dict(
+                    size=size,
+                    symbol=style["symbol"],
+                    color=style["color"],
+                    line=dict(color="white", width=1),
+                ),
+                hovertext=hover,
+                hoverinfo="text",
+                showlegend=False,
+            )
+        )
 
     title_text = title if subtitle is None else f"{title}<br><span style='font-size:11px;color:#666'>{subtitle}</span>"
     fig.update_layout(
@@ -303,12 +357,12 @@ def make_lollipop(metrics: list[dict], auc_key: str, title: str, subtitle: str |
             tickfont=dict(color="#000000", size=11),
             showgrid=True,
             gridwidth=0.5,
-            gridcolor="#f0f0f0"
+            gridcolor="#f0f0f0",
         ),
         yaxis=dict(tickfont=dict(color="#000000", size=11)),
         showlegend=False,
         plot_bgcolor="#fafafa",
-        paper_bgcolor="white"
+        paper_bgcolor="white",
     )
     return fig
 
@@ -321,20 +375,22 @@ def make_scatter_auc_logfc(metrics: list[dict], auc_key: str, title: str, subtit
     fig = go.Figure()
     for m in pts:
         style = _marker_style(m.get("direction"))
-        fig.add_trace(go.Scatter(
-            x=[m[auc_key]],
-            y=[m["lfc"]],
-            mode="markers",
-            marker=dict(size=10, symbol=style["symbol"], color="#333333", line=dict(width=0)),
-            hovertext=(
-                f"<b>{m['study']}</b>"
-                f"<br>{auc_key}: {m[auc_key]:.3f}"
-                f"<br>logFC: {m['lfc']:.3f}"
-                f"<br>Direction: {m.get('direction', 'Unknown')}"
-            ),
-            hoverinfo="text",
-            showlegend=False
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=[m[auc_key]],
+                y=[m["lfc"]],
+                mode="markers",
+                marker=dict(size=10, symbol=style["symbol"], color="#333333", line=dict(width=0)),
+                hovertext=(
+                    f"<b>{m['study']}</b>"
+                    f"<br>{auc_key}: {m[auc_key]:.3f}"
+                    f"<br>logFC: {m['lfc']:.3f}"
+                    f"<br>Direction: {m.get('direction', 'Unknown')}"
+                ),
+                hoverinfo="text",
+                showlegend=False,
+            )
+        )
 
     fig.add_hline(y=0, line_dash="dash", line_color="#999999", line_width=1.5)
     fig.add_vline(x=0.5, line_dash="dash", line_color="#999999", line_width=1.5)
@@ -351,17 +407,17 @@ def make_scatter_auc_logfc(metrics: list[dict], auc_key: str, title: str, subtit
             tickfont=dict(color="#000000", size=11),
             showgrid=True,
             gridwidth=0.5,
-            gridcolor="#f0f0f0"
+            gridcolor="#f0f0f0",
         ),
         yaxis=dict(
             tickfont=dict(color="#000000", size=11),
             showgrid=True,
             gridwidth=0.5,
-            gridcolor="#f0f0f0"
+            gridcolor="#f0f0f0",
         ),
         showlegend=False,
         plot_bgcolor="#fafafa",
-        paper_bgcolor="white"
+        paper_bgcolor="white",
     )
     return fig
 
@@ -372,15 +428,17 @@ def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
         return None
 
     fig = go.Figure()
-    fig.add_trace(go.Box(
-        y=vals,
-        boxpoints="all",
-        jitter=0.25,
-        pointpos=0,
-        name="AUC-disc",
-        marker=dict(size=8),
-        line=dict(width=1)
-    ))
+    fig.add_trace(
+        go.Box(
+            y=vals,
+            boxpoints="all",
+            jitter=0.25,
+            pointpos=0,
+            name="AUC-disc",
+            marker=dict(size=8),
+            line=dict(width=1),
+        )
+    )
     fig.add_hline(y=0.5, line_dash="dash", line_color="#999999", line_width=1.5)
     fig.update_layout(
         title=dict(text="AUC-disc distribution (stability view)", font=dict(size=14, color="#000000")),
@@ -394,9 +452,9 @@ def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
             tickfont=dict(color="#000000", size=11),
             showgrid=True,
             gridwidth=0.5,
-            gridcolor="#f0f0f0"
+            gridcolor="#f0f0f0",
         ),
-        xaxis=dict(showgrid=False, tickfont=dict(color="#000000", size=11))
+        xaxis=dict(showgrid=False, tickfont=dict(color="#000000", size=11)),
     )
     return fig
 
@@ -612,8 +670,6 @@ if data_loaded:
     else:
         st.sidebar.warning("⚠ PPI networks not available")
 
-
-    # In vitro stem cell MASLD model (DEG tables)
     try:
         invitro_files = iva.discover_invitro_deg_files()
         if invitro_files:
@@ -622,6 +678,12 @@ if data_loaded:
             st.sidebar.warning("⚠ In vitro model DEGs not found (expected: stem_cell_model/*.parquet)")
     except Exception as e:
         st.sidebar.warning(f"⚠ In vitro model check failed: {e}")
+
+    if isinstance(bulk_omics_data, dict) and len(bulk_omics_data) > 0:
+        n_files = int(sum(len(v) for v in bulk_omics_data.values()))
+        st.sidebar.success(f"✓ Bulk-omics loaded ({n_files} files / {len(bulk_omics_data)} groups)")
+    else:
+        st.sidebar.warning("⚠ Bulk-omics not available (expected: Bulk_Omics/<group>/*.tsv)")
 else:
     st.sidebar.error("✗ Error loading data")
 
@@ -631,42 +693,49 @@ if not search_query:
     st.title("🔬 Meta Liver")
     st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
 
-    st.markdown(f"""
-Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, and WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), with optional protein–protein interaction (PPI) neighbourhood context.
+    st.markdown(
+        f"""
+Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), in vitro MASLD model DEGs, and bulk tissue differential expression contrasts.
 
-Enter a gene symbol in the sidebar to open the three analysis tabs for that gene.
+Enter a gene symbol in the sidebar to open the analysis tabs for that gene.
 
 If you use this app, please cite:  
 {APP_CITATION}  
 doi: [{APP_DOI}]({APP_DOI_URL})
 
 {APP_TEAM}
-""")
+"""
+    )
 else:
     st.title(f"🔬 {search_query}")
 
     if not single_omics_data:
-        st.error("No studies data found!")
+        st.error("No single-omics studies found!")
     else:
         consistency = soa.compute_consistency_score(search_query, single_omics_data)
 
         if consistency is None:
-            st.warning(f"Gene '{search_query}' not found in any study")
+            st.warning(f"Gene '{search_query}' not found in any single-omics study")
         else:
-            tab_omics, tab_kg, tab_wgcna, tab_invitro = st.tabs([
-                "Single-Omics Evidence",
-                "MAFLD Knowledge Graph",
-                "WGCNA Fibrosis Stage Networks",
-                "In vitro MASLD model"
-            ])
+            tab_omics, tab_kg, tab_wgcna, tab_invitro, tab_bulk = st.tabs(
+                [
+                    "Single-Omics Evidence",
+                    "MAFLD Knowledge Graph",
+                    "WGCNA Fibrosis Stage Networks",
+                    "In vitro MASLD model",
+                    "Bulk Omics (tissue)",
+                ]
+            )
 
             # -----------------------------------------------------------------
             # TAB 1: SINGLE-OMICS EVIDENCE
             # -----------------------------------------------------------------
             with tab_omics:
-                st.markdown("""
+                st.markdown(
+                    """
 This tab summarises gene-level evidence across the single-omics datasets. AUROC reflects per-study discriminative performance, logFC indicates direction (MAFLD vs Healthy), and the Evidence Score summarises strength, stability, direction agreement, and study support.
-""")
+"""
+                )
                 st.markdown("---")
 
                 help_text = {
@@ -730,7 +799,11 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
 
                 auc_disc_vals = []
                 try:
-                    auc_disc_vals = [max(a, 1.0 - a) for a in consistency.get("auc_values", []) if a is not None and not np.isnan(a)]
+                    auc_disc_vals = [
+                        max(a, 1.0 - a)
+                        for a in consistency.get("auc_values", [])
+                        if a is not None and not np.isnan(a)
+                    ]
                 except Exception:
                     auc_disc_vals = []
 
@@ -752,13 +825,12 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
 
                 st.markdown("---")
 
-                # ---- NEW: AUROC VIEW TOGGLE (this is the "toggle" you were expecting) ----
                 auc_view = st.radio(
                     "AUROC view (plots)",
                     ["Discriminative (AUC-disc)", "Raw (as reported)", "Oriented (MAFLD-positive)"],
                     index=0,
                     horizontal=True,
-                    key="omics_auc_view_toggle"
+                    key="omics_auc_view_toggle",
                 )
 
                 auc_key_map = {
@@ -774,44 +846,45 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
                     metrics,
                     auc_key=auc_key,
                     title=f"AUROC Across Studies ({auc_view})",
-                    subtitle=("AUC-disc = max(AUC, 1−AUC)." if auc_key == "auc_disc"
-                              else "Raw AUROC values as stored in each study table." if auc_key == "auc_raw"
-                              else "AUROC aligned so MAFLD is treated as ‘positive’.")
+                    subtitle=(
+                        "AUC-disc = max(AUC, 1−AUC)."
+                        if auc_key == "auc_disc"
+                        else "Raw AUROC values as stored in each study table."
+                        if auc_key == "auc_raw"
+                        else "AUROC aligned so MAFLD is treated as ‘positive’."
+                    ),
                 )
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+                    _st_plotly(fig)
                 else:
                     st.info("No AUROC values available for this gene under the selected AUROC view.")
 
                 st.markdown("---")
-
                 st.markdown("**Concordance: AUROC vs logFC**")
                 fig_scatter = make_scatter_auc_logfc(
                     metrics,
                     auc_key=auc_key,
                     title=f"Concordance: {auc_view} vs logFC",
-                    subtitle="Checks whether discriminative signal aligns with up/down regulation."
+                    subtitle="Checks whether discriminative signal aligns with up/down regulation.",
                 )
                 if fig_scatter:
-                    st.plotly_chart(fig_scatter, use_container_width=True)
+                    _st_plotly(fig_scatter)
                 else:
                     st.info("Not enough data for concordance plot (need AUROC + logFC in ≥2 studies).")
 
                 st.markdown("---")
-
                 st.markdown("**AUC-disc distribution (stability view)**")
                 fig_dist = make_auc_disc_distribution(metrics)
                 if fig_dist:
-                    st.plotly_chart(fig_dist, use_container_width=True)
+                    _st_plotly(fig_dist)
                 else:
                     st.info("Not enough AUROC values to show a distribution.")
 
                 st.markdown("---")
-
                 st.markdown("**Detailed Results**")
                 results_df = soa.create_results_table(search_query, single_omics_data)
                 if results_df is not None:
-                    st.dataframe(results_df, use_container_width=True, hide_index=True)
+                    _st_df(results_df, hide_index=True)
                 else:
                     st.info("No per-study rows found for this gene.")
 
@@ -819,9 +892,11 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
             # TAB 2: MAFLD KNOWLEDGE GRAPH
             # -----------------------------------------------------------------
             with tab_kg:
-                st.markdown("""
+                st.markdown(
+                    """
 This tab places the selected gene in its network context within the MAFLD/MASH subgraph. It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness, eigenvector) indicating whether it behaves as a hub or peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations.
-""")
+"""
+                )
                 st.markdown("---")
 
                 if kg_data:
@@ -876,7 +951,7 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
                                     "Sort by",
                                     ["Composite %ile", "PR %ile", "Bet %ile", "Eigen %ile", "PageRank (raw)", "Betweenness (raw)", "Eigen (raw)", "Name"],
                                     index=0,
-                                    key="kg_sort_key"
+                                    key="kg_sort_key",
                                 )
 
                             tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
@@ -884,21 +959,21 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
                             with tab_genes:
                                 genes_df = get_cluster_genes(cluster_id, kg_data)
                                 if genes_df is not None and not genes_df.empty:
-                                    st.dataframe(_prepare_cluster_table(genes_df, sort_key, top_n), use_container_width=True, hide_index=True)
+                                    _st_df(_prepare_cluster_table(genes_df, sort_key, top_n), hide_index=True)
                                 else:
                                     st.write("No genes/proteins in this cluster")
 
                             with tab_drugs:
                                 drugs_df = get_cluster_drugs(cluster_id, kg_data)
                                 if drugs_df is not None and not drugs_df.empty:
-                                    st.dataframe(_prepare_cluster_table(drugs_df, sort_key, top_n), use_container_width=True, hide_index=True)
+                                    _st_df(_prepare_cluster_table(drugs_df, sort_key, top_n), hide_index=True)
                                 else:
                                     st.write("No drugs in this cluster")
 
                             with tab_diseases:
                                 diseases_df = get_cluster_diseases(cluster_id, kg_data)
                                 if diseases_df is not None and not diseases_df.empty:
-                                    st.dataframe(_prepare_cluster_table(diseases_df, sort_key, top_n), use_container_width=True, hide_index=True)
+                                    _st_df(_prepare_cluster_table(diseases_df, sort_key, top_n), hide_index=True)
                                 else:
                                     st.write("No diseases in this cluster")
                     else:
@@ -910,9 +985,11 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
             # TAB 3: WGCNA FIBROSIS STAGE NETWORKS
             # -----------------------------------------------------------------
             with tab_wgcna:
-                st.markdown("""
+                st.markdown(
+                    """
 This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment, module–trait relationships, and module-specific enrichment tables, then shows direct PPI interactors and local network statistics for the selected gene.
-""")
+"""
+                )
                 st.markdown("---")
 
                 st.markdown("**WGCNA Co-expression Module**")
@@ -932,7 +1009,7 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                                 max_value=200,
                                 value=15,
                                 step=5,
-                                key="wgcna_top_n_genes"
+                                key="wgcna_top_n_genes",
                             )
 
                             max_drugs_per_gene = st.slider(
@@ -941,12 +1018,12 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                                 max_value=25,
                                 value=5,
                                 step=1,
-                                key="wgcna_max_drugs_per_gene"
+                                key="wgcna_max_drugs_per_gene",
                             )
 
                             view_df = module_genes.head(int(show_top_genes)).copy()
                             view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, max_drugs_per_gene)
-                            st.dataframe(view_df, use_container_width=True, hide_index=True)
+                            _st_df(view_df, hide_index=True)
                         else:
                             st.info(f"No other genes found in module {module_name}")
 
@@ -956,7 +1033,7 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                         if mt is None or mt.empty:
                             st.info("Module–trait tables not available for this module (check module index names).")
                         else:
-                            st.dataframe(mt, use_container_width=True, hide_index=True)
+                            _st_df(mt, hide_index=True)
 
                         st.markdown("---")
                         st.markdown("**Pathways / enrichment (module)**")
@@ -966,14 +1043,14 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                             max_value=300,
                             value=50,
                             step=10,
-                            key="wgcna_top_n_pathways"
+                            key="wgcna_top_n_pathways",
                         )
                         key = str(module_name).strip().lower()
                         dfp = (wgcna_pathways or {}).get(key)
                         if dfp is None or dfp.empty:
                             st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
                         else:
-                            st.dataframe(dfp.head(int(top_n_pathways)), use_container_width=True, hide_index=True)
+                            _st_df(dfp.head(int(top_n_pathways)), hide_index=True)
                     else:
                         st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
                 else:
@@ -992,7 +1069,7 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
                             with col2:
                                 st.write(f"**Network Property:** {net_stats['description']}")
                         st.markdown(f"Direct interaction partners of {search_query}:")
-                        st.dataframe(ppi_df, use_container_width=True, hide_index=True)
+                        _st_df(ppi_df, hide_index=True)
                     else:
                         st.info(f"⚠ '{search_query}' not found in PPI networks")
                 else:
@@ -1002,22 +1079,29 @@ This tab focuses on WGCNA-derived co-expression context, designed to support ana
             # TAB 4: IN VITRO STEM CELL MASLD MODEL (iHeps)
             # -----------------------------------------------------------------
             with tab_invitro:
-                st.markdown("""
+                st.markdown(
+                    """
 This tab summarises differential expression from a human stem cell-derived MASLD model using induced hepatocytes (iHeps).
 
 Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA** (oleic and palmitic acid),
 **OA+PA + Resistin/Myostatin** (adipose- and muscle-derived signals), and **OA+PA + Resistin/Myostatin + PBMC co-culture**
 (immune cells were not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
-""")
-                st.markdown('---')
+"""
+                )
+                st.markdown("---")
                 iva.render_invitro_tab(search_query)
 
-st.markdown("---")
+            # -----------------------------------------------------------------
+            # TAB 5: BULK OMICS (TISSUE)
+            # -----------------------------------------------------------------
+            with tab_bulk:
+                bo.render_bulk_omics_tab(search_query, bulk_data=bulk_omics_data)
 
+st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: gray; font-size: 11px;'>"
-    "<p>Meta Liver - Three-tab interface: Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Fibrosis Stage Networks</p>"
+    "<p>Meta Liver - Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Networks | In vitro MASLD model | Bulk Omics</p>"
     f"<p>doi: <a href='{APP_DOI_URL}' target='_blank'>{APP_DOI}</a></p>"
     "</div>",
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )

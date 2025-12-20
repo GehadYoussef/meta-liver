@@ -3,8 +3,9 @@ Robust Data Loader for Meta Liver
 
 Purpose
 - Auto-detects the data directory at runtime
-- Finds folders/files case-insensitively
-- Loads WGCNA (supports both 'wgcna' and legacy 'wcgna'), single-omics, knowledge graph, and PPI tables
+- Finds folders/files case-insensitively (and tolerant to spaces/dashes/underscores)
+- Loads WGCNA (supports both 'wgcna' and legacy 'wcgna'), single-omics, knowledge graph, PPI tables
+- Loads Bulk Omics DEG tables under Bulk_Omics/ with per-contrast subfolders (TSV/CSV/Parquet)
 - Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
 
 Usage (in Streamlit)
@@ -14,7 +15,7 @@ Usage (in Streamlit)
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 import warnings
 import re
 
@@ -41,8 +42,13 @@ def find_data_dir() -> Optional[Path]:
     return None
 
 
+def _name_key(s: str) -> str:
+    """Normalise a name for tolerant comparisons (case-insensitive, ignore punctuation/spaces)."""
+    return re.sub(r"[^a-z0-9]+", "", str(s).lower()).strip()
+
+
 def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
-    """Find immediate subfolder (case-insensitive)."""
+    """Find immediate subfolder (case-insensitive, tolerant to underscores/dashes/spaces)."""
     if parent is None or not parent.exists():
         return None
 
@@ -50,14 +56,15 @@ def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
     if exact_path.exists() and exact_path.is_dir():
         return exact_path
 
-    pat = folder_pattern.lower()
+    target_key = _name_key(folder_pattern)
+
     for item in parent.iterdir():
-        if item.is_dir() and item.name.lower() == pat:
+        if item.is_dir() and (item.name.lower() == folder_pattern.lower() or _name_key(item.name) == target_key):
             return item
 
     # Fall back to deeper search (useful if structure varies)
     for item in parent.rglob("*"):
-        if item.is_dir() and item.name.lower() == pat:
+        if item.is_dir() and _name_key(item.name) == target_key:
             return item
 
     return None
@@ -84,12 +91,21 @@ def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
 
 
 def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
-    """
-    Prefer 'wgcna' (current), but still accept legacy 'wcgna'.
-    """
+    """Prefer 'wgcna' (current), but still accept legacy 'wcgna'."""
     if data_dir is None:
         return None
     return find_subfolder(data_dir, "wgcna") or find_subfolder(data_dir, "wcgna")
+
+
+def _find_bulk_omics_dir(data_dir: Path) -> Optional[Path]:
+    """
+    Find Bulk Omics directory. Accepts names like:
+    Bulk_Omics, bulk_omics, Bulk Omics, bulk-omics, etc.
+    """
+    if data_dir is None:
+        return None
+    # one tolerant pattern is enough because find_subfolder uses _name_key matching
+    return find_subfolder(data_dir, "bulk_omics")
 
 
 # ============================================================================
@@ -97,7 +113,7 @@ def _find_wgcna_dir(data_dir: Path) -> Optional[Path]:
 # ============================================================================
 
 def _read_table(file_path: Path, *, index_col: Optional[int] = None) -> pd.DataFrame:
-    """Read CSV/Parquet defensively; returns empty DF on failure."""
+    """Read TSV/CSV/Parquet defensively; returns empty DF on failure."""
     if file_path is None or not file_path.exists():
         return pd.DataFrame()
 
@@ -107,6 +123,8 @@ def _read_table(file_path: Path, *, index_col: Optional[int] = None) -> pd.DataF
             return pd.read_parquet(file_path)
         if suf == ".csv":
             return pd.read_csv(file_path, index_col=index_col)
+        if suf in (".tsv", ".txt"):
+            return pd.read_csv(file_path, sep="\t", index_col=index_col)
         return pd.DataFrame()
     except Exception as e:
         warnings.warn(f"Failed to read {file_path.name}: {e}")
@@ -223,7 +241,7 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
     for file_path in pathways_dir.rglob("*"):
         if not file_path.is_file():
             continue
-        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+        if file_path.suffix.lower() not in [".csv", ".tsv", ".txt", ".parquet"]:
             continue
 
         df = _read_table(file_path, index_col=None)
@@ -247,9 +265,7 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
 
 
 def load_wgcna_module_trait_heatmap_pdf_path() -> Optional[Path]:
-    """
-    Return a Path to the module-trait heatmap PDF if present, else None.
-    """
+    """Return a Path to the module-trait heatmap PDF if present, else None."""
     data_dir = find_data_dir()
     if data_dir is None:
         return None
@@ -352,6 +368,171 @@ def load_ppi_data() -> Dict[str, pd.DataFrame]:
 
 
 # ============================================================================
+# BULK OMICS LOADERS
+# ============================================================================
+
+_BULK_SYMBOL_CANDS = ["Symbol", "symbol", "gene", "Gene", "gene_symbol", "GeneSymbol"]
+_BULK_LOGFC_CANDS = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
+_BULK_PVAL_CANDS = ["pvalue", "pval", "p_value", "PValue", "P.Value"]
+_BULK_PADJ_CANDS = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
+
+
+def _pick_col_ci(cols: list[str], cands: list[str]) -> Optional[str]:
+    m = {c.lower(): c for c in cols}
+    for cand in cands:
+        if cand in cols:
+            return cand
+        if cand.lower() in m:
+            return m[cand.lower()]
+    return None
+
+
+def _normalise_symbol(x: str) -> str:
+    s = str(x).strip().upper()
+    if s in ("", "NAN", "NONE"):
+        return ""
+    return s
+
+
+def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalise a bulk DEG table to ensure:
+    - Symbol column present
+    - log2FoldChange / pvalue / padj standardised (if present)
+    - duplicate Symbols resolved deterministically
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+
+    sym_col = _pick_col_ci(list(out.columns), _BULK_SYMBOL_CANDS)
+    lfc_col = _pick_col_ci(list(out.columns), _BULK_LOGFC_CANDS)
+    p_col = _pick_col_ci(list(out.columns), _BULK_PVAL_CANDS)
+    q_col = _pick_col_ci(list(out.columns), _BULK_PADJ_CANDS)
+
+    if sym_col is None:
+        return pd.DataFrame()
+
+    ren: Dict[str, str] = {sym_col: "Symbol"}
+    if lfc_col is not None:
+        ren[lfc_col] = "log2FoldChange"
+    if p_col is not None:
+        ren[p_col] = "pvalue"
+    if q_col is not None:
+        ren[q_col] = "padj"
+
+    out = out.rename(columns=ren)
+
+    out["Symbol"] = out["Symbol"].astype(str).map(_normalise_symbol)
+    out = out.loc[out["Symbol"] != ""].copy()
+
+    if "log2FoldChange" in out.columns:
+        out["log2FoldChange"] = pd.to_numeric(out["log2FoldChange"], errors="coerce")
+    if "pvalue" in out.columns:
+        out["pvalue"] = pd.to_numeric(out["pvalue"], errors="coerce")
+    if "padj" in out.columns:
+        out["padj"] = pd.to_numeric(out["padj"], errors="coerce")
+
+    # Resolve duplicates by best significance then largest absolute effect
+    if out["Symbol"].duplicated().any():
+        def _rank_row(r) -> Tuple[float, float]:
+            q = r.get("padj", float("nan"))
+            p = r.get("pvalue", float("nan"))
+            lfc = r.get("log2FoldChange", float("nan"))
+
+            # smaller is better; NaN = worst
+            best_sig = q if pd.notna(q) else (p if pd.notna(p) else float("inf"))
+            abs_lfc = abs(lfc) if pd.notna(lfc) else 0.0
+            return (best_sig, -abs_lfc)
+
+        out["__rk__"] = out.apply(_rank_row, axis=1)
+        out = out.sort_values("__rk__", ascending=True)
+        out = out.drop_duplicates(subset=["Symbol"], keep="first").drop(columns=["__rk__"])
+
+    return out
+
+
+def load_bulk_omics_studies() -> Dict[str, Dict[str, pd.DataFrame]]:
+    """
+    Load Bulk Omics DEG tables organised as:
+      meta-liver-data/Bulk_Omics/<contrast_folder>/*.tsv
+
+    Returns:
+      {contrast_folder_name: {study_file_stem: normalised_df}}
+    """
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    bulk_dir = _find_bulk_omics_dir(data_dir)
+    if bulk_dir is None or not bulk_dir.exists():
+        return {}
+
+    out: Dict[str, Dict[str, pd.DataFrame]] = {}
+
+    # Each subfolder is a "contrast"
+    for contrast_dir in sorted([p for p in bulk_dir.iterdir() if p.is_dir()]):
+        contrast_name = contrast_dir.name
+        studies: Dict[str, pd.DataFrame] = {}
+
+        for fp in sorted(contrast_dir.rglob("*")):
+            if not fp.is_file():
+                continue
+            if fp.suffix.lower() not in (".tsv", ".csv", ".txt", ".parquet"):
+                continue
+
+            df = _read_table(fp, index_col=None)
+            if df.empty:
+                continue
+
+            df = normalise_bulk_deg_table(df)
+            if df.empty:
+                continue
+
+            studies[fp.stem] = df
+
+        if studies:
+            out[contrast_name] = studies
+
+    return out
+
+
+def search_gene_in_bulk_omics(gene_symbol: str) -> Dict[str, pd.DataFrame]:
+    """
+    Search a gene across all Bulk Omics contrasts.
+    Returns {contrast_name: dataframe_of_per-study_hits}
+    """
+    g = _normalise_symbol(gene_symbol)
+    if not g:
+        return {}
+
+    data = load_bulk_omics_studies()
+    if not data:
+        return {}
+
+    out: Dict[str, pd.DataFrame] = {}
+    for contrast, studies in data.items():
+        rows = []
+        for study, df in studies.items():
+            hit = df.loc[df["Symbol"] == g]
+            if hit.empty:
+                continue
+            r = hit.iloc[0].to_dict()
+            r["Study"] = study
+            rows.append(r)
+
+        if rows:
+            tmp = pd.DataFrame(rows)
+            # stable column ordering
+            front = [c for c in ["Study", "Symbol", "log2FoldChange", "padj", "pvalue"] if c in tmp.columns]
+            rest = [c for c in tmp.columns if c not in front]
+            out[contrast] = tmp[front + rest]
+
+    return out
+
+
+# ============================================================================
 # DATA AVAILABILITY / SUMMARY
 # ============================================================================
 
@@ -368,6 +549,7 @@ def check_data_availability() -> Dict[str, bool]:
     single_ok = False
     kg_ok = False
     ppi_ok = False
+    bulk_ok = False
 
     if data_dir_ok:
         expr_ok = not load_wgcna_expr().empty
@@ -379,6 +561,7 @@ def check_data_availability() -> Dict[str, bool]:
         single_ok = len(load_single_omics_studies()) > 0
         kg_ok = len(load_kg_data()) > 0
         ppi_ok = len(load_ppi_data()) > 0
+        bulk_ok = len(load_bulk_omics_studies()) > 0
 
     return {
         "data_dir": data_dir_ok,
@@ -389,6 +572,7 @@ def check_data_availability() -> Dict[str, bool]:
         "wgcna_pathways": pathways_ok,
         "wgcna_heatmap_pdf": heatmap_ok,
         "single_omics": single_ok,
+        "bulk_omics": bulk_ok,
         "knowledge_graphs": kg_ok,
         "ppi_networks": ppi_ok,
     }
@@ -428,6 +612,16 @@ def get_data_summary() -> str:
             lines.append(f"  - {name}: {len(df)} rows")
     else:
         lines.append("✗ Single-Omics Studies: Not found")
+
+    if avail["bulk_omics"]:
+        bulk = load_bulk_omics_studies()
+        n_contrasts = len(bulk)
+        n_studies = sum(len(v) for v in bulk.values())
+        lines.append(f"✓ Bulk Omics: {n_contrasts} contrasts, {n_studies} study tables")
+        for contrast, studies in bulk.items():
+            lines.append(f"  - {contrast}: {len(studies)} tables")
+    else:
+        lines.append("✗ Bulk Omics: Not found")
 
     lines.append(f"✓ Knowledge Graphs: {len(load_kg_data())} datasets" if avail["knowledge_graphs"] else "✗ Knowledge Graphs: Not found")
     lines.append(f"✓ PPI Networks: {len(load_ppi_data())} datasets" if avail["ppi_networks"] else "✗ PPI Networks: Not found")
