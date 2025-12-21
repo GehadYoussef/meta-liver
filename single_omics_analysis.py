@@ -114,8 +114,9 @@ def extract_metrics_from_row(row: pd.Series) -> Tuple[Optional[float], Optional[
 def _build_score_help() -> Dict[str, str]:
     """One-sentence explanations surfaced in the Streamlit UI."""
     return {
-        "Evidence Score": "Overall evidence across studies (Strength × Stability × Direction Agreement × Study Weight).",
+        "Evidence Score": "Overall evidence across studies (geometric mean of Strength, Stability, Direction Factor, Study Weight).",
         "Direction Agreement": "Fraction of studies where the gene’s direction (MAFLD vs Healthy) matches the majority.",
+        "Direction Factor": "Soft version of direction agreement (floored so direction noise does not zero-out the score).",
         "Median AUC (disc)": "Median discriminative AUC across studies: AUC-disc = max(AUC, 1−AUC).",
         "Studies Found": "Number of studies where the gene is present (even if AUROC is missing).",
         "Strength": "How far the median AUC-disc is above 0.5 (0=no signal; 1=perfect).",
@@ -151,7 +152,9 @@ def compute_consistency_score(
       - Direction agreement is computed from direction labels (or inferred from logFC)
       - n_weight downweights small numbers of valid AUROCs
 
-    Note: We deliberately do NOT label anything as “diagnostic” to avoid clinical connotations.
+    Evidence Score is intentionally conservative but not punishing:
+      - We use a soft Direction Factor (floored) rather than a hard gate
+      - We combine components via a geometric mean to avoid score collapse
     """
     if studies_data is None:
         studies_data = load_single_omics_studies()
@@ -209,16 +212,20 @@ def compute_consistency_score(
     healthy_n = directions.count("Healthy")
     total_dir = len(directions)
 
-    direction_agreement = (max(mafld_n, healthy_n) / total_dir) if total_dir else 0.0
-    if total_dir:
+    if total_dir >= 2:
+        direction_agreement = (max(mafld_n, healthy_n) / total_dir)
         if mafld_n > healthy_n:
             consensus_direction = "MAFLD"
         elif healthy_n > mafld_n:
             consensus_direction = "Healthy"
         else:
             consensus_direction = "Mixed"
+    elif total_dir == 1:
+        direction_agreement = 1.0
+        consensus_direction = directions[0]
     else:
-        consensus_direction = None
+        direction_agreement = 1.0
+        consensus_direction = "Unknown"
 
     n_auc = len(auc_values)
 
@@ -239,9 +246,21 @@ def compute_consistency_score(
     if len(auc_oriented_vals) > 1:
         orient_iqr = float(np.subtract(*np.percentile(auc_oriented_vals, [75, 25])))
 
-    n_weight = float(1.0 - np.exp(-n_auc / 3.0))
+    # Study-count weight: slightly less harsh than /3.0
+    n_weight = float(1.0 - np.exp(-n_auc / 2.0))
 
-    evidence_score = float(strength * stability * float(direction_agreement) * n_weight)
+    # Soft direction: floors the penalty so direction noise does not collapse the score
+    direction_factor = float(0.75 + 0.25 * float(direction_agreement))  # in [0.75, 1.0]
+
+    # Less harsh combination: geometric mean of components (still conservative)
+    eps = 1e-12
+    comp = np.array([strength, stability, direction_factor, n_weight], dtype=float)
+    comp = np.clip(comp, 0.0, 1.0)
+
+    if strength <= 0.0:
+        evidence_score = 0.0
+    else:
+        evidence_score = float(np.exp(np.mean(np.log(comp + eps))))
 
     if strength > 0.7 and stability > 0.7 and direction_agreement > 0.7:
         interpretation = "Highly consistent: strong, stable, and directionally aligned"
@@ -266,6 +285,7 @@ def compute_consistency_score(
         "strength": float(strength),
         "stability": float(stability),
         "direction_agreement": float(direction_agreement),
+        "direction_factor": float(direction_factor),
         "direction_counts": {"MAFLD": int(mafld_n), "Healthy": int(healthy_n), "Total": int(total_dir)},
         "consensus_direction": consensus_direction,
         "evidence_score": float(evidence_score),
