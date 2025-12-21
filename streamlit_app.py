@@ -29,6 +29,838 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+# =============================================================================
+# MERGED-IN: robust_data_loader.py (inlined)
+# IMPORTANT: do NOT add another "from __future__ import annotations" here
+# =============================================================================
+"""
+Robust Data Loader for Meta Liver
+
+Purpose
+- Auto-detects the data directory at runtime
+- Finds folders/files case-insensitively (tolerant to spaces/dashes/underscores)
+- Loads WGCNA (supports both 'wgcna' and legacy 'wcgna'), single-omics, knowledge graph, PPI tables
+- Loads Bulk Omics DEG tables under Bulk_Omics/ with per-contrast subfolders (TSV/CSV/Parquet)
+- Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
+
+Usage (in Streamlit)
+- Wrap calls in @st.cache_data in streamlit_app.py (recommended)
+"""
+
+from pathlib import Path as _RDL_Path
+from typing import Optional as _RDL_Optional, Dict as _RDL_Dict, Tuple as _RDL_Tuple, List as _RDL_List
+import warnings as _RDL_warnings
+import re as _RDL_re
+import os as _RDL_os
+
+import pandas as _RDL_pd
+
+
+# =============================================================================
+# AUTO-DETECT DATA DIRECTORY (RUNTIME)
+# =============================================================================
+
+def find_data_dir() -> _RDL_Optional[_RDL_Path]:
+    """
+    Auto-detect data directory (computed at runtime).
+
+    Resolution order:
+    1) META_LIVER_DATA_DIR env var (if set)
+    2) common relative folders (repo layout)
+    3) common home folders
+    """
+    env = _RDL_os.environ.get("META_LIVER_DATA_DIR", "").strip()
+    if env:
+        p = _RDL_Path(env).expanduser()
+        if p.exists() and p.is_dir():
+            return p.resolve()
+
+    here = _RDL_Path(__file__).resolve().parent
+
+    possible_dirs = [
+        _RDL_Path("meta-liver-data"),
+        _RDL_Path("meta_liver_data"),
+        _RDL_Path("data"),
+        _RDL_Path("../meta-liver-data"),
+        here / "meta-liver-data",
+        here / "meta_liver_data",
+        here / "data",
+        _RDL_Path.home() / "meta-liver-data",
+        _RDL_Path.home() / "meta_liver_data",
+    ]
+    for dir_path in possible_dirs:
+        try:
+            if dir_path.exists() and dir_path.is_dir():
+                return dir_path.resolve()
+        except Exception:
+            continue
+    return None
+
+
+def _name_key(s: str) -> str:
+    """Normalise a name for tolerant comparisons (case-insensitive, ignore punctuation/spaces)."""
+    return _RDL_re.sub(r"[^a-z0-9]+", "", str(s).lower()).strip()
+
+
+def find_subfolder(parent: _RDL_Path, folder_pattern: str, *, max_depth: int = 4) -> _RDL_Optional[_RDL_Path]:
+    """
+    Find a subfolder (case-insensitive, tolerant to underscores/dashes/spaces).
+    Prefers immediate child matches; then does a shallow search up to max_depth.
+    """
+    if parent is None or not parent.exists():
+        return None
+
+    exact_path = parent / folder_pattern
+    if exact_path.exists() and exact_path.is_dir():
+        return exact_path
+
+    target_key = _name_key(folder_pattern)
+
+    # 1) immediate children first (fast)
+    try:
+        for item in parent.iterdir():
+            if item.is_dir() and (_name_key(item.name) == target_key):
+                return item
+    except Exception:
+        pass
+
+    # 2) shallow walk with depth control (avoids expensive full rglob on big trees)
+    parent = parent.resolve()
+    try:
+        for root, dirs, _files in _RDL_os.walk(parent):
+            root_p = _RDL_Path(root)
+            rel = root_p.relative_to(parent)
+            depth = 0 if str(rel) == "." else len(rel.parts)
+            if depth > max_depth:
+                dirs[:] = []
+                continue
+
+            for d in dirs:
+                if _name_key(d) == target_key:
+                    return (root_p / d)
+    except Exception:
+        pass
+
+    return None
+
+
+def find_file(directory: _RDL_Path, filename_pattern: str, *, max_depth: int = 6) -> _RDL_Optional[_RDL_Path]:
+    """
+    Find a file under directory.
+
+    Matching priority:
+    1) exact path directory/filename_pattern
+    2) case-insensitive exact filename match
+    3) tolerant name-key match (ignoring punctuation/spaces)
+    4) substring match (last resort)
+    """
+    if directory is None or not directory.exists():
+        return None
+
+    exact_path = directory / filename_pattern
+    if exact_path.exists() and exact_path.is_file():
+        return exact_path
+
+    target_lower = filename_pattern.lower()
+    target_key = _name_key(filename_pattern)
+
+    directory = directory.resolve()
+
+    # shallow walk to avoid huge scans
+    try:
+        for root, _dirs, files in _RDL_os.walk(directory):
+            root_p = _RDL_Path(root)
+            rel = root_p.relative_to(directory)
+            depth = 0 if str(rel) == "." else len(rel.parts)
+            if depth > max_depth:
+                continue
+
+            # exact case-insensitive match first
+            for fn in files:
+                if fn.lower() == target_lower:
+                    return root_p / fn
+
+            # tolerant key match
+            for fn in files:
+                if _name_key(fn) == target_key:
+                    return root_p / fn
+
+            # substring fallback
+            for fn in files:
+                if target_lower in fn.lower():
+                    return root_p / fn
+    except Exception:
+        pass
+
+    return None
+
+
+def _find_wgcna_dir(data_dir: _RDL_Path) -> _RDL_Optional[_RDL_Path]:
+    """Prefer 'wgcna' (current), but still accept legacy 'wcgna'."""
+    if data_dir is None:
+        return None
+    return find_subfolder(data_dir, "wgcna") or find_subfolder(data_dir, "wcgna")
+
+
+def _find_bulk_omics_dir(data_dir: _RDL_Path) -> _RDL_Optional[_RDL_Path]:
+    """
+    Find Bulk Omics directory. Accepts names like:
+    Bulk_Omics, bulk_omics, Bulk Omics, bulk-omics, etc.
+    """
+    if data_dir is None:
+        return None
+    return find_subfolder(data_dir, "bulk_omics")
+
+
+# =============================================================================
+# SAFE READERS
+# =============================================================================
+
+def _read_table(file_path: _RDL_Path, *, index_col: _RDL_Optional[int] = None) -> _RDL_pd.DataFrame:
+    """Read TSV/CSV/Parquet defensively; returns empty DF on failure."""
+    if file_path is None or not file_path.exists():
+        return _RDL_pd.DataFrame()
+
+    try:
+        suf = file_path.suffix.lower()
+        if suf == ".parquet":
+            return _RDL_pd.read_parquet(file_path)
+        if suf == ".csv":
+            return _RDL_pd.read_csv(file_path, index_col=index_col)
+        if suf in (".tsv", ".txt"):
+            try:
+                return _RDL_pd.read_csv(file_path, sep="\t", index_col=index_col)
+            except Exception:
+                return _RDL_pd.read_csv(file_path, index_col=index_col)
+        return _RDL_pd.DataFrame()
+    except Exception as e:
+        _RDL_warnings.warn(f"Failed to read {file_path}: {e}")
+        return _RDL_pd.DataFrame()
+
+
+def _load_first_existing(directory: _RDL_Path, candidates: _RDL_List[str], *, index_col: _RDL_Optional[int] = None) -> _RDL_pd.DataFrame:
+    """Try a list of filenames (case-insensitive); return the first that loads."""
+    if directory is None or not directory.exists():
+        return _RDL_pd.DataFrame()
+
+    for name in candidates:
+        fp = find_file(directory, name)
+        if fp is not None:
+            df = _read_table(fp, index_col=index_col)
+            if not df.empty:
+                return df
+    return _RDL_pd.DataFrame()
+
+
+# =============================================================================
+# WGCNA LOADERS (supports wgcna/ and wcgna/)
+# =============================================================================
+
+def load_wgcna_expr() -> _RDL_pd.DataFrame:
+    """Load WGCNA expression matrix."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return _RDL_pd.DataFrame()
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return _RDL_pd.DataFrame()
+
+    return _load_first_existing(
+        wgcna_dir,
+        ["datExpr_processed.parquet", "datExpr_processed.csv"],
+        index_col=0,
+    )
+
+
+def load_wgcna_mes() -> _RDL_pd.DataFrame:
+    """Load WGCNA module eigengenes."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return _RDL_pd.DataFrame()
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return _RDL_pd.DataFrame()
+
+    return _load_first_existing(
+        wgcna_dir,
+        ["MEs_processed.parquet", "MEs_processed.csv"],
+        index_col=0,
+    )
+
+
+def load_wgcna_mod_trait_cor() -> _RDL_pd.DataFrame:
+    """Load module-trait correlations."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return _RDL_pd.DataFrame()
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return _RDL_pd.DataFrame()
+
+    return _load_first_existing(
+        wgcna_dir,
+        ["moduleTraitCor.parquet", "moduleTraitCor.csv"],
+        index_col=0,
+    )
+
+
+def load_wgcna_mod_trait_pval() -> _RDL_pd.DataFrame:
+    """Load module-trait p-values."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return _RDL_pd.DataFrame()
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return _RDL_pd.DataFrame()
+
+    return _load_first_existing(
+        wgcna_dir,
+        ["moduleTraitPvalue.parquet", "moduleTraitPvalue.csv"],
+        index_col=0,
+    )
+
+
+def load_wgcna_pathways() -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """
+    Load all pathway/enrichment tables under <wgcna_dir>/pathways/.
+
+    Returns dict keyed by module (lowercase), e.g. 'black' -> dataframe.
+    Module key is inferred from filename: first token split on _ - space.
+    Example: 'black_enrichment.csv' -> 'black'.
+    """
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return {}
+
+    pathways_dir = find_subfolder(wgcna_dir, "pathways")
+    if pathways_dir is None or not pathways_dir.exists():
+        return {}
+
+    out: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+    for file_path in pathways_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in (".csv", ".tsv", ".txt", ".parquet"):
+            continue
+
+        df = _read_table(file_path, index_col=None)
+        if df.empty:
+            continue
+
+        # remove common saved-index artifact
+        if "Unnamed: 0" in df.columns:
+            df = df.drop(columns=["Unnamed: 0"])
+
+        stem = file_path.stem.strip()
+        if not stem:
+            continue
+
+        tok = _RDL_re.split(r"[_\-\s]+", stem)[0].strip()
+        module_key = (tok if tok else stem).lower()
+
+        if module_key not in out:
+            out[module_key] = df
+
+    return out
+
+
+def load_wgcna_module_trait_heatmap_pdf_path() -> _RDL_Optional[_RDL_Path]:
+    """Return a Path to the module-trait heatmap PDF if present, else None."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return None
+
+    wgcna_dir = _find_wgcna_dir(data_dir)
+    if wgcna_dir is None:
+        return None
+
+    candidates = [
+        "module-trait-relationships-heatmap.pdf",
+        "module_trait_relationships_heatmap.pdf",
+        "moduleTraitRelationshipsHeatmap.pdf",
+        "moduleTraitRelationships_heatmap.pdf",
+        "heatmap.pdf",
+    ]
+    for name in candidates:
+        fp = find_file(wgcna_dir, name)
+        if fp is not None and fp.exists():
+            return fp
+    return None
+
+
+# =============================================================================
+# SINGLE-OMICS / KG / PPI LOADERS
+# =============================================================================
+
+def load_single_omics_studies() -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """Load all single-omics studies (all CSV/Parquet files under single_omics)."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    single_omics_dir = find_subfolder(data_dir, "single_omics")
+    if single_omics_dir is None:
+        return {}
+
+    studies: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+    for file_path in single_omics_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in (".csv", ".parquet"):
+            continue
+
+        study_name = file_path.stem
+        df = _read_table(file_path, index_col=None)
+        if not df.empty:
+            studies[study_name] = df
+
+    return studies
+
+
+def load_kg_data() -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """Load all knowledge graph data (all CSV/Parquet files under knowledge_graphs)."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    kg_dir = find_subfolder(data_dir, "knowledge_graphs")
+    if kg_dir is None:
+        return {}
+
+    kg_data: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+    for file_path in kg_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in (".csv", ".parquet"):
+            continue
+
+        name = file_path.stem
+        df = _read_table(file_path, index_col=None)
+        if not df.empty:
+            kg_data[name] = df
+
+    return kg_data
+
+
+def load_ppi_data() -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """Load all PPI network data (all CSV/Parquet files under ppi_networks)."""
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    ppi_dir = find_subfolder(data_dir, "ppi_networks")
+    if ppi_dir is None:
+        return {}
+
+    ppi_data: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+    for file_path in ppi_dir.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in (".csv", ".parquet"):
+            continue
+
+        name = file_path.stem
+        df = _read_table(file_path, index_col=None)
+        if not df.empty:
+            ppi_data[name] = df
+
+    return ppi_data
+
+
+# =============================================================================
+# BULK OMICS LOADERS
+# =============================================================================
+
+_BULK_SYMBOL_CANDS = ["Symbol", "symbol", "gene", "Gene", "gene_symbol", "GeneSymbol"]
+_BULK_LOGFC_CANDS = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
+_BULK_PVAL_CANDS = ["pvalue", "pval", "p_value", "PValue", "P.Value"]
+_BULK_PADJ_CANDS = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
+
+
+def _pick_col_ci(cols: _RDL_List[str], cands: _RDL_List[str]) -> _RDL_Optional[str]:
+    m = {str(c).lower(): c for c in cols}
+    for cand in cands:
+        if cand in cols:
+            return cand
+        cl = cand.lower()
+        if cl in m:
+            return m[cl]
+    return None
+
+
+def _normalise_symbol(x: str) -> str:
+    s = str(x).strip().upper()
+    if s in ("", "NAN", "NONE"):
+        return ""
+    return s
+
+
+def _maybe_promote_index_to_symbol(df: _RDL_pd.DataFrame) -> _RDL_pd.DataFrame:
+    """
+    Recover gene identifiers when they are not in a 'Symbol' column.
+
+    Common cases:
+    - DESeq2 rownames saved into an unnamed first column ('Unnamed: 0')
+    - Identifiers stored as the DataFrame index
+    """
+    if df is None or df.empty:
+        return df
+
+    cols = list(df.columns)
+
+    # Unnamed first column -> Symbol
+    unnamed0 = None
+    for c in cols:
+        c0 = str(c).strip().lower()
+        if c0 in ("unnamed: 0", "unnamed:0", ""):
+            unnamed0 = c
+            break
+    if unnamed0 is not None:
+        tmp = df.copy()
+        tmp = tmp.rename(columns={unnamed0: "Symbol"})
+        return tmp
+
+    # non-default index -> Symbol
+    if not isinstance(df.index, _RDL_pd.RangeIndex):
+        try:
+            idx = df.index.astype(str)
+            if idx.notna().any():
+                tmp = df.reset_index().rename(columns={"index": "Symbol"})
+                return tmp
+        except Exception:
+            pass
+
+    return df
+
+
+def normalise_bulk_deg_table(df: _RDL_pd.DataFrame) -> _RDL_pd.DataFrame:
+    """
+    Normalise a bulk DEG table to ensure:
+    - Symbol column present (including recovery from unnamed/index cases)
+    - log2FoldChange / pvalue / padj standardised (if present)
+    - duplicate Symbols resolved deterministically
+    """
+    if df is None or df.empty:
+        return _RDL_pd.DataFrame()
+
+    out = _maybe_promote_index_to_symbol(df.copy())
+
+    sym_col = _pick_col_ci(list(out.columns), _BULK_SYMBOL_CANDS)
+    lfc_col = _pick_col_ci(list(out.columns), _BULK_LOGFC_CANDS)
+    p_col = _pick_col_ci(list(out.columns), _BULK_PVAL_CANDS)
+    q_col = _pick_col_ci(list(out.columns), _BULK_PADJ_CANDS)
+
+    if sym_col is None:
+        return _RDL_pd.DataFrame()
+
+    ren: _RDL_Dict[str, str] = {sym_col: "Symbol"}
+    if lfc_col is not None:
+        ren[lfc_col] = "log2FoldChange"
+    if p_col is not None:
+        ren[p_col] = "pvalue"
+    if q_col is not None:
+        ren[q_col] = "padj"
+
+    out = out.rename(columns=ren)
+
+    out["Symbol"] = out["Symbol"].astype(str).map(_normalise_symbol)
+    out = out.loc[out["Symbol"] != ""].copy()
+
+    if "log2FoldChange" in out.columns:
+        out["log2FoldChange"] = _RDL_pd.to_numeric(out["log2FoldChange"], errors="coerce")
+    if "pvalue" in out.columns:
+        out["pvalue"] = _RDL_pd.to_numeric(out["pvalue"], errors="coerce")
+    if "padj" in out.columns:
+        out["padj"] = _RDL_pd.to_numeric(out["padj"], errors="coerce")
+
+    # Resolve duplicates by best significance then largest absolute effect
+    if out["Symbol"].duplicated().any():
+        def _rank_row(r) -> _RDL_Tuple[float, float]:
+            q = r.get("padj", float("nan"))
+            p = r.get("pvalue", float("nan"))
+            lfc = r.get("log2FoldChange", float("nan"))
+            best_sig = q if _RDL_pd.notna(q) else (p if _RDL_pd.notna(p) else float("inf"))
+            abs_lfc = abs(lfc) if _RDL_pd.notna(lfc) else 0.0
+            return (best_sig, -abs_lfc)
+
+        out["__rk__"] = out.apply(_rank_row, axis=1)
+        out = out.sort_values("__rk__", ascending=True)
+        out = out.drop_duplicates(subset=["Symbol"], keep="first").drop(columns=["__rk__"])
+
+    return out
+
+
+def load_bulk_omics_tables() -> _RDL_Dict[str, _RDL_Dict[str, _RDL_pd.DataFrame]]:
+    """
+    Load Bulk Omics DEG tables organised as:
+      meta-liver-data/Bulk_Omics/<contrast_folder>/*.(tsv|csv|txt|parquet)
+
+    Returns:
+      {contrast_folder_name: {study_file_stem: normalised_df}}
+
+    This name is what streamlit_app.py imports.
+    """
+    data_dir = find_data_dir()
+    if data_dir is None:
+        return {}
+
+    bulk_dir = _find_bulk_omics_dir(data_dir)
+    if bulk_dir is None or not bulk_dir.exists():
+        return {}
+
+    out: _RDL_Dict[str, _RDL_Dict[str, _RDL_pd.DataFrame]] = {}
+
+    for contrast_dir in sorted([p for p in bulk_dir.iterdir() if p.is_dir()]):
+        contrast_name = contrast_dir.name
+        studies: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+
+        for fp in sorted(contrast_dir.rglob("*")):
+            if not fp.is_file():
+                continue
+            if fp.suffix.lower() not in (".tsv", ".csv", ".txt", ".parquet"):
+                continue
+
+            df = _read_table(fp, index_col=None)
+            if df.empty:
+                continue
+
+            df = normalise_bulk_deg_table(df)
+            if df.empty:
+                continue
+
+            studies[fp.stem] = df
+
+        if studies:
+            out[contrast_name] = studies
+
+    return out
+
+
+# Backwards-compatible alias (if other modules import the old name)
+def load_bulk_omics_studies() -> _RDL_Dict[str, _RDL_Dict[str, _RDL_pd.DataFrame]]:
+    return load_bulk_omics_tables()
+
+
+def search_gene_in_bulk_omics(gene_symbol: str) -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """
+    Search a gene across all Bulk Omics contrasts.
+    Returns {contrast_name: dataframe_of_per-study_hits}
+    """
+    g = _normalise_symbol(gene_symbol)
+    if not g:
+        return {}
+
+    data = load_bulk_omics_tables()
+    if not data:
+        return {}
+
+    out: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+    for contrast, studies in data.items():
+        rows = []
+        for study, df in (studies or {}).items():
+            if df is None or df.empty or "Symbol" not in df.columns:
+                continue
+            hit = df.loc[df["Symbol"] == g]
+            if hit.empty:
+                continue
+            r = hit.iloc[0].to_dict()
+            r["Study"] = study
+            rows.append(r)
+
+        if rows:
+            tmp = _RDL_pd.DataFrame(rows)
+            front = [c for c in ["Study", "Symbol", "log2FoldChange", "padj", "pvalue"] if c in tmp.columns]
+            rest = [c for c in tmp.columns if c not in front]
+            out[contrast] = tmp[front + rest]
+
+    return out
+
+
+# =============================================================================
+# DATA AVAILABILITY / SUMMARY
+# =============================================================================
+
+def check_data_availability() -> _RDL_Dict[str, bool]:
+    """Check what data is available (pure; upstream Streamlit should cache if desired)."""
+    data_dir_ok = find_data_dir() is not None
+
+    expr_ok = False
+    mes_ok = False
+    cor_ok = False
+    pval_ok = False
+    pathways_ok = False
+    heatmap_ok = False
+    single_ok = False
+    kg_ok = False
+    ppi_ok = False
+    bulk_ok = False
+
+    if data_dir_ok:
+        expr_ok = not load_wgcna_expr().empty
+        mes_ok = not load_wgcna_mes().empty
+        cor_ok = not load_wgcna_mod_trait_cor().empty
+        pval_ok = not load_wgcna_mod_trait_pval().empty
+        pathways_ok = len(load_wgcna_pathways()) > 0
+        heatmap_ok = load_wgcna_module_trait_heatmap_pdf_path() is not None
+        single_ok = len(load_single_omics_studies()) > 0
+        kg_ok = len(load_kg_data()) > 0
+        ppi_ok = len(load_ppi_data()) > 0
+        bulk_ok = len(load_bulk_omics_tables()) > 0
+
+    return {
+        "data_dir": data_dir_ok,
+        "wgcna_expr": expr_ok,
+        "wgcna_mes": mes_ok,
+        "wgcna_mod_trait_cor": cor_ok,
+        "wgcna_mod_trait_pval": pval_ok,
+        "wgcna_pathways": pathways_ok,
+        "wgcna_heatmap_pdf": heatmap_ok,
+        "single_omics": single_ok,
+        "bulk_omics": bulk_ok,
+        "knowledge_graphs": kg_ok,
+        "ppi_networks": ppi_ok,
+    }
+
+
+def get_data_summary() -> str:
+    """Human-readable data availability summary (no Streamlit formatting dependencies)."""
+    avail = check_data_availability()
+
+    if not avail["data_dir"]:
+        return "Data Availability:\n\n✗ Data directory not found"
+
+    lines: _RDL_List[str] = ["Data Availability:\n", "✓ Data directory found\n"]
+
+    if avail["wgcna_expr"]:
+        expr = load_wgcna_expr()
+        lines.append(f"✓ WGCNA Expression: {expr.shape[0]} samples × {expr.shape[1]} genes")
+    else:
+        lines.append("✗ WGCNA Expression: Not found")
+
+    if avail["wgcna_mes"]:
+        mes = load_wgcna_mes()
+        lines.append(f"✓ WGCNA Module Eigengenes: {mes.shape[1]} modules")
+    else:
+        lines.append("✗ WGCNA Module Eigengenes: Not found")
+
+    lines.append("✓ Module-Trait Correlations: Available" if avail["wgcna_mod_trait_cor"] else "✗ Module-Trait Correlations: Not found")
+    lines.append("✓ Module-Trait P-values: Available" if avail["wgcna_mod_trait_pval"] else "✗ Module-Trait P-values: Not found")
+
+    lines.append("✓ Pathways/Enrichment: Available" if avail["wgcna_pathways"] else "✗ Pathways/Enrichment: Not found")
+    lines.append("✓ Module–trait heatmap PDF: Available" if avail["wgcna_heatmap_pdf"] else "✗ Module–trait heatmap PDF: Not found")
+
+    if avail["single_omics"]:
+        studies = load_single_omics_studies()
+        lines.append(f"✓ Single-Omics Studies: {len(studies)} datasets")
+    else:
+        lines.append("✗ Single-Omics Studies: Not found")
+
+    if avail["bulk_omics"]:
+        bulk = load_bulk_omics_tables()
+        n_contrasts = len(bulk)
+        n_studies = sum(len(v) for v in bulk.values())
+        lines.append(f"✓ Bulk Omics: {n_contrasts} contrasts, {n_studies} study tables")
+    else:
+        lines.append("✗ Bulk Omics: Not found")
+
+    lines.append(f"✓ Knowledge Graphs: {len(load_kg_data())} datasets" if avail["knowledge_graphs"] else "✗ Knowledge Graphs: Not found")
+    lines.append(f"✓ PPI Networks: {len(load_ppi_data())} datasets" if avail["ppi_networks"] else "✗ PPI Networks: Not found")
+
+    return "\n".join(lines)
+
+
+# =============================================================================
+# SEARCH HELPERS
+# =============================================================================
+
+def search_gene_in_studies(gene_name: str) -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """Search for a gene across all single-omics studies (substring match)."""
+    studies = load_single_omics_studies()
+    results: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+
+    for study_name, df in studies.items():
+        if df is None or df.empty:
+            continue
+
+        if "Gene" in df.columns:
+            col = df["Gene"].astype(str)
+        elif "gene" in df.columns:
+            col = df["gene"].astype(str)
+        else:
+            continue
+
+        matches = df[col.str.contains(gene_name, case=False, na=False)]
+        if not matches.empty:
+            results[study_name] = matches
+
+    return results
+
+
+def search_drug_in_kg(drug_name: str) -> _RDL_Dict[str, _RDL_pd.DataFrame]:
+    """Search for a drug in knowledge graph tables (substring match on Name column)."""
+    kg_data = load_kg_data()
+    results: _RDL_Dict[str, _RDL_pd.DataFrame] = {}
+
+    for kg_name, df in kg_data.items():
+        if df is None or df.empty:
+            continue
+        if "Name" not in df.columns:
+            continue
+
+        col = df["Name"].astype(str)
+        matches = df[col.str.contains(drug_name, case=False, na=False)]
+        if not matches.empty:
+            results[kg_name] = matches
+
+    return results
+
+
+# -----------------------------------------------------------------------------
+# Expose the inlined loader as an importable module named "robust_data_loader"
+# so all existing imports across your app keep working unchanged.
+# -----------------------------------------------------------------------------
+import types as _types
+
+_robust = _types.ModuleType("robust_data_loader")
+for _name in [
+    "find_data_dir",
+    "find_subfolder",
+    "find_file",
+    "load_wgcna_expr",
+    "load_wgcna_mes",
+    "load_wgcna_mod_trait_cor",
+    "load_wgcna_mod_trait_pval",
+    "load_wgcna_pathways",
+    "load_wgcna_module_trait_heatmap_pdf_path",
+    "load_single_omics_studies",
+    "load_kg_data",
+    "load_ppi_data",
+    "normalise_bulk_deg_table",
+    "load_bulk_omics_tables",
+    "load_bulk_omics_studies",
+    "search_gene_in_bulk_omics",
+    "check_data_availability",
+    "get_data_summary",
+    "search_gene_in_studies",
+    "search_drug_in_kg",
+]:
+    if _name in globals():
+        setattr(_robust, _name, globals()[_name])
+
+sys.modules["robust_data_loader"] = _robust
+# =============================================================================
+# END MERGED-IN robust_data_loader.py
+# =============================================================================
+
+
 # -----------------------------------------------------------------------------
 # PAGE CONFIG (must be the first Streamlit call)
 # -----------------------------------------------------------------------------
