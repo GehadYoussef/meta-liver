@@ -3,7 +3,7 @@ Robust Data Loader for Meta Liver
 
 Purpose
 - Auto-detects the data directory at runtime
-- Finds folders/files case-insensitively (and tolerant to spaces/dashes/underscores)
+- Finds folders/files case-insensitively (tolerant to spaces/dashes/underscores)
 - Loads WGCNA (supports both 'wgcna' and legacy 'wcgna'), single-omics, knowledge graph, PPI tables
 - Loads Bulk Omics DEG tables under Bulk_Omics/ with per-contrast subfolders (TSV/CSV/Parquet)
 - Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
@@ -15,30 +15,52 @@ Usage (in Streamlit)
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 import warnings
 import re
+import os
 
 import pandas as pd
 
 
-# ============================================================================
+# =============================================================================
 # AUTO-DETECT DATA DIRECTORY (RUNTIME)
-# ============================================================================
+# =============================================================================
 
 def find_data_dir() -> Optional[Path]:
-    """Auto-detect data directory (case-insensitive) - computed at runtime."""
+    """
+    Auto-detect data directory (computed at runtime).
+
+    Resolution order:
+    1) META_LIVER_DATA_DIR env var (if set)
+    2) common relative folders (repo layout)
+    3) common home folders
+    """
+    env = os.environ.get("META_LIVER_DATA_DIR", "").strip()
+    if env:
+        p = Path(env).expanduser()
+        if p.exists() and p.is_dir():
+            return p.resolve()
+
+    here = Path(__file__).resolve().parent
+
     possible_dirs = [
         Path("meta-liver-data"),
         Path("meta_liver_data"),
         Path("data"),
         Path("../meta-liver-data"),
+        here / "meta-liver-data",
+        here / "meta_liver_data",
+        here / "data",
         Path.home() / "meta-liver-data",
         Path.home() / "meta_liver_data",
     ]
     for dir_path in possible_dirs:
-        if dir_path.exists():
-            return dir_path.resolve()
+        try:
+            if dir_path.exists() and dir_path.is_dir():
+                return dir_path.resolve()
+        except Exception:
+            continue
     return None
 
 
@@ -47,8 +69,11 @@ def _name_key(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(s).lower()).strip()
 
 
-def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
-    """Find immediate subfolder (case-insensitive, tolerant to underscores/dashes/spaces)."""
+def find_subfolder(parent: Path, folder_pattern: str, *, max_depth: int = 4) -> Optional[Path]:
+    """
+    Find a subfolder (case-insensitive, tolerant to underscores/dashes/spaces).
+    Prefers immediate child matches; then does a shallow search up to max_depth.
+    """
     if parent is None or not parent.exists():
         return None
 
@@ -58,20 +83,44 @@ def find_subfolder(parent: Path, folder_pattern: str) -> Optional[Path]:
 
     target_key = _name_key(folder_pattern)
 
-    for item in parent.iterdir():
-        if item.is_dir() and (item.name.lower() == folder_pattern.lower() or _name_key(item.name) == target_key):
-            return item
+    # 1) immediate children first (fast)
+    try:
+        for item in parent.iterdir():
+            if item.is_dir() and (_name_key(item.name) == target_key):
+                return item
+    except Exception:
+        pass
 
-    # Fall back to deeper search (useful if structure varies)
-    for item in parent.rglob("*"):
-        if item.is_dir() and _name_key(item.name) == target_key:
-            return item
+    # 2) shallow walk with depth control (avoids expensive full rglob on big trees)
+    parent = parent.resolve()
+    try:
+        for root, dirs, _files in os.walk(parent):
+            root_p = Path(root)
+            rel = root_p.relative_to(parent)
+            depth = 0 if str(rel) == "." else len(rel.parts)
+            if depth > max_depth:
+                dirs[:] = []
+                continue
+
+            for d in dirs:
+                if _name_key(d) == target_key:
+                    return (root_p / d)
+    except Exception:
+        pass
 
     return None
 
 
-def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
-    """Find file in directory (case-insensitive)."""
+def find_file(directory: Path, filename_pattern: str, *, max_depth: int = 6) -> Optional[Path]:
+    """
+    Find a file under directory.
+
+    Matching priority:
+    1) exact path directory/filename_pattern
+    2) case-insensitive exact filename match
+    3) tolerant name-key match (ignoring punctuation/spaces)
+    4) substring match (last resort)
+    """
     if directory is None or not directory.exists():
         return None
 
@@ -79,13 +128,36 @@ def find_file(directory: Path, filename_pattern: str) -> Optional[Path]:
     if exact_path.exists() and exact_path.is_file():
         return exact_path
 
-    target = filename_pattern.lower()
-    for file in directory.rglob("*"):
-        if not file.is_file():
-            continue
-        name = file.name.lower()
-        if name == target or target in name:
-            return file
+    target_lower = filename_pattern.lower()
+    target_key = _name_key(filename_pattern)
+
+    directory = directory.resolve()
+
+    # shallow walk to avoid huge scans
+    try:
+        for root, _dirs, files in os.walk(directory):
+            root_p = Path(root)
+            rel = root_p.relative_to(directory)
+            depth = 0 if str(rel) == "." else len(rel.parts)
+            if depth > max_depth:
+                continue
+
+            # exact case-insensitive match first
+            for fn in files:
+                if fn.lower() == target_lower:
+                    return root_p / fn
+
+            # tolerant key match
+            for fn in files:
+                if _name_key(fn) == target_key:
+                    return root_p / fn
+
+            # substring fallback
+            for fn in files:
+                if target_lower in fn.lower():
+                    return root_p / fn
+    except Exception:
+        pass
 
     return None
 
@@ -104,13 +176,12 @@ def _find_bulk_omics_dir(data_dir: Path) -> Optional[Path]:
     """
     if data_dir is None:
         return None
-    # one tolerant pattern is enough because find_subfolder uses _name_key matching
     return find_subfolder(data_dir, "bulk_omics")
 
 
-# ============================================================================
+# =============================================================================
 # SAFE READERS
-# ============================================================================
+# =============================================================================
 
 def _read_table(file_path: Path, *, index_col: Optional[int] = None) -> pd.DataFrame:
     """Read TSV/CSV/Parquet defensively; returns empty DF on failure."""
@@ -124,14 +195,17 @@ def _read_table(file_path: Path, *, index_col: Optional[int] = None) -> pd.DataF
         if suf == ".csv":
             return pd.read_csv(file_path, index_col=index_col)
         if suf in (".tsv", ".txt"):
-            return pd.read_csv(file_path, sep="\t", index_col=index_col)
+            try:
+                return pd.read_csv(file_path, sep="\t", index_col=index_col)
+            except Exception:
+                return pd.read_csv(file_path, index_col=index_col)
         return pd.DataFrame()
     except Exception as e:
-        warnings.warn(f"Failed to read {file_path.name}: {e}")
+        warnings.warn(f"Failed to read {file_path}: {e}")
         return pd.DataFrame()
 
 
-def _load_first_existing(directory: Path, candidates: list[str], *, index_col: Optional[int] = None) -> pd.DataFrame:
+def _load_first_existing(directory: Path, candidates: List[str], *, index_col: Optional[int] = None) -> pd.DataFrame:
     """Try a list of filenames (case-insensitive); return the first that loads."""
     if directory is None or not directory.exists():
         return pd.DataFrame()
@@ -145,9 +219,9 @@ def _load_first_existing(directory: Path, candidates: list[str], *, index_col: O
     return pd.DataFrame()
 
 
-# ============================================================================
+# =============================================================================
 # WGCNA LOADERS (supports wgcna/ and wcgna/)
-# ============================================================================
+# =============================================================================
 
 def load_wgcna_expr() -> pd.DataFrame:
     """Load WGCNA expression matrix."""
@@ -162,7 +236,7 @@ def load_wgcna_expr() -> pd.DataFrame:
     return _load_first_existing(
         wgcna_dir,
         ["datExpr_processed.parquet", "datExpr_processed.csv"],
-        index_col=0
+        index_col=0,
     )
 
 
@@ -179,7 +253,7 @@ def load_wgcna_mes() -> pd.DataFrame:
     return _load_first_existing(
         wgcna_dir,
         ["MEs_processed.parquet", "MEs_processed.csv"],
-        index_col=0
+        index_col=0,
     )
 
 
@@ -196,7 +270,7 @@ def load_wgcna_mod_trait_cor() -> pd.DataFrame:
     return _load_first_existing(
         wgcna_dir,
         ["moduleTraitCor.parquet", "moduleTraitCor.csv"],
-        index_col=0
+        index_col=0,
     )
 
 
@@ -213,7 +287,7 @@ def load_wgcna_mod_trait_pval() -> pd.DataFrame:
     return _load_first_existing(
         wgcna_dir,
         ["moduleTraitPvalue.parquet", "moduleTraitPvalue.csv"],
-        index_col=0
+        index_col=0,
     )
 
 
@@ -241,13 +315,14 @@ def load_wgcna_pathways() -> Dict[str, pd.DataFrame]:
     for file_path in pathways_dir.rglob("*"):
         if not file_path.is_file():
             continue
-        if file_path.suffix.lower() not in [".csv", ".tsv", ".txt", ".parquet"]:
+        if file_path.suffix.lower() not in (".csv", ".tsv", ".txt", ".parquet"):
             continue
 
         df = _read_table(file_path, index_col=None)
         if df.empty:
             continue
 
+        # remove common saved-index artifact
         if "Unnamed: 0" in df.columns:
             df = df.drop(columns=["Unnamed: 0"])
 
@@ -288,9 +363,9 @@ def load_wgcna_module_trait_heatmap_pdf_path() -> Optional[Path]:
     return None
 
 
-# ============================================================================
+# =============================================================================
 # SINGLE-OMICS / KG / PPI LOADERS
-# ============================================================================
+# =============================================================================
 
 def load_single_omics_studies() -> Dict[str, pd.DataFrame]:
     """Load all single-omics studies (all CSV/Parquet files under single_omics)."""
@@ -306,7 +381,7 @@ def load_single_omics_studies() -> Dict[str, pd.DataFrame]:
     for file_path in single_omics_dir.rglob("*"):
         if not file_path.is_file():
             continue
-        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+        if file_path.suffix.lower() not in (".csv", ".parquet"):
             continue
 
         study_name = file_path.stem
@@ -331,7 +406,7 @@ def load_kg_data() -> Dict[str, pd.DataFrame]:
     for file_path in kg_dir.rglob("*"):
         if not file_path.is_file():
             continue
-        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+        if file_path.suffix.lower() not in (".csv", ".parquet"):
             continue
 
         name = file_path.stem
@@ -356,7 +431,7 @@ def load_ppi_data() -> Dict[str, pd.DataFrame]:
     for file_path in ppi_dir.rglob("*"):
         if not file_path.is_file():
             continue
-        if file_path.suffix.lower() not in [".csv", ".parquet"]:
+        if file_path.suffix.lower() not in (".csv", ".parquet"):
             continue
 
         name = file_path.stem
@@ -367,9 +442,9 @@ def load_ppi_data() -> Dict[str, pd.DataFrame]:
     return ppi_data
 
 
-# ============================================================================
+# =============================================================================
 # BULK OMICS LOADERS
-# ============================================================================
+# =============================================================================
 
 _BULK_SYMBOL_CANDS = ["Symbol", "symbol", "gene", "Gene", "gene_symbol", "GeneSymbol"]
 _BULK_LOGFC_CANDS = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
@@ -377,13 +452,14 @@ _BULK_PVAL_CANDS = ["pvalue", "pval", "p_value", "PValue", "P.Value"]
 _BULK_PADJ_CANDS = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
 
 
-def _pick_col_ci(cols: list[str], cands: list[str]) -> Optional[str]:
-    m = {c.lower(): c for c in cols}
+def _pick_col_ci(cols: List[str], cands: List[str]) -> Optional[str]:
+    m = {str(c).lower(): c for c in cols}
     for cand in cands:
         if cand in cols:
             return cand
-        if cand.lower() in m:
-            return m[cand.lower()]
+        cl = cand.lower()
+        if cl in m:
+            return m[cl]
     return None
 
 
@@ -394,17 +470,55 @@ def _normalise_symbol(x: str) -> str:
     return s
 
 
+def _maybe_promote_index_to_symbol(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Recover gene identifiers when they are not in a 'Symbol' column.
+
+    Common cases:
+    - DESeq2 rownames saved into an unnamed first column ('Unnamed: 0')
+    - Identifiers stored as the DataFrame index
+    """
+    if df is None or df.empty:
+        return df
+
+    cols = list(df.columns)
+
+    # Unnamed first column -> Symbol
+    unnamed0 = None
+    for c in cols:
+        c0 = str(c).strip().lower()
+        if c0 in ("unnamed: 0", "unnamed:0", ""):
+            unnamed0 = c
+            break
+    if unnamed0 is not None:
+        tmp = df.copy()
+        tmp = tmp.rename(columns={unnamed0: "Symbol"})
+        return tmp
+
+    # non-default index -> Symbol
+    if not isinstance(df.index, pd.RangeIndex):
+        try:
+            idx = df.index.astype(str)
+            if idx.notna().any():
+                tmp = df.reset_index().rename(columns={"index": "Symbol"})
+                return tmp
+        except Exception:
+            pass
+
+    return df
+
+
 def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalise a bulk DEG table to ensure:
-    - Symbol column present
+    - Symbol column present (including recovery from unnamed/index cases)
     - log2FoldChange / pvalue / padj standardised (if present)
     - duplicate Symbols resolved deterministically
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
-    out = df.copy()
+    out = _maybe_promote_index_to_symbol(df.copy())
 
     sym_col = _pick_col_ci(list(out.columns), _BULK_SYMBOL_CANDS)
     lfc_col = _pick_col_ci(list(out.columns), _BULK_LOGFC_CANDS)
@@ -440,8 +554,6 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
             q = r.get("padj", float("nan"))
             p = r.get("pvalue", float("nan"))
             lfc = r.get("log2FoldChange", float("nan"))
-
-            # smaller is better; NaN = worst
             best_sig = q if pd.notna(q) else (p if pd.notna(p) else float("inf"))
             abs_lfc = abs(lfc) if pd.notna(lfc) else 0.0
             return (best_sig, -abs_lfc)
@@ -453,13 +565,15 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_bulk_omics_studies() -> Dict[str, Dict[str, pd.DataFrame]]:
+def load_bulk_omics_tables() -> Dict[str, Dict[str, pd.DataFrame]]:
     """
     Load Bulk Omics DEG tables organised as:
-      meta-liver-data/Bulk_Omics/<contrast_folder>/*.tsv
+      meta-liver-data/Bulk_Omics/<contrast_folder>/*.(tsv|csv|txt|parquet)
 
     Returns:
       {contrast_folder_name: {study_file_stem: normalised_df}}
+
+    This name is what streamlit_app.py imports.
     """
     data_dir = find_data_dir()
     if data_dir is None:
@@ -471,7 +585,6 @@ def load_bulk_omics_studies() -> Dict[str, Dict[str, pd.DataFrame]]:
 
     out: Dict[str, Dict[str, pd.DataFrame]] = {}
 
-    # Each subfolder is a "contrast"
     for contrast_dir in sorted([p for p in bulk_dir.iterdir() if p.is_dir()]):
         contrast_name = contrast_dir.name
         studies: Dict[str, pd.DataFrame] = {}
@@ -498,6 +611,11 @@ def load_bulk_omics_studies() -> Dict[str, Dict[str, pd.DataFrame]]:
     return out
 
 
+# Backwards-compatible alias (if other modules import the old name)
+def load_bulk_omics_studies() -> Dict[str, Dict[str, pd.DataFrame]]:
+    return load_bulk_omics_tables()
+
+
 def search_gene_in_bulk_omics(gene_symbol: str) -> Dict[str, pd.DataFrame]:
     """
     Search a gene across all Bulk Omics contrasts.
@@ -507,14 +625,16 @@ def search_gene_in_bulk_omics(gene_symbol: str) -> Dict[str, pd.DataFrame]:
     if not g:
         return {}
 
-    data = load_bulk_omics_studies()
+    data = load_bulk_omics_tables()
     if not data:
         return {}
 
     out: Dict[str, pd.DataFrame] = {}
     for contrast, studies in data.items():
         rows = []
-        for study, df in studies.items():
+        for study, df in (studies or {}).items():
+            if df is None or df.empty or "Symbol" not in df.columns:
+                continue
             hit = df.loc[df["Symbol"] == g]
             if hit.empty:
                 continue
@@ -524,7 +644,6 @@ def search_gene_in_bulk_omics(gene_symbol: str) -> Dict[str, pd.DataFrame]:
 
         if rows:
             tmp = pd.DataFrame(rows)
-            # stable column ordering
             front = [c for c in ["Study", "Symbol", "log2FoldChange", "padj", "pvalue"] if c in tmp.columns]
             rest = [c for c in tmp.columns if c not in front]
             out[contrast] = tmp[front + rest]
@@ -532,12 +651,12 @@ def search_gene_in_bulk_omics(gene_symbol: str) -> Dict[str, pd.DataFrame]:
     return out
 
 
-# ============================================================================
+# =============================================================================
 # DATA AVAILABILITY / SUMMARY
-# ============================================================================
+# =============================================================================
 
 def check_data_availability() -> Dict[str, bool]:
-    """Check what data is available (loads are cheap if Streamlit caches upstream)."""
+    """Check what data is available (pure; upstream Streamlit should cache if desired)."""
     data_dir_ok = find_data_dir() is not None
 
     expr_ok = False
@@ -561,7 +680,7 @@ def check_data_availability() -> Dict[str, bool]:
         single_ok = len(load_single_omics_studies()) > 0
         kg_ok = len(load_kg_data()) > 0
         ppi_ok = len(load_ppi_data()) > 0
-        bulk_ok = len(load_bulk_omics_studies()) > 0
+        bulk_ok = len(load_bulk_omics_tables()) > 0
 
     return {
         "data_dir": data_dir_ok,
@@ -585,7 +704,7 @@ def get_data_summary() -> str:
     if not avail["data_dir"]:
         return "Data Availability:\n\n✗ Data directory not found"
 
-    lines = ["Data Availability:\n", "✓ Data directory found\n"]
+    lines: List[str] = ["Data Availability:\n", "✓ Data directory found\n"]
 
     if avail["wgcna_expr"]:
         expr = load_wgcna_expr()
@@ -608,18 +727,14 @@ def get_data_summary() -> str:
     if avail["single_omics"]:
         studies = load_single_omics_studies()
         lines.append(f"✓ Single-Omics Studies: {len(studies)} datasets")
-        for name, df in studies.items():
-            lines.append(f"  - {name}: {len(df)} rows")
     else:
         lines.append("✗ Single-Omics Studies: Not found")
 
     if avail["bulk_omics"]:
-        bulk = load_bulk_omics_studies()
+        bulk = load_bulk_omics_tables()
         n_contrasts = len(bulk)
         n_studies = sum(len(v) for v in bulk.values())
         lines.append(f"✓ Bulk Omics: {n_contrasts} contrasts, {n_studies} study tables")
-        for contrast, studies in bulk.items():
-            lines.append(f"  - {contrast}: {len(studies)} tables")
     else:
         lines.append("✗ Bulk Omics: Not found")
 
@@ -629,9 +744,9 @@ def get_data_summary() -> str:
     return "\n".join(lines)
 
 
-# ============================================================================
+# =============================================================================
 # SEARCH HELPERS
-# ============================================================================
+# =============================================================================
 
 def search_gene_in_studies(gene_name: str) -> Dict[str, pd.DataFrame]:
     """Search for a gene across all single-omics studies (substring match)."""
