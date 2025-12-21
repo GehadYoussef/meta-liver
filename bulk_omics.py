@@ -43,7 +43,6 @@ import re
 import numpy as np
 import pandas as pd
 
-from robust_data_loader import find_data_dir, find_subfolder
 
 
 # -----------------------------------------------------------------------------
@@ -197,6 +196,9 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 
 def _find_bulk_omics_dir() -> Optional[Path]:
+    # local import to avoid circular import at module load time
+    from robust_data_loader import find_data_dir, find_subfolder
+
     data_dir = find_data_dir()
     if data_dir is None:
         return None
