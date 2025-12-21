@@ -34,7 +34,6 @@ if str(APP_DIR) not in sys.path:
 # IMPORTANT: do NOT add another "from __future__ import annotations" here
 # =============================================================================
 
-
 from pathlib import Path as _RDL_Path
 from typing import Optional as _RDL_Optional, Dict as _RDL_Dict, Tuple as _RDL_Tuple, List as _RDL_List
 import warnings as _RDL_warnings
@@ -593,8 +592,6 @@ def load_bulk_omics_tables() -> _RDL_Dict[str, _RDL_Dict[str, _RDL_pd.DataFrame]
 
     Returns:
       {contrast_folder_name: {study_file_stem: normalised_df}}
-
-    This name is what streamlit_app.py imports.
     """
     data_dir = find_data_dir()
     if data_dir is None:
@@ -632,7 +629,6 @@ def load_bulk_omics_tables() -> _RDL_Dict[str, _RDL_Dict[str, _RDL_pd.DataFrame]
     return out
 
 
-# Backwards-compatible alias (if other modules import the old name)
 def load_bulk_omics_studies() -> _RDL_Dict[str, _RDL_Dict[str, _RDL_pd.DataFrame]]:
     return load_bulk_omics_tables()
 
@@ -813,7 +809,6 @@ def search_drug_in_kg(drug_name: str) -> _RDL_Dict[str, _RDL_pd.DataFrame]:
 
 # -----------------------------------------------------------------------------
 # Expose the inlined loader as an importable module named "robust_data_loader"
-# so all existing imports across your app keep working unchanged.
 # -----------------------------------------------------------------------------
 import types as _types
 
@@ -899,7 +894,7 @@ def _st_plotly(fig: go.Figure):
 
 
 # -----------------------------------------------------------------------------
-# SAFE IMPORT / RELOAD HELPERS (prevents one broken module killing the whole app)
+# SAFE IMPORT / RELOAD HELPERS
 # -----------------------------------------------------------------------------
 def _safe_import_reload(module_name: str):
     try:
@@ -911,7 +906,7 @@ def _safe_import_reload(module_name: str):
 
 
 # -----------------------------------------------------------------------------
-# CORE LOADERS (these should be robust_data_loader + analysis modules)
+# CORE LOADERS
 # -----------------------------------------------------------------------------
 loader_err = None
 try:
@@ -1000,7 +995,7 @@ def _normalise_gene(g: object) -> str:
 
 
 # =============================================================================
-# SINGLE-OMICS PLOT HELPERS (uses soa methods for consistency)
+# SINGLE-OMICS PLOT HELPERS
 # =============================================================================
 def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
     """
@@ -1236,7 +1231,7 @@ def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
 
 
 # =============================================================================
-# KG DISPLAY HELPERS (UI ONLY)
+# KG DISPLAY HELPERS
 # =============================================================================
 def _fmt_pct(p: object) -> str:
     if _is_nanlike(p):
@@ -1390,43 +1385,43 @@ def _annotate_genes_with_drugs(gene_df: pd.DataFrame, gene_to_drugs_map: dict, m
 @st.cache_data(show_spinner=False)
 def load_all_data_cached():
     single_omics = {}
-    kg_data = {}
-    ppi_data = {}
-    wgcna_module_data = {}
-    wgcna_cor = pd.DataFrame()
-    wgcna_pval = pd.DataFrame()
-    wgcna_pathways = {}
+    kg_data0 = {}
+    ppi_data0 = {}
+    wgcna_module_data0 = {}
+    wgcna_cor0 = pd.DataFrame()
+    wgcna_pval0 = pd.DataFrame()
+    wgcna_pathways0 = {}
     active_drugs = pd.DataFrame()
-    gene_to_drugs = {}
-    bulk_omics_data = {}
+    gene_to_drugs0 = {}
+    bulk_omics_data0 = {}
 
     if load_single_omics_studies is not None:
         single_omics = load_single_omics_studies() or {}
     if load_kg_data is not None:
-        kg_data = load_kg_data() or {}
+        kg_data0 = load_kg_data() or {}
     if load_ppi_data is not None:
-        ppi_data = load_ppi_data() or {}
+        ppi_data0 = load_ppi_data() or {}
 
     if wgcna_mod is not None:
         try:
-            wgcna_module_data = wgcna_mod.load_wgcna_module_data() or {}
+            wgcna_module_data0 = wgcna_mod.load_wgcna_module_data() or {}
         except Exception:
-            wgcna_module_data = {}
+            wgcna_module_data0 = {}
 
         try:
-            wgcna_cor = wgcna_mod.load_wgcna_mod_trait_cor()
+            wgcna_cor0 = wgcna_mod.load_wgcna_mod_trait_cor()
         except Exception:
-            wgcna_cor = pd.DataFrame()
+            wgcna_cor0 = pd.DataFrame()
 
         try:
-            wgcna_pval = wgcna_mod.load_wgcna_mod_trait_pval()
+            wgcna_pval0 = wgcna_mod.load_wgcna_mod_trait_pval()
         except Exception:
-            wgcna_pval = pd.DataFrame()
+            wgcna_pval0 = pd.DataFrame()
 
         try:
-            wgcna_pathways = wgcna_mod.load_wgcna_pathways() or {}
+            wgcna_pathways0 = wgcna_mod.load_wgcna_pathways() or {}
         except Exception:
-            wgcna_pathways = {}
+            wgcna_pathways0 = {}
 
         try:
             active_drugs = wgcna_mod.load_wgcna_active_drugs()
@@ -1437,27 +1432,27 @@ def load_all_data_cached():
 
         try:
             if isinstance(active_drugs, pd.DataFrame) and not active_drugs.empty:
-                gene_to_drugs = wgcna_mod.build_gene_to_drugs_index(active_drugs) or {}
+                gene_to_drugs0 = wgcna_mod.build_gene_to_drugs_index(active_drugs) or {}
         except Exception:
-            gene_to_drugs = {}
+            gene_to_drugs0 = {}
 
     if bo is not None:
         try:
-            bulk_omics_data = bo.load_bulk_omics() or {}
+            bulk_omics_data0 = bo.load_bulk_omics() or {}
         except Exception:
-            bulk_omics_data = {}
+            bulk_omics_data0 = {}
 
     return (
         single_omics,
-        kg_data,
-        wgcna_module_data,
-        ppi_data,
-        wgcna_cor,
-        wgcna_pval,
-        wgcna_pathways,
+        kg_data0,
+        wgcna_module_data0,
+        ppi_data0,
+        wgcna_cor0,
+        wgcna_pval0,
+        wgcna_pathways0,
         active_drugs,
-        gene_to_drugs,
-        bulk_omics_data,
+        gene_to_drugs0,
+        bulk_omics_data0,
     )
 
 
@@ -1492,7 +1487,7 @@ except Exception as e:
 
 
 # =============================================================================
-# GENE SCREENER: DATA EXTRACTORS (robust + cached where it matters)
+# GENE SCREENER: DATA EXTRACTORS / CACHES
 # =============================================================================
 def _ensure_session_cache(name: str) -> dict:
     if name not in st.session_state or not isinstance(st.session_state.get(name), dict):
@@ -1500,10 +1495,12 @@ def _ensure_session_cache(name: str) -> dict:
     return st.session_state[name]
 
 
-@st.cache_data(show_spinner=False)
-def _single_omics_gene_universe(studies: dict) -> List[str]:
+def _get_single_omics_gene_universe() -> List[str]:
+    cache = st.session_state.get("_single_omics_universe", None)
+    if isinstance(cache, list) and cache:
+        return cache
     genes: Set[str] = set()
-    for _nm, df in (studies or {}).items():
+    for _nm, df in (single_omics_data or {}).items():
         if df is None or df.empty:
             continue
         gcol = None
@@ -1520,7 +1517,9 @@ def _single_omics_gene_universe(studies: dict) -> List[str]:
                     genes.add(v)
         except Exception:
             continue
-    return sorted(genes)
+    out = sorted(genes)
+    st.session_state["_single_omics_universe"] = out
+    return out
 
 
 def _looks_like_gene_symbol(x: str) -> bool:
@@ -1531,18 +1530,19 @@ def _looks_like_gene_symbol(x: str) -> bool:
         return False
     if len(s) < 2 or len(s) > 20:
         return False
-    # allow A-Z0-9- only
     for ch in s:
         if not (ch.isalnum() or ch == "-"):
             return False
-    # bias to uppercase-ish
     return s.upper() == s
 
 
-@st.cache_data(show_spinner=False)
-def _kg_gene_universe(kg_data_in: dict) -> List[str]:
+def _get_kg_gene_universe() -> List[str]:
+    cache = st.session_state.get("_kg_universe", None)
+    if isinstance(cache, list) and cache:
+        return cache
+
     genes: Set[str] = set()
-    for _nm, df in (kg_data_in or {}).items():
+    for _nm, df in (kg_data or {}).items():
         if df is None or df.empty:
             continue
         if "Name" not in df.columns:
@@ -1569,7 +1569,9 @@ def _kg_gene_universe(kg_data_in: dict) -> List[str]:
             if s and _looks_like_gene_symbol(s):
                 genes.add(s)
 
-    return sorted(genes)
+    out = sorted(genes)
+    st.session_state["_kg_universe"] = out
+    return out
 
 
 def _normalise_module_name(m: object) -> str:
@@ -1579,19 +1581,23 @@ def _normalise_module_name(m: object) -> str:
     return s.strip().lower()
 
 
-@st.cache_data(show_spinner=False)
 def _wgcna_modules_available(wgcna_mod_trait_cor: pd.DataFrame, wgcna_module_data_in: dict) -> List[str]:
+    cache = st.session_state.get("_wgcna_modules_ui", None)
+    if isinstance(cache, list) and cache:
+        return cache
+
     mods: Set[str] = set()
     if isinstance(wgcna_mod_trait_cor, pd.DataFrame) and not wgcna_mod_trait_cor.empty:
         for idx in wgcna_mod_trait_cor.index:
             mods.add(_normalise_module_name(idx))
-    # also try to infer from module_data keys
     if isinstance(wgcna_module_data_in, dict):
         for k, v in wgcna_module_data_in.items():
             if isinstance(k, str) and k and isinstance(v, pd.DataFrame) and ("Gene" in v.columns or "gene" in v.columns):
                 mods.add(_normalise_module_name(k))
-    mods = {m for m in mods if m}
-    return sorted(mods)
+
+    out = sorted({m for m in mods if m})
+    st.session_state["_wgcna_modules_ui"] = out
+    return out
 
 
 def _get_module_trait_value(module_name: str, trait: str, cor_df: pd.DataFrame, pval_df: pd.DataFrame) -> Tuple[float, float]:
@@ -1650,8 +1656,8 @@ def _infer_padj_col(df: pd.DataFrame) -> Optional[str]:
 def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
     """
     Loads all invitro DEG tables under meta-liver-data/stem_cell_model/.
-    Returns {(line, contrast): df_norm}, where df_norm has columns:
-      Gene (upper), log2FoldChange (float), padj (float if available)
+    Returns {(line, contrast): df_idx}, where df_idx is indexed by Gene and has:
+      log2FoldChange (float), padj (float, may be NaN)
     """
     out: Dict[Tuple[str, str], pd.DataFrame] = {}
 
@@ -1662,11 +1668,10 @@ def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
     if data_dir is None:
         return out
 
-    stem_dir = _find_subfolder_global(data_dir, "stem_cell_model") or _find_subfolder_global(data_dir, "stem_cell")  # tolerant
+    stem_dir = _find_subfolder_global(data_dir, "stem_cell_model") or _find_subfolder_global(data_dir, "stem_cell")
     if stem_dir is None or not stem_dir.exists():
         return out
 
-    files = []
     try:
         files = [p for p in stem_dir.rglob("*") if p.is_file() and p.suffix.lower() in (".parquet", ".csv", ".tsv", ".txt")]
     except Exception:
@@ -1679,7 +1684,6 @@ def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
             parts = s2.split("_", 1)
             if len(parts) == 2:
                 return parts[0].strip(), parts[1].strip()
-        # fallback: <CONTRAST>_<LINE>
         parts = s.rsplit("_", 1)
         if len(parts) == 2:
             return parts[1].strip(), parts[0].strip()
@@ -1699,12 +1703,10 @@ def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
         padj_col = _infer_padj_col(df)
 
         if gcol is None:
-            # try promoting index / unnamed first column into a gene column
-            tmp = df.copy()
-            tmp = _maybe_promote_index_to_symbol(tmp).copy()
+            tmp = _maybe_promote_index_to_symbol(df.copy()).copy()
             if "Symbol" in tmp.columns:
-                gcol = "Symbol"
                 df = tmp
+                gcol = "Symbol"
 
         if gcol is None or lfc_col is None:
             continue
@@ -1726,14 +1728,15 @@ def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
             tmp["__rk__"] = list(zip(tmp["padj"].fillna(np.inf), -tmp["log2FoldChange"].abs().fillna(0.0)))
             tmp = tmp.sort_values("__rk__", ascending=True).drop_duplicates("Gene", keep="first").drop(columns=["__rk__"])
 
-        out[(str(line).strip(), str(contrast).strip())] = tmp[["Gene", "log2FoldChange", "padj"]].copy()
+        tmp = tmp[["Gene", "log2FoldChange", "padj"]].copy()
+        tmp = tmp.set_index("Gene", drop=True)
+        out[(str(line).strip(), str(contrast).strip())] = tmp
 
     return out
 
 
 def _invitro_contrasts_available(invitro_tables: Dict[Tuple[str, str], pd.DataFrame]) -> List[str]:
-    c = sorted({contrast for (_line, contrast) in invitro_tables.keys()})
-    return c
+    return sorted({contrast for (_line, contrast) in invitro_tables.keys()})
 
 
 def _bulk_groups_available(bulk_data: dict) -> List[str]:
@@ -1741,6 +1744,87 @@ def _bulk_groups_available(bulk_data: dict) -> List[str]:
         return sorted(list((bulk_data or {}).keys()))
     except Exception:
         return []
+
+
+def _bulk_group_gene_set(group: str) -> Set[str]:
+    cache = _ensure_session_cache("_cache_bulk_group_genes")
+    g0 = str(group)
+    if g0 in cache and isinstance(cache[g0], set):
+        return cache[g0]
+
+    genes: Set[str] = set()
+    studies = (bulk_omics_data or {}).get(g0, {})
+    if isinstance(studies, dict):
+        for _study, df in studies.items():
+            if not isinstance(df, pd.DataFrame) or df.empty:
+                continue
+            dfn = df
+            if "Symbol" not in dfn.columns and _norm_bulk_global is not None:
+                try:
+                    dfn = _norm_bulk_global(dfn)
+                except Exception:
+                    dfn = df
+            if isinstance(dfn, pd.DataFrame) and "Symbol" in dfn.columns:
+                try:
+                    for v in dfn["Symbol"].astype(str).map(_normalise_gene):
+                        if v:
+                            genes.add(v)
+                except Exception:
+                    pass
+    cache[g0] = genes
+    return genes
+
+
+def _bulk_study_index_df(group: str, study: str, df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a tiny, indexed DF for fast lookups:
+      index=Symbol, columns=[log2FoldChange, padj]
+    Cached per (group, study) in session_state.
+    """
+    cache = _ensure_session_cache("_cache_bulk_study_idxdf")
+    key = (str(group), str(study))
+    if key in cache and isinstance(cache[key], pd.DataFrame):
+        return cache[key]
+
+    dfn = df
+    if isinstance(dfn, pd.DataFrame) and not dfn.empty and "Symbol" not in dfn.columns and _norm_bulk_global is not None:
+        try:
+            dfn = _norm_bulk_global(dfn)
+        except Exception:
+            dfn = df
+
+    if not isinstance(dfn, pd.DataFrame) or dfn.empty or "Symbol" not in dfn.columns:
+        out = pd.DataFrame(columns=["log2FoldChange", "padj"])
+        cache[key] = out
+        return out
+
+    cols = ["Symbol"]
+    if "log2FoldChange" in dfn.columns:
+        cols.append("log2FoldChange")
+    if "padj" in dfn.columns:
+        cols.append("padj")
+
+    tmp = dfn[cols].copy()
+    tmp["Symbol"] = tmp["Symbol"].astype(str).map(_normalise_gene)
+    tmp = tmp.loc[tmp["Symbol"] != ""].copy()
+
+    if "log2FoldChange" in tmp.columns:
+        tmp["log2FoldChange"] = pd.to_numeric(tmp["log2FoldChange"], errors="coerce")
+    else:
+        tmp["log2FoldChange"] = np.nan
+
+    if "padj" in tmp.columns:
+        tmp["padj"] = pd.to_numeric(tmp["padj"], errors="coerce")
+    else:
+        tmp["padj"] = np.nan
+
+    if tmp["Symbol"].duplicated().any():
+        tmp["__rk__"] = list(zip(tmp["padj"].fillna(np.inf), -tmp["log2FoldChange"].abs().fillna(0.0)))
+        tmp = tmp.sort_values("__rk__", ascending=True).drop_duplicates("Symbol", keep="first").drop(columns=["__rk__"])
+
+    tmp = tmp.set_index("Symbol", drop=True)
+    cache[key] = tmp
+    return tmp
 
 
 # =============================================================================
@@ -1811,7 +1895,6 @@ def _get_wgcna_summary(gene: str, wgcna_module_data_in: dict, trait: str) -> dic
     if key in cache:
         return cache[key]
 
-    out = {}
     module = None
     if wgcna_mod is not None and wgcna_module_data_in:
         try:
@@ -1864,13 +1947,13 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
             for (line, cc), df in invitro_tables.items():
                 if cc != c or df is None or df.empty:
                     continue
-                hit = df.loc[df["Gene"] == g]
-                if hit.empty:
+                if g not in df.index:
                     continue
-                r = hit.iloc[0]
+                r = df.loc[g]
                 lfc = float(r.get("log2FoldChange", np.nan)) if pd.notna(r.get("log2FoldChange", np.nan)) else np.nan
                 padj = float(r.get("padj", np.nan)) if pd.notna(r.get("padj", np.nan)) else np.nan
                 sig = True if np.isnan(padj) else (padj <= padj_thr)
+
                 if np.isnan(lfc):
                     direction = "missing"
                 elif lfc > 0:
@@ -1879,15 +1962,14 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
                     direction = "down"
                 else:
                     direction = "zero"
+
                 rows.append({"line": str(line), "lfc": lfc, "padj": padj, "sig": sig, "dir": direction})
 
             if not rows:
                 continue
 
-            # consistency logic
             sig_rows = [r for r in rows if r["sig"] and r["dir"] in ("up", "down")]
             if require_both_lines:
-                # need at least two lines, both significant, same direction
                 ok = False
                 cons_dir = "mixed"
                 if len(sig_rows) >= 2:
@@ -1904,7 +1986,6 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
                     "mean_lfc": float(np.nanmean([r["lfc"] for r in rows])),
                 }
             else:
-                # any line significant counts
                 ok = len(sig_rows) >= 1
                 cons_dir = "mixed"
                 if len(sig_rows) == 1:
@@ -1921,7 +2002,6 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
                     "mean_lfc": float(np.nanmean([r["lfc"] for r in rows])),
                 }
 
-    # compact summary strings
     ok_contrasts = [c for c, d in per_contrast.items() if d.get("ok") is True]
     out = {
         "ok_contrasts": ok_contrasts,
@@ -1945,7 +2025,14 @@ def _get_bulk_summary(
     g = _normalise_gene(gene)
     if not g:
         return {}
-    key = (g, tuple(sorted(groups or [])), float(padj_thr), int(min_n_studies), bool(require_consistent_direction), bool(require_sig_all_found))
+    key = (
+        g,
+        tuple(sorted(groups or [])),
+        float(padj_thr),
+        int(min_n_studies),
+        bool(require_consistent_direction),
+        bool(require_sig_all_found),
+    )
     if key in cache:
         return cache[key]
 
@@ -1960,44 +2047,47 @@ def _get_bulk_summary(
         pos = 0
         neg = 0
         sig_found = 0
+        any_padj_present = False
         signs: List[int] = []
 
-        for _study, df in studies.items():
+        for study, df in studies.items():
             if df is None or (isinstance(df, pd.DataFrame) and df.empty):
                 continue
-            if isinstance(df, pd.DataFrame):
-                dfn = df
-                if "Symbol" not in dfn.columns:
-                    try:
-                        dfn = _norm_bulk_global(dfn) if _norm_bulk_global is not None else dfn
-                    except Exception:
-                        dfn = dfn
-                if "Symbol" not in dfn.columns:
-                    continue
-                hit = dfn.loc[dfn["Symbol"] == g]
-                if hit.empty:
-                    continue
-                r = hit.iloc[0]
-                lfc = pd.to_numeric(r.get("log2FoldChange", np.nan), errors="coerce")
-                padj = pd.to_numeric(r.get("padj", np.nan), errors="coerce")
-                found += 1
-                if pd.notna(padj) and float(padj) <= padj_thr:
+            if not isinstance(df, pd.DataFrame):
+                continue
+
+            idxdf = _bulk_study_index_df(grp, study, df)
+            if idxdf is None or idxdf.empty:
+                continue
+            if g not in idxdf.index:
+                continue
+
+            r = idxdf.loc[g]
+            lfc = pd.to_numeric(r.get("log2FoldChange", np.nan), errors="coerce")
+            padj = pd.to_numeric(r.get("padj", np.nan), errors="coerce")
+
+            found += 1
+
+            if pd.notna(padj):
+                any_padj_present = True
+                if float(padj) <= padj_thr:
                     sig_found += 1
-                if pd.notna(lfc):
-                    if float(lfc) > 0:
-                        pos += 1
-                        signs.append(1)
-                    elif float(lfc) < 0:
-                        neg += 1
-                        signs.append(-1)
+
+            if pd.notna(lfc):
+                if float(lfc) > 0:
+                    pos += 1
+                    signs.append(1)
+                elif float(lfc) < 0:
+                    neg += 1
+                    signs.append(-1)
 
         if found == 0:
             continue
 
         if require_sig_all_found:
-            sig_ok = (sig_found == found)
+            sig_ok = (sig_found == found) if any_padj_present else True
         else:
-            sig_ok = (sig_found >= 1) or (sig_found == 0)  # if padj missing in tables, we don't kill it
+            sig_ok = (sig_found >= 1) if any_padj_present else True
 
         dir_ok = True
         direction = "mixed"
@@ -2039,12 +2129,14 @@ def _get_bulk_summary(
 
 
 # =============================================================================
-# GENE SCREENER: MAIN DRIVER
+# GENE SCREENER: MAIN DRIVER (UPDATED)
+#   - removed "Gene contains"
+#   - removed "Max genes to scan" (always scans full candidate universe)
+#   - invitro + bulk: support OR vs AND selection mode
+#   - returns top max_return AFTER scanning, not "first N hits"
 # =============================================================================
 def run_gene_screener(
     *,
-    gene_contains: str,
-    max_scan: int,
     max_return: int,
     # single-omics
     use_single: bool,
@@ -2066,87 +2158,52 @@ def run_gene_screener(
     # in vitro
     use_invitro: bool,
     invitro_contrasts: List[str],
+    invitro_match_mode: str,  # "Any" or "All"
     invitro_padj_thr: float,
     invitro_require_both_lines: bool,
     # bulk
     use_bulk: bool,
     bulk_groups: List[str],
+    bulk_match_mode: str,  # "Any" or "All"
     bulk_padj_thr: float,
     bulk_min_n_studies: int,
     bulk_require_consistent_dir: bool,
     bulk_require_sig_all_found: bool,
 ) -> pd.DataFrame:
-    gene_sub = str(gene_contains or "").strip().upper()
-
-    # seed universe: prefer a restrictive seed when possible
     invitro_tables = _load_invitro_all_tables_cached()
-    all_single = _single_omics_gene_universe(single_omics_data) if single_omics_data else []
-    all_kg = _kg_gene_universe(kg_data) if kg_data else []
-    all_wgcna_mods = _wgcna_modules_available(wgcna_cor, wgcna_module_data)
-    all_bulk_groups = _bulk_groups_available(bulk_omics_data)
 
-    # start candidates
     candidates: Set[str] = set()
 
-    # strong filters first to reduce single-omics work
-    if use_wgcna and wgcna_modules:
-        # we cannot reliably enumerate genes by module without knowing wgcna_module_data structure in all installs,
-        # so we don't seed by module; we just seed broadly and filter per-gene.
-        candidates = set(all_single or all_kg or _single_omics_gene_universe(single_omics_data) or [])
-
-    elif use_bulk and bulk_groups:
-        # seed from bulk groups genes (fast-ish)
-        for grp in bulk_groups:
-            studies = (bulk_omics_data or {}).get(grp, {})
-            if not isinstance(studies, dict):
-                continue
-            for _s, df in studies.items():
-                if isinstance(df, pd.DataFrame) and not df.empty:
-                    dfn = df
-                    if "Symbol" not in dfn.columns:
-                        try:
-                            dfn = _norm_bulk_global(dfn) if _norm_bulk_global is not None else dfn
-                        except Exception:
-                            dfn = dfn
-                    if "Symbol" in dfn.columns:
-                        vals = dfn["Symbol"].astype(str).map(_normalise_gene)
-                        for v in vals:
-                            if v:
-                                candidates.add(v)
-        if not candidates:
-            candidates = set(all_single or all_kg or [])
-
-    elif use_invitro and invitro_contrasts:
-        # seed from invitro contrasts genes
-        for (line, contrast), df in invitro_tables.items():
+    # Prefer restrictive / cheap seed sets first
+    if use_invitro and invitro_contrasts:
+        for (_line, contrast), df in invitro_tables.items():
             if contrast not in invitro_contrasts:
                 continue
             if df is None or df.empty:
                 continue
-            for v in df["Gene"].astype(str).map(_normalise_gene):
-                if v:
-                    candidates.add(v)
-        if not candidates:
-            candidates = set(all_single or all_kg or [])
-
-    elif use_kg and all_kg:
-        candidates = set(all_kg)
-    elif all_single:
-        candidates = set(all_single)
+            candidates.update(set(df.index.astype(str)))
+    elif use_bulk and bulk_groups:
+        for grp in bulk_groups:
+            candidates.update(_bulk_group_gene_set(grp))
+    elif use_single:
+        candidates.update(_get_single_omics_gene_universe())
+    elif use_kg:
+        candidates.update(_get_kg_gene_universe())
     else:
-        candidates = set(all_kg)
+        # if nothing selected, still use single-omics if present, else KG
+        u1 = _get_single_omics_gene_universe()
+        if u1:
+            candidates.update(u1)
+        else:
+            candidates.update(_get_kg_gene_universe())
 
-    # apply gene substring prefilter
-    if gene_sub:
-        candidates = {g for g in candidates if gene_sub in g}
+    cand_list = sorted({_normalise_gene(g) for g in candidates if _normalise_gene(g)})
 
-    # hard cap scan (safety)
-    cand_list = sorted(list(candidates))
-    if max_scan is not None and max_scan > 0 and len(cand_list) > int(max_scan):
-        cand_list = cand_list[: int(max_scan)]
+    rows: List[dict] = []
 
-    invitro_tables = invitro_tables  # reuse
-    rows = []
+    want_modules = {_normalise_module_name(x) for x in (wgcna_modules or [])}
+    invitro_mode_any = str(invitro_match_mode or "Any").lower().startswith("any")
+    bulk_mode_any = str(bulk_match_mode or "Any").lower().startswith("any")
 
     for g in cand_list:
         # KG filter
@@ -2160,12 +2217,9 @@ def run_gene_screener(
                     continue
             comp = kg_sum.get("composite_percentile", np.nan)
             compf = _pct_str_to_float(comp) if isinstance(comp, str) else (float(comp) if pd.notna(comp) else np.nan)
-            if pd.notna(min_composite_pctile) and pd.notna(compf):
-                if float(compf) < float(min_composite_pctile):
+            if pd.notna(min_composite_pctile):
+                if pd.isna(compf) or float(compf) < float(min_composite_pctile):
                     continue
-            elif pd.notna(min_composite_pctile) and np.isnan(compf):
-                # if threshold is requested but missing, exclude
-                continue
 
         # WGCNA filter
         w_sum = _get_wgcna_summary(g, wgcna_module_data, wgcna_trait) if use_wgcna else {}
@@ -2173,11 +2227,9 @@ def run_gene_screener(
             if not w_sum:
                 continue
             mod = w_sum.get("module", None)
-            if wgcna_modules:
-                # compare normalised
+            if want_modules:
                 mod_key = _normalise_module_name(mod) if mod is not None else ""
-                want = {_normalise_module_name(x) for x in (wgcna_modules or [])}
-                if mod_key not in want:
+                if mod_key not in want_modules:
                     continue
 
             corr = w_sum.get("trait_corr", np.nan)
@@ -2185,33 +2237,33 @@ def run_gene_screener(
             if pd.isna(corr):
                 continue
 
-            abs_ok = abs(float(corr)) >= float(wgcna_min_abs_corr) if pd.notna(wgcna_min_abs_corr) else True
-            if not abs_ok:
+            if pd.notna(wgcna_min_abs_corr) and abs(float(corr)) < float(wgcna_min_abs_corr):
                 continue
-
             if wgcna_corr_dir == "Positive" and not (float(corr) > 0):
                 continue
             if wgcna_corr_dir == "Negative" and not (float(corr) < 0):
                 continue
-
-            if pd.notna(wgcna_p_thr) and not pd.isna(p):
-                if float(p) > float(wgcna_p_thr):
-                    continue
-
+            if pd.notna(wgcna_p_thr) and not pd.isna(p) and float(p) > float(wgcna_p_thr):
+                continue
             if require_drug_target and not bool(w_sum.get("has_drug_target", False)):
                 continue
 
-        # in vitro filter
+        # in vitro filter (OR/AND across selected contrasts)
         inv_sum = _get_invitro_summary(g, invitro_tables, invitro_padj_thr, invitro_require_both_lines) if use_invitro else {}
         if use_invitro:
             if not inv_sum:
                 continue
             ok_contr = set(inv_sum.get("ok_contrasts", []))
-            if invitro_contrasts:
-                if not set(invitro_contrasts).issubset(ok_contr):
-                    continue
+            want_contr = set(invitro_contrasts or [])
+            if want_contr:
+                if invitro_mode_any:
+                    if len(want_contr.intersection(ok_contr)) == 0:
+                        continue
+                else:
+                    if not want_contr.issubset(ok_contr):
+                        continue
 
-        # bulk filter
+        # bulk filter (OR/AND across selected groups)
         bulk_sum = _get_bulk_summary(
             g,
             bulk_omics_data,
@@ -2225,11 +2277,16 @@ def run_gene_screener(
             if not bulk_sum:
                 continue
             ok_groups = set(bulk_sum.get("ok_groups", []))
-            if bulk_groups:
-                if not set(bulk_groups).issubset(ok_groups):
-                    continue
+            want_groups = set(bulk_groups or [])
+            if want_groups:
+                if bulk_mode_any:
+                    if len(want_groups.intersection(ok_groups)) == 0:
+                        continue
+                else:
+                    if not want_groups.issubset(ok_groups):
+                        continue
 
-        # single-omics filter (do last)
+        # single-omics filter (last)
         so_sum = _get_single_omics_summary(g, single_omics_data) if use_single else {}
         if use_single:
             if not so_sum:
@@ -2245,7 +2302,7 @@ def run_gene_screener(
             if pd.isna(ev) or float(ev) < float(min_evidence):
                 continue
 
-        # build evidence row (always include all tabs, even if not selected)
+        # build evidence row (always include all tabs)
         so_all = _get_single_omics_summary(g, single_omics_data) if single_omics_data else {}
         kg_all = _get_kg_summary(g, kg_data) if kg_data else {}
         w_all = _get_wgcna_summary(g, wgcna_module_data, wgcna_trait) if (wgcna_module_data and wgcna_trait) else {}
@@ -2253,12 +2310,12 @@ def run_gene_screener(
         bulk_all = _get_bulk_summary(
             g,
             bulk_omics_data,
-            bulk_groups if bulk_groups else _bulk_groups_available(bulk_omics_data)[:0],
+            bulk_groups if bulk_groups else [],
             bulk_padj_thr,
             bulk_min_n_studies,
             bulk_require_consistent_dir,
             bulk_require_sig_all_found,
-        )
+        ) if bulk_omics_data else {}
 
         rows.append(
             {
@@ -2279,20 +2336,21 @@ def run_gene_screener(
             }
         )
 
-        if max_return is not None and max_return > 0 and len(rows) >= int(max_return):
-            break
-
     df_out = pd.DataFrame(rows)
-    if not df_out.empty:
-        # nicer sorting: evidence desc then agreement desc then auc desc
-        for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"]:
-            if c in df_out.columns:
-                df_out[c] = pd.to_numeric(df_out[c], errors="coerce")
-        df_out = df_out.sort_values(
-            by=[c for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"] if c in df_out.columns],
-            ascending=False,
-            na_position="last",
-        )
+    if df_out.empty:
+        return df_out
+
+    # sort: single-omics desc then agreement desc then auc desc (if present)
+    for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"]:
+        if c in df_out.columns:
+            df_out[c] = pd.to_numeric(df_out[c], errors="coerce")
+
+    sort_cols = [c for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"] if c in df_out.columns]
+    if sort_cols:
+        df_out = df_out.sort_values(by=sort_cols, ascending=False, na_position="last")
+
+    if max_return is not None and int(max_return) > 0:
+        df_out = df_out.head(int(max_return)).copy()
 
     return df_out
 
@@ -2323,7 +2381,12 @@ def _render_gene_screener_results_tab(df: pd.DataFrame, trait_for_wgcna: str):
             so = _get_single_omics_summary(g, single_omics_data)
             kg = _get_kg_summary(g, kg_data)
             wg = _get_wgcna_summary(g, wgcna_module_data, trait_for_wgcna) if trait_for_wgcna else {}
-            inv = _get_invitro_summary(g, invitro_tables, float(st.session_state.get("screener_invitro_padj_thr", 0.05)), bool(st.session_state.get("screener_invitro_both_lines", True)))
+            inv = _get_invitro_summary(
+                g,
+                invitro_tables,
+                float(st.session_state.get("screener_invitro_padj_thr", 0.05)),
+                bool(st.session_state.get("screener_invitro_both_lines", True)),
+            )
             bul = _get_bulk_summary(
                 g,
                 bulk_omics_data,
@@ -2395,7 +2458,7 @@ def _render_gene_screener_results_tab(df: pd.DataFrame, trait_for_wgcna: str):
 
 
 # =============================================================================
-# SIDEBAR (updated: removed "✓ X studies loaded..." and replaced with Gene Screener)
+# SIDEBAR
 # =============================================================================
 st.sidebar.markdown("## 🔬 Meta Liver")
 
@@ -2408,7 +2471,6 @@ search_query = st.sidebar.text_input(
 st.sidebar.caption(f"Citation: doi:{APP_DOI}")
 st.sidebar.markdown("---")
 
-# keep hard errors visible, but keep everything else out of the way
 if loader_err is not None:
     st.sidebar.error(f"Loader import failed: {loader_err}")
 if not data_loaded:
@@ -2417,7 +2479,6 @@ if not data_loaded:
         st.sidebar.caption(str(load_error))
 
 with st.sidebar.expander("Gene screener", expanded=True):
-    # availability-driven picklists
     invitro_tables_for_ui = _load_invitro_all_tables_cached()
     invitro_contrasts_ui = _invitro_contrasts_available(invitro_tables_for_ui)
 
@@ -2430,15 +2491,15 @@ with st.sidebar.expander("Gene screener", expanded=True):
     fibrosis_like = [t for t in trait_cols if "fibros" in str(t).lower()]
     trait_default = (fibrosis_like[0] if fibrosis_like else (trait_cols[0] if trait_cols else ""))
 
-    # form
     with st.form("gene_screener_form", clear_on_submit=False):
-        gene_contains = st.text_input("Gene contains (optional)", value=st.session_state.get("screener_gene_contains", ""), key="screener_gene_contains")
-
-        colA, colB = st.columns(2)
-        with colA:
-            max_scan = st.number_input("Max genes to scan", min_value=100, max_value=200000, value=int(st.session_state.get("screener_max_scan", 20000)), step=500, key="screener_max_scan")
-        with colB:
-            max_return = st.number_input("Max genes to return", min_value=10, max_value=5000, value=int(st.session_state.get("screener_max_return", 250)), step=10, key="screener_max_return")
+        max_return = st.number_input(
+            "Max genes to return",
+            min_value=10,
+            max_value=5000,
+            value=int(st.session_state.get("screener_max_return", 250)),
+            step=10,
+            key="screener_max_return",
+        )
 
         st.markdown("#### Single-omics criteria")
         use_single = st.checkbox("Enable single-omics filter", value=bool(st.session_state.get("screener_use_single", False)), key="screener_use_single")
@@ -2497,10 +2558,17 @@ with st.sidebar.expander("Gene screener", expanded=True):
         use_invitro = st.checkbox("Enable in vitro filter", value=bool(st.session_state.get("screener_use_invitro", False)), key="screener_use_invitro")
         if use_invitro:
             invitro_contrasts_sel = st.multiselect(
-                "Require these contrasts to be direction-consistent",
+                "Select contrasts",
                 options=invitro_contrasts_ui,
                 default=st.session_state.get("screener_invitro_contrasts", invitro_contrasts_ui[:1] if invitro_contrasts_ui else []),
                 key="screener_invitro_contrasts",
+            )
+            invitro_match_mode = st.radio(
+                "Match mode across selected contrasts",
+                ["Any (OR)", "All (AND)"],
+                index=0,
+                horizontal=True,
+                key="screener_invitro_match_mode",
             )
             c1, c2 = st.columns(2)
             with c1:
@@ -2508,16 +2576,23 @@ with st.sidebar.expander("Gene screener", expanded=True):
             with c2:
                 invitro_both_lines = st.checkbox("Require both iHeps lines", value=bool(st.session_state.get("screener_invitro_both_lines", True)), key="screener_invitro_both_lines")
         else:
-            invitro_contrasts_sel, invitro_padj_thr, invitro_both_lines = [], 0.05, True
+            invitro_contrasts_sel, invitro_match_mode, invitro_padj_thr, invitro_both_lines = [], "Any (OR)", 0.05, True
 
         st.markdown("#### Bulk omics (tissue) criteria")
         use_bulk = st.checkbox("Enable bulk-omics filter", value=bool(st.session_state.get("screener_use_bulk", False)), key="screener_use_bulk")
         if use_bulk:
             bulk_groups_sel = st.multiselect(
-                "Require these bulk groups",
+                "Select bulk groups",
                 options=bulk_groups_ui,
                 default=st.session_state.get("screener_bulk_groups", bulk_groups_ui[:1] if bulk_groups_ui else []),
                 key="screener_bulk_groups",
+            )
+            bulk_match_mode = st.radio(
+                "Match mode across selected groups",
+                ["Any (OR)", "All (AND)"],
+                index=0,
+                horizontal=True,
+                key="screener_bulk_match_mode",
             )
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -2528,7 +2603,7 @@ with st.sidebar.expander("Gene screener", expanded=True):
                 bulk_consistent_dir = st.checkbox("Require consistent direction", value=bool(st.session_state.get("screener_bulk_consistent_dir", True)), key="screener_bulk_consistent_dir")
             bulk_sig_all = st.checkbox("Require significant in all found studies (strict)", value=bool(st.session_state.get("screener_bulk_sig_all", False)), key="screener_bulk_sig_all")
         else:
-            bulk_groups_sel, bulk_padj_thr, bulk_min_n, bulk_consistent_dir, bulk_sig_all = [], 0.05, 2, True, False
+            bulk_groups_sel, bulk_match_mode, bulk_padj_thr, bulk_min_n, bulk_consistent_dir, bulk_sig_all = [], "Any (OR)", 0.05, 2, True, False
 
         run_btn = st.form_submit_button("Run screener")
 
@@ -2540,8 +2615,6 @@ with st.sidebar.expander("Gene screener", expanded=True):
     if run_btn:
         with st.spinner("Screening genes..."):
             df_res = run_gene_screener(
-                gene_contains=gene_contains,
-                max_scan=int(max_scan),
                 max_return=int(max_return),
                 use_single=bool(use_single),
                 min_agreement=float(min_agree),
@@ -2559,10 +2632,12 @@ with st.sidebar.expander("Gene screener", expanded=True):
                 require_drug_target=bool(require_drug),
                 use_invitro=bool(use_invitro),
                 invitro_contrasts=[str(x) for x in (invitro_contrasts_sel or [])],
+                invitro_match_mode=str(invitro_match_mode),
                 invitro_padj_thr=float(invitro_padj_thr),
                 invitro_require_both_lines=bool(invitro_both_lines),
                 use_bulk=bool(use_bulk),
                 bulk_groups=[str(x) for x in (bulk_groups_sel or [])],
+                bulk_match_mode=str(bulk_match_mode),
                 bulk_padj_thr=float(bulk_padj_thr),
                 bulk_min_n_studies=int(bulk_min_n),
                 bulk_require_consistent_dir=bool(bulk_consistent_dir),
@@ -2601,7 +2676,7 @@ if not search_query:
         st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
         st.markdown(
             f"""
-Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), in vitro MASLD model DEGs, and bulk tissue differential expression contrasts.
+Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, WGCNA-derived co-expression modules, in vitro MASLD model DEGs, and bulk tissue differential expression contrasts.
 
 Use the sidebar to either explore a single gene, or run the Gene Screener to select genes across criteria.
 
@@ -2619,7 +2694,7 @@ doi: [{APP_DOI}]({APP_DOI_URL})
             st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
             st.markdown(
                 f"""
-Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, WGCNA-derived co-expression modules (including fibrosis stage–stratified analyses where available), in vitro MASLD model DEGs, and bulk tissue differential expression contrasts.
+Meta Liver is an interactive companion to the study cited below. It enables gene-centric exploration of single-omics evidence (signal strength and cross-study consistency), network context within a MAFLD/MASH knowledge graph, WGCNA-derived co-expression modules, in vitro MASLD model DEGs, and bulk tissue differential expression contrasts.
 
 If you use this app, please cite:  
 {APP_CITATION}  
@@ -2631,7 +2706,6 @@ doi: [{APP_DOI}]({APP_DOI_URL})
         with tab_screen:
             _render_gene_screener_results_tab(screener_df, screener_trait_used)
 else:
-    # tabs: gene explorer + optional screener tab
     tab_names = [
         "Single-Omics Evidence",
         "MAFLD Knowledge Graph",
@@ -2933,144 +3007,178 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
         else:
             st.markdown(
                 """
-This tab focuses on WGCNA-derived co-expression context. It reports WGCNA module assignment, module–trait relationships, module enrichment tables, then shows direct PPI interactors and local network statistics for the selected gene.
+This tab focuses on WGCNA-derived co-expression context (module assignment, module–trait relationships, enrichment tables) and shows local PPI evidence where available.
 """
             )
             st.markdown("---")
 
             st.markdown("**WGCNA Co-expression Module**")
-            if wgcna_module_data:
-                gene_module_info = wgcna_mod.get_gene_module(search_query, wgcna_module_data)
-                if gene_module_info:
+            if not wgcna_module_data:
+                st.warning("No WGCNA module data loaded.")
+            else:
+                gene_module_info = None
+                try:
+                    gene_module_info = wgcna_mod.get_gene_module(search_query, wgcna_module_data)
+                except Exception:
+                    gene_module_info = None
+
+                if not gene_module_info or "module" not in gene_module_info:
+                    st.info("No WGCNA module assignment found for this gene.")
+                else:
                     module_name = gene_module_info["module"]
-                    st.markdown(f"**Module Assignment:** {module_name}")
+                    module_key = _normalise_module_name(module_name)
 
-                    module_genes = wgcna_mod.get_module_genes(module_name, wgcna_module_data)
-                    if module_genes is not None:
-                        st.markdown(f"Top genes in module {module_name}:")
-
-                        show_top_genes = st.slider(
-                            "Show top N genes",
-                            min_value=5,
-                            max_value=200,
-                            value=15,
-                            step=5,
-                            key="wgcna_top_n_genes",
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.metric("Module", str(module_name))
+                    with c2:
+                        trait_for_view = st.selectbox(
+                            "Trait column (for module–trait table)",
+                            options=(fibrosis_like if fibrosis_like else trait_cols) if trait_cols else [""],
+                            index=0,
+                            key="wgcna_trait_view",
                         )
-
-                        max_drugs_per_gene = st.slider(
-                            "Show up to N drugs per gene",
-                            min_value=1,
-                            max_value=25,
-                            value=5,
-                            step=1,
-                            key="wgcna_max_drugs_per_gene",
-                        )
-
-                        view_df = module_genes.head(int(show_top_genes)).copy()
-                        view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, max_drugs_per_gene)
-                        _st_df(view_df, hide_index=True)
-                    else:
-                        st.info(f"No other genes found in module {module_name}")
+                    with c3:
+                        st.caption("Stage-stratified section removed as requested.")
 
                     st.markdown("---")
-                    st.markdown("**Module–trait relationships (WGCNA)**")
-                    mt = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
-                    if mt is None or mt.empty:
-                        st.info("Module–trait tables not available for this module (check module index names).")
-                    else:
+                    st.markdown("**Module–Trait Relationships (sorted by |corr|)**")
+                    mt = _module_trait_table(str(module_name), wgcna_cor, wgcna_pval)
+                    if mt is not None and not mt.empty:
                         _st_df(mt, hide_index=True)
+                    else:
+                        st.info("Module–trait table not available.")
 
                     st.markdown("---")
-                    st.markdown("**Pathways / enrichment (module)**")
-                    top_n_pathways = st.slider(
-                        "Show top N pathways",
-                        min_value=10,
-                        max_value=300,
-                        value=50,
-                        step=10,
-                        key="wgcna_top_n_pathways",
-                    )
-                    key = str(module_name).strip().lower()
-                    dfp = (wgcna_pathways or {}).get(key)
-                    if dfp is None or dfp.empty:
-                        st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
+                    st.markdown("**Module enrichment / pathways (if available)**")
+                    pw = None
+                    if isinstance(wgcna_pathways, dict):
+                        pw = wgcna_pathways.get(module_key) or wgcna_pathways.get(str(module_name).lower()) or wgcna_pathways.get(str(module_name))
+                    if isinstance(pw, pd.DataFrame) and not pw.empty:
+                        show_pw = st.slider("Show top N enrichment rows", 5, 200, 25, step=5, key="wgcna_pw_topn")
+                        _st_df(pw.head(int(show_pw)), hide_index=True)
                     else:
-                        _st_df(dfp.head(int(top_n_pathways)), hide_index=True)
-                else:
-                    st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
-            else:
-                st.info("⚠ WGCNA module data not available")
+                        st.info("No enrichment table found for this module.")
 
-            st.markdown("---")
-            st.markdown("**Protein–Protein Interaction Network**")
-            if ppi_data and hasattr(wgcna_mod, "find_ppi_interactors") and hasattr(wgcna_mod, "get_network_stats"):
-                ppi_df = wgcna_mod.find_ppi_interactors(search_query, ppi_data)
-                if ppi_df is not None:
-                    net_stats = wgcna_mod.get_network_stats(search_query, ppi_data)
-                    if net_stats:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Direct Interactors", net_stats.get("degree", "N/A"))
-                        with col2:
-                            st.write(f"**Network Property:** {net_stats.get('description', 'N/A')}")
-                    st.markdown(f"Direct interaction partners of {search_query}:")
-                    _st_df(ppi_df, hide_index=True)
-                else:
-                    st.info(f"⚠ '{search_query}' not found in PPI networks")
-            else:
-                st.info("⚠ PPI network data not available")
+                    st.markdown("---")
+                    st.markdown("**Top genes in module**")
+                    module_genes = None
+                    try:
+                        module_genes = wgcna_mod.get_module_genes(module_name, wgcna_module_data)
+                    except Exception:
+                        module_genes = None
+
+                    if isinstance(module_genes, pd.DataFrame) and not module_genes.empty:
+                        cA, cB = st.columns(2)
+                        with cA:
+                            show_top_genes = st.slider("Show top N genes", min_value=5, max_value=300, value=25, step=5, key="wgcna_top_n_genes")
+                        with cB:
+                            max_drugs_per_gene = st.slider("Show up to N drugs per gene", min_value=1, max_value=25, value=5, step=1, key="wgcna_max_drugs_per_gene")
+
+                        view_df = module_genes.copy()
+                        if "gene" in view_df.columns and "Gene" not in view_df.columns:
+                            view_df = view_df.rename(columns={"gene": "Gene"})
+                        if "Gene" in view_df.columns:
+                            view_df["Gene"] = view_df["Gene"].astype(str).map(_normalise_gene)
+
+                        view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, int(max_drugs_per_gene))
+                        _st_df(view_df.head(int(show_top_genes)), hide_index=True)
+                    else:
+                        st.info("Module gene table not available from wgcna_ppi_analysis.")
+
+                    st.markdown("---")
+                    st.markdown("**PPI neighbours (best-effort extraction)**")
+                    ppi_hits = []
+                    if isinstance(ppi_data, dict) and ppi_data:
+                        for nm, df in ppi_data.items():
+                            if not isinstance(df, pd.DataFrame) or df.empty:
+                                continue
+
+                            cols = [str(c) for c in df.columns]
+                            # try common edge column patterns
+                            pairs = None
+                            for a, b in [
+                                ("source", "target"),
+                                ("Source", "Target"),
+                                ("protein1", "protein2"),
+                                ("Protein1", "Protein2"),
+                                ("node1", "node2"),
+                                ("Node1", "Node2"),
+                                ("from", "to"),
+                                ("From", "To"),
+                            ]:
+                                if a in df.columns and b in df.columns:
+                                    pairs = (a, b)
+                                    break
+                            if pairs is None:
+                                continue
+
+                            a, b = pairs
+                            try:
+                                a_ser = df[a].astype(str).map(_normalise_gene)
+                                b_ser = df[b].astype(str).map(_normalise_gene)
+                            except Exception:
+                                continue
+
+                            mask = (a_ser == search_query) | (b_ser == search_query)
+                            sub = df.loc[mask].copy()
+                            if sub.empty:
+                                continue
+
+                            try:
+                                sub["__A__"] = a_ser[mask].values
+                                sub["__B__"] = b_ser[mask].values
+                            except Exception:
+                                pass
+
+                            # neighbour is the opposite end
+                            try:
+                                sub["Neighbour"] = np.where(sub["__A__"] == search_query, sub["__B__"], sub["__A__"])
+                            except Exception:
+                                sub["Neighbour"] = ""
+
+                            sub["SourceTable"] = nm
+                            keep_cols = ["SourceTable", "Neighbour"]
+                            for c in ["score", "combined_score", "weight", "confidence", "Confidence"]:
+                                if c in sub.columns:
+                                    keep_cols.append(c)
+                            keep_cols = [c for c in keep_cols if c in sub.columns]
+                            ppi_hits.append(sub[keep_cols])
+
+                    if ppi_hits:
+                        ppi_df = pd.concat(ppi_hits, ignore_index=True)
+                        if "Neighbour" in ppi_df.columns:
+                            ppi_df["Neighbour"] = ppi_df["Neighbour"].astype(str).map(_normalise_gene)
+                            ppi_df = ppi_df.loc[ppi_df["Neighbour"] != ""].copy()
+                        topn = st.slider("Show top N PPI edges", 10, 500, 50, step=10, key="ppi_topn")
+                        _st_df(ppi_df.head(int(topn)), hide_index=True)
+                    else:
+                        st.info("No PPI edges found (or PPI tables not in a recognised edge format).")
 
     with tab_invitro:
         if iva is None:
             st.warning("⚠ In vitro module not available.")
         else:
-            st.markdown(
-                """
-This tab summarises differential expression from a human stem cell-derived MASLD model using induced hepatocytes (iHeps).
-
-Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA**, **OA+PA + Resistin/Myostatin**, and **OA+PA + Resistin/Myostatin + PBMC co-culture** (immune cells were not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
-"""
-            )
-            st.markdown("---")
-            try:
-                iva.render_invitro_tab(search_query)
-            except Exception as e:
-                st.error(f"In vitro tab failed: {e}")
+            if hasattr(iva, "render_invitro_tab"):
+                try:
+                    iva.render_invitro_tab(search_query)
+                except Exception as e:
+                    st.error(f"In vitro tab failed: {e}")
+            else:
+                st.info("invitro_analysis.render_invitro_tab not found.")
 
     with tab_bulk:
         if bo is None:
             st.warning("⚠ Bulk omics module not available.")
         else:
-            st.markdown(
-                "In Bulk Omics contrasts, **log2FoldChange > 0 means the gene is enriched in the first-named group of the contrast folder** "
-                "(for example ‘MASLD vs Control’: positive log2FC implies enriched in MASLD)."
-            )
-            st.markdown("---")
-
-            sig = None
-            try:
-                sig = inspect.signature(bo.render_bulk_omics_tab)
-            except Exception:
-                sig = None
-
-            try:
-                if sig is not None and "bulk_data" in sig.parameters:
+            if hasattr(bo, "render_bulk_omics_tab"):
+                try:
                     bo.render_bulk_omics_tab(search_query, bulk_data=bulk_omics_data)
-                else:
-                    bo.render_bulk_omics_tab(search_query)
-            except Exception as e:
-                st.error(f"Bulk Omics tab failed: {e}")
+                except Exception as e:
+                    st.error(f"Bulk omics tab failed: {e}")
+            else:
+                st.info("bulk_omics.render_bulk_omics_tab not found.")
 
     if tab_screen is not None:
         with tab_screen:
             _render_gene_screener_results_tab(screener_df, screener_trait_used)
-
-st.markdown("---")
-st.markdown(
-    "<div style='text-align: center; color: gray; font-size: 11px;'>"
-    "<p>Meta Liver - Single-Omics Evidence | MAFLD Knowledge Graph | WGCNA Networks | In vitro MASLD model | Bulk Omics</p>"
-    f"<p>doi: <a href='{APP_DOI_URL}' target='_blank'>{APP_DOI}</a></p>"
-    "</div>",
-    unsafe_allow_html=True,
-)
