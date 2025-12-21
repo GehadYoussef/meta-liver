@@ -33,19 +33,7 @@ if str(APP_DIR) not in sys.path:
 # MERGED-IN: robust_data_loader.py (inlined)
 # IMPORTANT: do NOT add another "from __future__ import annotations" here
 # =============================================================================
-"""
-Robust Data Loader for Meta Liver
 
-Purpose
-- Auto-detects the data directory at runtime
-- Finds folders/files case-insensitively (tolerant to spaces/dashes/underscores)
-- Loads WGCNA (supports both 'wgcna' and legacy 'wcgna'), single-omics, knowledge graph, PPI tables
-- Loads Bulk Omics DEG tables under Bulk_Omics/ with per-contrast subfolders (TSV/CSV/Parquet)
-- Stays "pure": no Streamlit imports, no st.cache_data, no UI side-effects
-
-Usage (in Streamlit)
-- Wrap calls in @st.cache_data in streamlit_app.py (recommended)
-"""
 
 from pathlib import Path as _RDL_Path
 from typing import Optional as _RDL_Optional, Dict as _RDL_Dict, Tuple as _RDL_Tuple, List as _RDL_List
@@ -883,12 +871,16 @@ APP_CITATION = (
     "bioRxiv 2024.10.10.617610. doi: 10.1101/2024.10.10.617610"
 )
 
+# 2) UPDATE APP_TEAM to:
 APP_TEAM = (
-    "Computational biology: Professor Namshik Han (University of Cambridge) and team; "
-    "Dr Gehad Youssef led the single-omics analysis, Dr Fatima Baldo led the knowledge graph work, "
-    "and Dr Alessandra Cardinali led the WGCNA analyses. "
-    "Experimental models: Dr Milad Rezvani (Charité) and team; Dr Julian Weihs led the MAFLD in vitro model."
+    "Computational biology: [Professor Namshik Han](https://www.linkedin.com/in/namshik/) (University of Cambridge) and team; "
+    "[Dr Gehad Youssef](https://www.linkedin.com/in/dr-gehad-youssef) led the single-omics analysis, "
+    "[Dr Fatima Baldo](https://www.linkedin.com/in/fatima-baldo/) led the knowledge graph work, "
+    "and [Dr Alessandra Cardinali](https://www.linkedin.com/in/cardinali-alessandra/) led the WGCNA analyses. "
+    "Experimental models: [Dr Milad (Milo) Rezvani](https://www.linkedin.com/in/dr-milad-milo-rezvani-aa6a5286/) (Charité) and team; "
+    "Julian Weihs led the MAFLD in vitro model."
 )
+
 
 # -----------------------------------------------------------------------------
 # STREAMLIT COMPAT SHIMS (avoid use_container_width deprecation warnings)
