@@ -1149,8 +1149,8 @@ def render_bulk_omics_tab(
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         found = int(summ.get("n_studies_found", summ.get("n_studies", 0)))
-        meta_n = int(summ.get("n_studies_meta", 0))
-        st.metric("Studies", f"{found} found / {meta_n} usable")
+        st.metric("Studies", str(found))
+
     with c2:
         st.metric("Meta log2FC", f"{summ['meta_log2FoldChange']:.3f}" if pd.notna(summ["meta_log2FoldChange"]) else "missing")
     with c3:
