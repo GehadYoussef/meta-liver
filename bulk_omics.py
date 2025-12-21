@@ -31,6 +31,12 @@ This module:
   - supports "top genes" ranking per contrast (vectorised)
   - supports an "All contrasts for gene" summary table (fast scan across contrasts)
   - provides gene-summary plots (forest-style log2FC CI; log2FC vs -log10(p))
+
+IMPORTANT (Streamlit reload safety):
+  - Do NOT import robust_data_loader at module import time (prevents circular import).
+  - Only import robust_data_loader inside functions (lazy import).
+  - If streamlit_app.py passes bulk_data into render_bulk_omics_tab(), this module will
+    not call robust_data_loader at all.
 """
 
 from __future__ import annotations
@@ -42,7 +48,6 @@ import re
 
 import numpy as np
 import pandas as pd
-
 
 
 # -----------------------------------------------------------------------------
@@ -82,13 +87,12 @@ def _clean_group_name(s: str) -> str:
 def parse_contrast_groups(contrast_label: str) -> Tuple[str, str]:
     """
     Parse "A vs B" style labels.
-    If it cannot parse, returns ("Group 1", "Group 2") with the raw label embedded minimally.
+    If it cannot parse, returns ("Group 1", "Group 2").
     """
     raw = str(contrast_label or "").strip()
     if not raw:
         return ("Group 1", "Group 2")
 
-    # common variants: "A vs B", "A VS B", "A v B", "A versus B", "A against B"
     pat = re.compile(r"^(.*?)\s*(?:vs\.?|versus|against|v)\s*(.*?)$", flags=re.IGNORECASE)
     m = pat.match(raw)
     if not m:
@@ -120,8 +124,6 @@ def _safe_read_table(fp: Path) -> pd.DataFrame:
         if suf == ".csv":
             return pd.read_csv(fp)
         if suf in (".tsv", ".txt"):
-            # Most of your files are tab-separated, but some "txt" can be comma-separated.
-            # Try tab first, then fall back to comma.
             try:
                 return pd.read_csv(fp, sep="\t")
             except Exception:
@@ -132,10 +134,45 @@ def _safe_read_table(fp: Path) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _maybe_promote_index_to_symbol(out: pd.DataFrame) -> pd.DataFrame:
+    """
+    Recover gene identifiers when they are not in a 'Symbol' column.
+    Common cases:
+      - DESeq2 rownames saved into an unnamed first column ('Unnamed: 0')
+      - Identifiers stored as the DataFrame index
+    """
+    if out is None or out.empty:
+        return out
+
+    cols = list(out.columns)
+
+    unnamed0 = None
+    for c in cols:
+        c0 = str(c).strip().lower()
+        if c0 in ("unnamed: 0", "unnamed:0", ""):
+            unnamed0 = c
+            break
+    if unnamed0 is not None:
+        tmp = out.copy()
+        tmp = tmp.rename(columns={unnamed0: "Symbol"})
+        return tmp
+
+    if not isinstance(out.index, pd.RangeIndex):
+        try:
+            idx = out.index.astype(str)
+            if idx.notna().any():
+                tmp = out.reset_index().rename(columns={"index": "Symbol"})
+                return tmp
+        except Exception:
+            pass
+
+    return out
+
+
 def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalise a bulk DEG table to ensure:
-    - Symbol column present
+    - Symbol column present (including recovery from unnamed/index cases)
     - log2FoldChange / pvalue / padj standardised (if present)
     - duplicate Symbols resolved deterministically
     """
@@ -143,6 +180,7 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     out = df.copy()
+    out = _maybe_promote_index_to_symbol(out)
 
     sym_col = _pick_col_ci(list(out.columns), _BULK_SYMBOL_CANDS)
     lfc_col = _pick_col_ci(list(out.columns), _BULK_LOGFC_CANDS)
@@ -172,7 +210,6 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     if "padj" in out.columns:
         out["padj"] = pd.to_numeric(out["padj"], errors="coerce")
 
-    # Resolve duplicates by best significance then largest absolute effect
     if out["Symbol"].duplicated().any():
 
         def _rank_row(r) -> Tuple[float, float]:
@@ -192,11 +229,11 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # -----------------------------------------------------------------------------
-# Discovery + loading
+# Discovery + loading (lazy import of robust_data_loader to avoid circular import)
 # -----------------------------------------------------------------------------
 
 def _find_bulk_omics_dir() -> Optional[Path]:
-    # local import to avoid circular import at module load time
+    # Lazy import breaks circular-import issues during Streamlit hot-reload.
     from robust_data_loader import find_data_dir, find_subfolder
 
     data_dir = find_data_dir()
@@ -261,23 +298,44 @@ def _norm_ppf_approx(u: np.ndarray) -> np.ndarray:
     u = np.asarray(u, dtype=float)
 
     a = np.array(
-        [-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
-         1.383577518672690e02, -3.066479806614716e01, 2.506628277459239e00],
+        [
+            -3.969683028665376e01,
+            2.209460984245205e02,
+            -2.759285104469687e02,
+            1.383577518672690e02,
+            -3.066479806614716e01,
+            2.506628277459239e00,
+        ],
         dtype=float,
     )
     b = np.array(
-        [-5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02,
-         6.680131188771972e01, -1.328068155288572e01],
+        [
+            -5.447609879822406e01,
+            1.615858368580409e02,
+            -1.556989798598866e02,
+            6.680131188771972e01,
+            -1.328068155288572e01,
+        ],
         dtype=float,
     )
     c = np.array(
-        [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e00,
-         -2.549732539343734e00, 4.374664141464968e00, 2.938163982698783e00],
+        [
+            -7.784894002430293e-03,
+            -3.223964580411365e-01,
+            -2.400758277161838e00,
+            -2.549732539343734e00,
+            4.374664141464968e00,
+            2.938163982698783e00,
+        ],
         dtype=float,
     )
     d = np.array(
-        [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00,
-         3.754408661907416e00],
+        [
+            7.784695709041462e-03,
+            3.224671290700398e-01,
+            2.445134137142996e00,
+            3.754408661907416e00,
+        ],
         dtype=float,
     )
 
@@ -354,6 +412,7 @@ def _z_to_p_two_sided(z: np.ndarray) -> np.ndarray:
 
     try:
         from scipy.special import erfc as sp_erfc  # type: ignore
+
         out[ok] = np.clip(sp_erfc(za), 0.0, 1.0)
     except Exception:
         out[ok] = np.clip(np.array([math.erfc(float(v)) for v in za], dtype=float), 0.0, 1.0)
@@ -362,7 +421,7 @@ def _z_to_p_two_sided(z: np.ndarray) -> np.ndarray:
 
 
 # -----------------------------------------------------------------------------
-# P-value policy (important for interpretability across studies)
+# P-value policy
 # -----------------------------------------------------------------------------
 
 _PMODE_LABELS = {
@@ -383,7 +442,6 @@ def _p_eff_from_columns(padj: np.ndarray, pval: np.ndarray, p_mode: str) -> np.n
         return padj
     if p_mode == "pvalue_if_available":
         return np.where(np.isfinite(pval), pval, padj)
-    # default: padj_if_available
     return np.where(np.isfinite(padj), padj, pval)
 
 
@@ -424,7 +482,6 @@ def per_study_gene_rows(
         out["log2FoldChange"] = pd.to_numeric(out["log2FoldChange"], errors="coerce")
         out["Enriched_in"] = out["log2FoldChange"].map(lambda v: enriched_in_from_lfc(v, group_a, group_b))
 
-    # Choose the sorting significance column based on policy (but never invent values)
     sig = None
     if p_mode in ("padj_only", "padj_if_available") and "padj" in out.columns and out["padj"].notna().any():
         sig = "padj"
@@ -460,27 +517,14 @@ def direction_agreement(per_study: pd.DataFrame) -> float:
     return float(max(pos, neg))
 
 
-def _majority_sign(per_study: pd.DataFrame) -> float:
-    if per_study is None or per_study.empty or "log2FoldChange" not in per_study.columns:
-        return float("nan")
-    s = pd.to_numeric(per_study["log2FoldChange"], errors="coerce").dropna()
-    if s.empty:
-        return float("nan")
-    signs = np.sign(s.values)
-    signs = signs[signs != 0]
-    if signs.size == 0:
-        return float("nan")
-    return 1.0 if float((signs > 0).mean()) >= 0.5 else -1.0
-
-
 def bulk_gene_summary(
     studies: Dict[str, pd.DataFrame],
     gene_symbol: str,
     *,
     contrast_label: str,
     p_mode: str = "padj_if_available",
-    meta_weighting: str = "equal",   # "equal" or "abs_z"
-    meta_lfc: str = "median",        # "median" or "weighted_mean"
+    meta_weighting: str = "equal",  # "equal" or "abs_z"
+    meta_lfc: str = "median",  # "median" or "weighted_mean"
 ) -> Dict[str, object]:
     per = per_study_gene_rows(studies, gene_symbol, contrast_label=contrast_label, p_mode=p_mode)
     if per is None or per.empty:
@@ -491,6 +535,8 @@ def bulk_gene_summary(
             "meta_Z": float("nan"),
             "agreement": float("nan"),
             "n_studies": 0,
+            "n_studies_found": 0,
+            "n_studies_meta": 0,
             "meta_enriched_in": "Unknown",
             "meta_groups": parse_contrast_groups(contrast_label),
         }
@@ -498,11 +544,18 @@ def bulk_gene_summary(
     group_a, group_b = parse_contrast_groups(contrast_label)
 
     lfc = pd.to_numeric(per.get("log2FoldChange", np.nan), errors="coerce").to_numpy(dtype=float)
-    padj = pd.to_numeric(per.get("padj", np.nan), errors="coerce").to_numpy(dtype=float) if "padj" in per.columns else np.full_like(lfc, np.nan)
-    pval = pd.to_numeric(per.get("pvalue", np.nan), errors="coerce").to_numpy(dtype=float) if "pvalue" in per.columns else np.full_like(lfc, np.nan)
+    padj = (
+        pd.to_numeric(per.get("padj", np.nan), errors="coerce").to_numpy(dtype=float)
+        if "padj" in per.columns
+        else np.full_like(lfc, np.nan)
+    )
+    pval = (
+        pd.to_numeric(per.get("pvalue", np.nan), errors="coerce").to_numpy(dtype=float)
+        if "pvalue" in per.columns
+        else np.full_like(lfc, np.nan)
+    )
     p_eff = _p_eff_from_columns(padj, pval, p_mode=p_mode)
 
-    # drop rows based on strict policy
     if p_mode == "padj_only":
         keep = np.isfinite(padj)
         lfc = lfc[keep]
@@ -514,6 +567,9 @@ def bulk_gene_summary(
 
     z = _signed_z_from_two_sided_p(p_eff, lfc)
     ok = np.isfinite(z) & np.isfinite(lfc)
+
+    n_found = int(per["Study"].nunique()) if "Study" in per.columns else int(len(per))
+    n_meta = int(np.sum(ok))
 
     if not np.any(ok):
         meta_Z = float("nan")
@@ -545,7 +601,9 @@ def bulk_gene_summary(
         "meta_p": meta_p,
         "meta_Z": meta_Z,
         "agreement": agree,
-        "n_studies": int(per["Study"].nunique()) if "Study" in per.columns else int(len(per)),
+        "n_studies": n_found,  # backwards compatibility
+        "n_studies_found": n_found,
+        "n_studies_meta": n_meta,
         "meta_enriched_in": meta_enriched,
         "meta_groups": (group_a, group_b),
     }
@@ -593,22 +651,10 @@ def top_genes_for_contrast(
     min_studies: int = 2,
     max_genes: int = 200,
     p_mode: str = "padj_if_available",
-    meta_weighting: str = "equal",      # "equal" or "abs_z"
-    meta_lfc: str = "median",           # "median" or "weighted_mean"
+    meta_weighting: str = "equal",  # "equal" or "abs_z"
+    meta_lfc: str = "median",  # "median" or "weighted_mean"
     use_stability: bool = True,
 ) -> pd.DataFrame:
-    """
-    Ranked genes for one contrast.
-
-    Default scoring emphasises reproducibility:
-      - meta_p from signed Stouffer (equal weights by default)
-      - meta_log2FoldChange as median across studies (robust)
-      - agreement is the majority sign proportion across studies
-      - stability is 1/(1+IQR(log2FC)) when enabled
-
-    Evidence score (default):
-      (-log10(meta_p)) * |meta_log2FC| * agreement * stability
-    """
     if studies is None or not studies:
         return pd.DataFrame()
 
@@ -618,13 +664,9 @@ def top_genes_for_contrast(
     if long.empty or "Symbol" not in long.columns or "log2FoldChange" not in long.columns:
         return pd.DataFrame()
 
-    lfc = pd.to_numeric(long["log2FoldChange"], errors="coerce").to_numpy(dtype=float)
-
     padj = long["padj"].to_numpy(dtype=float) if "padj" in long.columns else np.full(len(long), np.nan, dtype=float)
     pval = long["pvalue"].to_numpy(dtype=float) if "pvalue" in long.columns else np.full(len(long), np.nan, dtype=float)
-    p_eff = _p_eff_from_columns(padj, pval, p_mode=p_mode)
 
-    # strict policies drop missing rows
     if p_mode == "padj_only":
         keep = np.isfinite(padj)
     elif p_mode == "pvalue_only":
@@ -649,15 +691,12 @@ def top_genes_for_contrast(
     else:
         long["w"] = np.where(np.isfinite(z), 1.0, np.nan)
 
-    # rows usable for meta
     m = long[np.isfinite(long["z"]) & np.isfinite(long["w"]) & np.isfinite(long["log2FoldChange"])].copy()
     if m.empty:
         return pd.DataFrame()
 
-    # studies per gene
     n_st = long.groupby("Symbol", dropna=False)["Study"].nunique().rename("n_studies")
 
-    # agreement per gene (based on sign of log2FC)
     sgn = np.sign(pd.to_numeric(long["log2FoldChange"], errors="coerce"))
     long["_sgn_"] = sgn
     g2 = long.dropna(subset=["_sgn_"]).copy()
@@ -670,7 +709,6 @@ def top_genes_for_contrast(
         agree = pd.concat([pos, neg], axis=1).max(axis=1)
         agree.name = "agreement"
 
-    # meta Z per gene: sum(w*z)/sqrt(sum(w^2))
     m["wz"] = m["w"] * m["z"]
     m["w2"] = m["w"] * m["w"]
     sum_wz = m.groupby("Symbol")["wz"].sum()
@@ -679,7 +717,6 @@ def top_genes_for_contrast(
 
     meta_p = pd.Series(_z_to_p_two_sided(meta_Z.to_numpy(dtype=float)), index=meta_Z.index, name="meta_p")
 
-    # meta log2FC per gene
     if meta_lfc == "weighted_mean":
         m["wlfc"] = m["w"] * m["log2FoldChange"]
         sum_wlfc = m.groupby("Symbol")["wlfc"].sum()
@@ -688,7 +725,6 @@ def top_genes_for_contrast(
     else:
         meta_lfc_s = m.groupby("Symbol")["log2FoldChange"].median().rename("meta_log2FoldChange")
 
-    # stability (IQR of log2FC across studies; lower is better)
     if use_stability:
         q75 = m.groupby("Symbol")["log2FoldChange"].quantile(0.75)
         q25 = m.groupby("Symbol")["log2FoldChange"].quantile(0.25)
@@ -698,24 +734,27 @@ def top_genes_for_contrast(
         iqr = pd.Series(dtype=float, name="iqr_log2FoldChange")
         stability = pd.Series(dtype=float, name="stability")
 
-    out = pd.concat([n_st, meta_lfc_s, meta_Z, meta_p, agree, iqr, stability], axis=1).reset_index().rename(columns={"index": "Symbol"})
+    out = (
+        pd.concat([n_st, meta_lfc_s, meta_Z, meta_p, agree, iqr, stability], axis=1)
+        .reset_index()
+        .rename(columns={"index": "Symbol"})
+    )
 
     out = out[out["n_studies"].fillna(0).astype(int) >= int(min_studies)].copy()
     if out.empty:
         return out
 
-    # enriched in
     out["Enriched_in"] = out["meta_log2FoldChange"].map(lambda v: enriched_in_from_lfc(float(v), group_a, group_b))
 
-    # evidence score
     mp = pd.to_numeric(out["meta_p"], errors="coerce").to_numpy(dtype=float)
     ml = pd.to_numeric(out["meta_log2FoldChange"], errors="coerce").to_numpy(dtype=float)
     ag = pd.to_numeric(out["agreement"], errors="coerce").to_numpy(dtype=float)
     st = pd.to_numeric(out["stability"], errors="coerce").to_numpy(dtype=float) if use_stability else np.ones(len(out), dtype=float)
 
     score = np.full(len(out), np.nan, dtype=float)
-    ok = np.isfinite(mp) & (mp > 0) & np.isfinite(ml) & np.isfinite(ag) & np.isfinite(st)
-    score[ok] = (-np.log10(mp[ok])) * np.abs(ml[ok]) * ag[ok] * st[ok]
+    ok2 = np.isfinite(mp) & (mp > 0) & np.isfinite(ml) & np.isfinite(ag) & np.isfinite(st)
+    mp_clip = np.clip(mp[ok2], 1e-300, 1.0)
+    score[ok2] = (-np.log10(mp_clip)) * np.abs(ml[ok2]) * ag[ok2] * st[ok2]
     out["evidence_score"] = score
 
     out = out.sort_values("evidence_score", ascending=False, na_position="last").head(int(max_genes))
@@ -723,7 +762,7 @@ def top_genes_for_contrast(
 
 
 # -----------------------------------------------------------------------------
-# All-contrasts scan for a gene (quick global summary)
+# All-contrasts scan for a gene
 # -----------------------------------------------------------------------------
 
 def gene_across_all_contrasts(
@@ -748,13 +787,14 @@ def gene_across_all_contrasts(
             meta_weighting=meta_weighting,
             meta_lfc=meta_lfc,
         )
-        if summ.get("n_studies", 0) and isinstance(summ.get("per_study"), pd.DataFrame) and not summ["per_study"].empty:
+        if summ.get("n_studies_found", 0) and isinstance(summ.get("per_study"), pd.DataFrame) and not summ["per_study"].empty:
             rows.append(
                 {
                     "Contrast": str(contrast),
                     "Group A": summ["meta_groups"][0],
                     "Group B": summ["meta_groups"][1],
-                    "n_studies": int(summ["n_studies"]),
+                    "n_studies_found": int(summ["n_studies_found"]),
+                    "n_studies_meta": int(summ["n_studies_meta"]),
                     "meta_log2FoldChange": float(summ["meta_log2FoldChange"]),
                     "meta_p": float(summ["meta_p"]),
                     "agreement": float(summ["agreement"]),
@@ -767,12 +807,12 @@ def gene_across_all_contrasts(
 
     out = pd.DataFrame(rows)
     out["meta_p"] = pd.to_numeric(out["meta_p"], errors="coerce")
-    out = out.sort_values(["meta_p", "n_studies"], ascending=[True, False], na_position="last")
+    out = out.sort_values(["meta_p", "n_studies_meta", "n_studies_found"], ascending=[True, False, False], na_position="last")
     return out
 
 
 # -----------------------------------------------------------------------------
-# Plot helpers (gene summary)
+# Plot helpers
 # -----------------------------------------------------------------------------
 
 def _forest_plot_from_per_study(per: pd.DataFrame, *, contrast_label: str, p_mode: str):
@@ -788,23 +828,22 @@ def _forest_plot_from_per_study(per: pd.DataFrame, *, contrast_label: str, p_mod
     pval = pd.to_numeric(df["pvalue"], errors="coerce").to_numpy(dtype=float) if "pvalue" in df.columns else np.full_like(lfc, np.nan)
     p_eff = _p_eff_from_columns(padj, pval, p_mode=p_mode)
 
-    # strict
     if p_mode == "padj_only":
         ok = np.isfinite(lfc) & np.isfinite(padj) & (padj > 0) & (padj <= 1)
-        p_eff = padj
+        p_eff2 = padj
     elif p_mode == "pvalue_only":
         ok = np.isfinite(lfc) & np.isfinite(pval) & (pval > 0) & (pval <= 1)
-        p_eff = pval
+        p_eff2 = pval
     else:
         ok = np.isfinite(lfc) & np.isfinite(p_eff) & (p_eff > 0) & (p_eff <= 1)
+        p_eff2 = p_eff
 
     if not np.any(ok):
         return None
 
-    z = _signed_z_from_two_sided_p(p_eff[ok], lfc[ok])
+    z = _signed_z_from_two_sided_p(p_eff2[ok], lfc[ok])
     zabs = np.abs(z)
 
-    # Approx SE from Wald relationship: z ≈ lfc/SE => SE ≈ |lfc|/|z|
     se = np.full_like(zabs, np.nan, dtype=float)
     good = zabs > 1e-12
     se[good] = np.abs(lfc[ok][good]) / zabs[good]
@@ -864,17 +903,20 @@ def _scatter_logfc_vs_sig(per: pd.DataFrame, *, contrast_label: str, p_mode: str
 
     if p_mode == "padj_only":
         ok = np.isfinite(lfc) & np.isfinite(padj) & (padj > 0)
-        p_eff = padj
+        p_eff2 = padj
     elif p_mode == "pvalue_only":
         ok = np.isfinite(lfc) & np.isfinite(pval) & (pval > 0)
-        p_eff = pval
+        p_eff2 = pval
     else:
         ok = np.isfinite(lfc) & np.isfinite(p_eff) & (p_eff > 0)
+        p_eff2 = p_eff
 
     if not np.any(ok):
         return None
 
-    y = -np.log10(p_eff[ok])
+    p_clip = np.clip(p_eff2[ok], 1e-300, 1.0)
+    y = -np.log10(p_clip)
+
     study = df.loc[ok, "Study"].astype(str).tolist() if "Study" in df.columns else [f"Study {i+1}" for i in range(int(ok.sum()))]
 
     fig = go.Figure()
@@ -922,21 +964,22 @@ def render_bulk_omics_tab(
         except TypeError:
             st.plotly_chart(fig, use_container_width=True)
 
-    root = _find_bulk_omics_dir()
+    # Critical: if bulk_data is provided, do NOT call any loader/robust functions here.
+    if isinstance(bulk_data, dict) and len(bulk_data) > 0:
+        data = bulk_data
+        root = None
+    else:
+        root = _find_bulk_omics_dir()
+        if root is None or not root.exists():
+            st.warning("No Bulk Omics folder found. Expected: meta-liver-data/Bulk_Omics/")
+            return
 
-    data = bulk_data if isinstance(bulk_data, dict) and len(bulk_data) > 0 else load_bulk_omics()
-
-    if (bulk_data is None or (isinstance(bulk_data, dict) and len(bulk_data) == 0)) and (root is None or not root.exists()):
-        st.warning("No Bulk Omics folder found. Expected: meta-liver-data/Bulk_Omics/")
-        return
-
-    if not data:
-        st.warning("Bulk Omics found, but no valid TSV/CSV/Parquet DEG tables could be loaded.")
-        if root is not None:
+        data = load_bulk_omics()
+        if not data:
+            st.warning("Bulk Omics found, but no valid TSV/CSV/Parquet DEG tables could be loaded.")
             st.caption(f"Looking in: {root}")
-        return
+            return
 
-    # Policies that affect interpretation
     p_mode = st.selectbox(
         "Significance used for meta-analysis",
         options=list(_PMODE_LABELS.keys()),
@@ -966,7 +1009,12 @@ def render_bulk_omics_tab(
         for contrast, studies in data.items():
             a, b = parse_contrast_groups(str(contrast))
             avail_rows.append(
-                {"Contrast": str(contrast), "Group A (log2FC>0)": a, "Group B (log2FC<0)": b, "Study tables": len(studies or {})}
+                {
+                    "Contrast": str(contrast),
+                    "Group A (log2FC>0)": a,
+                    "Group B (log2FC<0)": b,
+                    "Study tables": len(studies or {}),
+                }
             )
         _st_df(pd.DataFrame(avail_rows), hide_index=True)
 
@@ -1016,10 +1064,11 @@ def render_bulk_omics_tab(
             ok = mp.notna() & (mp > 0) & ml.notna()
             if ok.sum() >= 5:
                 fig = go.Figure()
+                mp_clip = np.clip(mp[ok].to_numpy(dtype=float), 1e-300, 1.0)
                 fig.add_trace(
                     go.Scatter(
                         x=ml[ok],
-                        y=-np.log10(mp[ok]),
+                        y=-np.log10(mp_clip),
                         mode="markers",
                         text=dfp.loc[ok, "Symbol"] + " (enriched in: " + dfp.loc[ok, "Enriched_in"].astype(str) + ")",
                         hovertemplate="<b>%{text}</b><br>meta_log2FC=%{x:.3f}<br>-log10(meta_p)=%{y:.2f}<extra></extra>",
@@ -1084,7 +1133,9 @@ def render_bulk_omics_tab(
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        st.metric("Studies found", int(summ["n_studies"]))
+        found = int(summ.get("n_studies_found", summ.get("n_studies", 0)))
+        meta_n = int(summ.get("n_studies_meta", 0))
+        st.metric("Studies", f"{found} found / {meta_n} usable")
     with c2:
         st.metric("Meta log2FC", f"{summ['meta_log2FoldChange']:.3f}" if pd.notna(summ["meta_log2FoldChange"]) else "missing")
     with c3:
@@ -1094,9 +1145,7 @@ def render_bulk_omics_tab(
     with c5:
         st.metric("Meta enriched in", str(summ.get("meta_enriched_in", "Unknown")))
 
-    st.caption(
-        f"Direction: in **{contrast_sel}**, log2FC > 0 means enriched in **{group_a}**, and log2FC < 0 means enriched in **{group_b}**."
-    )
+    st.caption(f"Direction: in **{contrast_sel}**, log2FC > 0 means enriched in **{group_a}**, and log2FC < 0 means enriched in **{group_b}**.")
 
     fig_forest = _forest_plot_from_per_study(per, contrast_label=str(contrast_sel), p_mode=p_mode)
     if fig_forest is not None:
