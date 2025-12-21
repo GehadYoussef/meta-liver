@@ -14,7 +14,7 @@ Folder layout expected (inside app data directory):
           ...
 
 Each DEG table should include (case-insensitive):
-  - Symbol
+  - Symbol (or recoverable gene id column / index)
   - log2FoldChange
   - pvalue (optional but recommended)
   - padj   (optional)
@@ -23,14 +23,6 @@ Key behaviour (direction / enrichment):
   For a contrast named "A vs B", log2FoldChange > 0 means the gene is enriched/up in A,
   and log2FoldChange < 0 means enriched/up in B.
   Tables produced by this module add "Enriched_in" accordingly.
-
-This module:
-  - loads all bulk DEG tables grouped by contrast folder
-  - normalises schemas and resolves duplicate gene symbols
-  - supports gene-centric summary and meta-analysis across studies per contrast
-  - supports "top genes" ranking per contrast (vectorised)
-  - supports an "All contrasts for gene" summary table (fast scan across contrasts)
-  - provides gene-summary plots (forest-style log2FC CI; log2FC vs -log10(p))
 
 IMPORTANT (Streamlit reload safety):
   - Do NOT import robust_data_loader at module import time (prevents circular import).
@@ -55,24 +47,32 @@ import pandas as pd
 # -----------------------------------------------------------------------------
 
 _BULK_SYMBOL_CANDS = ["Symbol", "symbol", "gene", "Gene", "gene_symbol", "GeneSymbol"]
+_BULK_ID_CANDS = [
+    "Gene stable ID", "gene_id", "Geneid", "geneid", "ensembl_gene_id", "ensembl_id",
+    "Ensembl", "ENSEMBL", "GeneID", "geneID"
+]
 _BULK_LOGFC_CANDS = ["log2FoldChange", "logFC", "log2FC", "log2_fc", "log2foldchange"]
 _BULK_PVAL_CANDS = ["pvalue", "pval", "p_value", "PValue", "P.Value"]
 _BULK_PADJ_CANDS = ["padj", "FDR", "adj_pval", "adj_pvalue", "qvalue", "q_value"]
 
 
-def _pick_col_ci(cols: List[str], cands: List[str]) -> Optional[str]:
-    m = {c.lower(): c for c in cols}
+def _pick_col_ci(cols: List[object], cands: List[str]) -> Optional[str]:
+    # Robust to non-string column names
+    m = {str(c).lower(): str(c) for c in cols}
+    cols_str = [str(c) for c in cols]
+    cols_set = set(cols_str)
     for cand in cands:
-        if cand in cols:
+        if cand in cols_set:
             return cand
-        if cand.lower() in m:
-            return m[cand.lower()]
+        cl = cand.lower()
+        if cl in m:
+            return m[cl]
     return None
 
 
 def _normalise_symbol(x: str) -> str:
     s = str(x).strip().upper()
-    if s in ("", "NAN", "NONE"):
+    if s in ("", "NAN", "NONE", "NA"):
         return ""
     return s
 
@@ -122,30 +122,41 @@ def _safe_read_table(fp: Path) -> pd.DataFrame:
         if suf == ".parquet":
             return pd.read_parquet(fp)
         if suf == ".csv":
-            return pd.read_csv(fp)
+            # utf-8-sig handles Excel-saved CSVs cleanly
+            return pd.read_csv(fp, encoding="utf-8-sig")
         if suf in (".tsv", ".txt"):
             try:
-                return pd.read_csv(fp, sep="\t")
+                return pd.read_csv(fp, sep="\t", encoding="utf-8-sig")
             except Exception:
-                return pd.read_csv(fp)
+                return pd.read_csv(fp, encoding="utf-8-sig")
     except Exception:
         return pd.DataFrame()
 
     return pd.DataFrame()
 
 
-def _maybe_promote_index_to_symbol(out: pd.DataFrame) -> pd.DataFrame:
-    """
-    Recover gene identifiers when they are not in a 'Symbol' column.
-    Common cases:
-      - DESeq2 rownames saved into an unnamed first column ('Unnamed: 0')
-      - Identifiers stored as the DataFrame index
-    """
-    if out is None or out.empty:
-        return out
+def _looks_like_ensembl(series: pd.Series) -> bool:
+    s = series.astype(str)
+    # human/mouse Ensembl gene IDs
+    return bool(s.str.match(r"^(ENSG|ENSMUSG)\d+", na=False).mean() > 0.5)
 
+
+def _maybe_promote_index_or_idcol_to_symbol(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Recover gene identifiers when they are not in a recognised 'Symbol' column.
+    Handles:
+      - DESeq2 rownames saved as an unnamed first column ('Unnamed: 0' or blank)
+      - Identifiers stored as the DataFrame index
+      - Common gene-id columns like 'Gene stable ID', 'Geneid', etc.
+      - Heuristic: single non-numeric first column in an otherwise numeric table
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
     cols = list(out.columns)
 
+    # 1) Unnamed first column -> Symbol
     unnamed0 = None
     for c in cols:
         c0 = str(c).strip().lower()
@@ -153,18 +164,38 @@ def _maybe_promote_index_to_symbol(out: pd.DataFrame) -> pd.DataFrame:
             unnamed0 = c
             break
     if unnamed0 is not None:
-        tmp = out.copy()
-        tmp = tmp.rename(columns={unnamed0: "Symbol"})
-        return tmp
+        out = out.rename(columns={unnamed0: "Symbol"})
+        return out
 
-    if not isinstance(out.index, pd.RangeIndex):
+    # 2) Recognised gene-id column -> Symbol (only if Symbol not already present)
+    if _pick_col_ci(cols, _BULK_SYMBOL_CANDS) is None:
+        idc = _pick_col_ci(cols, _BULK_ID_CANDS)
+        if idc is not None:
+            out = out.rename(columns={idc: "Symbol"})
+            return out
+
+    # 3) Non-default index -> Symbol (only if it looks meaningful)
+    if _pick_col_ci(cols, _BULK_SYMBOL_CANDS) is None and not isinstance(out.index, pd.RangeIndex):
         try:
             idx = out.index.astype(str)
             if idx.notna().any():
                 tmp = out.reset_index().rename(columns={"index": "Symbol"})
-                return tmp
+                if "Symbol" in tmp.columns and tmp["Symbol"].astype(str).str.len().median() >= 3:
+                    return tmp
         except Exception:
             pass
+
+    # 4) Heuristic: first column is object-ish and the rest are mostly numeric
+    if _pick_col_ci(cols, _BULK_SYMBOL_CANDS) is None and len(cols) >= 2:
+        c0 = cols[0]
+        s0 = out[c0]
+        if s0.dtype == object or pd.api.types.is_string_dtype(s0):
+            numeric_frac = []
+            for c in cols[1:]:
+                numeric_frac.append(pd.to_numeric(out[c], errors="coerce").notna().mean())
+            if len(numeric_frac) and float(np.mean(numeric_frac)) > 0.6:
+                out = out.rename(columns={c0: "Symbol"})
+                return out
 
     return out
 
@@ -172,15 +203,14 @@ def _maybe_promote_index_to_symbol(out: pd.DataFrame) -> pd.DataFrame:
 def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalise a bulk DEG table to ensure:
-    - Symbol column present (including recovery from unnamed/index cases)
+    - Symbol column present (including recovery from unnamed/index/idcol cases)
     - log2FoldChange / pvalue / padj standardised (if present)
     - duplicate Symbols resolved deterministically
     """
     if df is None or df.empty:
         return pd.DataFrame()
 
-    out = df.copy()
-    out = _maybe_promote_index_to_symbol(out)
+    out = _maybe_promote_index_or_idcol_to_symbol(df)
 
     sym_col = _pick_col_ci(list(out.columns), _BULK_SYMBOL_CANDS)
     lfc_col = _pick_col_ci(list(out.columns), _BULK_LOGFC_CANDS)
@@ -210,13 +240,16 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
     if "padj" in out.columns:
         out["padj"] = pd.to_numeric(out["padj"], errors="coerce")
 
+    # If "Symbol" is actually Ensembl IDs, we still keep it (search-by-symbol won't match,
+    # but at least tables load; mapping belongs in an optional annotation layer).
+    # You can later add an Ensembl->HGNC mapping step if you want.
+
     if out["Symbol"].duplicated().any():
 
         def _rank_row(r) -> Tuple[float, float]:
             q = r.get("padj", float("nan"))
             p = r.get("pvalue", float("nan"))
             lfc = r.get("log2FoldChange", float("nan"))
-
             best_sig = q if pd.notna(q) else (p if pd.notna(p) else float("inf"))
             abs_lfc = abs(lfc) if pd.notna(lfc) else 0.0
             return (best_sig, -abs_lfc)
@@ -233,9 +266,7 @@ def normalise_bulk_deg_table(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------------------------------------------------------
 
 def _find_bulk_omics_dir() -> Optional[Path]:
-    # Lazy import breaks circular-import issues during Streamlit hot-reload.
     from robust_data_loader import find_data_dir, find_subfolder
-
     data_dir = find_data_dir()
     if data_dir is None:
         return None
@@ -298,44 +329,23 @@ def _norm_ppf_approx(u: np.ndarray) -> np.ndarray:
     u = np.asarray(u, dtype=float)
 
     a = np.array(
-        [
-            -3.969683028665376e01,
-            2.209460984245205e02,
-            -2.759285104469687e02,
-            1.383577518672690e02,
-            -3.066479806614716e01,
-            2.506628277459239e00,
-        ],
+        [-3.969683028665376e01, 2.209460984245205e02, -2.759285104469687e02,
+         1.383577518672690e02, -3.066479806614716e01, 2.506628277459239e00],
         dtype=float,
     )
     b = np.array(
-        [
-            -5.447609879822406e01,
-            1.615858368580409e02,
-            -1.556989798598866e02,
-            6.680131188771972e01,
-            -1.328068155288572e01,
-        ],
+        [-5.447609879822406e01, 1.615858368580409e02, -1.556989798598866e02,
+         6.680131188771972e01, -1.328068155288572e01],
         dtype=float,
     )
     c = np.array(
-        [
-            -7.784894002430293e-03,
-            -3.223964580411365e-01,
-            -2.400758277161838e00,
-            -2.549732539343734e00,
-            4.374664141464968e00,
-            2.938163982698783e00,
-        ],
+        [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e00,
+         -2.549732539343734e00, 4.374664141464968e00, 2.938163982698783e00],
         dtype=float,
     )
     d = np.array(
-        [
-            7.784695709041462e-03,
-            3.224671290700398e-01,
-            2.445134137142996e00,
-            3.754408661907416e00,
-        ],
+        [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e00,
+         3.754408661907416e00],
         dtype=float,
     )
 
@@ -412,7 +422,6 @@ def _z_to_p_two_sided(z: np.ndarray) -> np.ndarray:
 
     try:
         from scipy.special import erfc as sp_erfc  # type: ignore
-
         out[ok] = np.clip(sp_erfc(za), 0.0, 1.0)
     except Exception:
         out[ok] = np.clip(np.array([math.erfc(float(v)) for v in za], dtype=float), 0.0, 1.0)
@@ -482,6 +491,11 @@ def per_study_gene_rows(
         out["log2FoldChange"] = pd.to_numeric(out["log2FoldChange"], errors="coerce")
         out["Enriched_in"] = out["log2FoldChange"].map(lambda v: enriched_in_from_lfc(v, group_a, group_b))
 
+    if "padj" in out.columns:
+        out["padj"] = pd.to_numeric(out["padj"], errors="coerce")
+    if "pvalue" in out.columns:
+        out["pvalue"] = pd.to_numeric(out["pvalue"], errors="coerce")
+
     sig = None
     if p_mode in ("padj_only", "padj_if_available") and "padj" in out.columns and out["padj"].notna().any():
         sig = "padj"
@@ -543,17 +557,23 @@ def bulk_gene_summary(
 
     group_a, group_b = parse_contrast_groups(contrast_label)
 
-    lfc = pd.to_numeric(per.get("log2FoldChange", np.nan), errors="coerce").to_numpy(dtype=float)
-    padj = (
-        pd.to_numeric(per.get("padj", np.nan), errors="coerce").to_numpy(dtype=float)
-        if "padj" in per.columns
-        else np.full_like(lfc, np.nan)
-    )
-    pval = (
-        pd.to_numeric(per.get("pvalue", np.nan), errors="coerce").to_numpy(dtype=float)
-        if "pvalue" in per.columns
-        else np.full_like(lfc, np.nan)
-    )
+    n_rows = len(per)
+
+    if "log2FoldChange" in per.columns:
+        lfc = pd.to_numeric(per["log2FoldChange"], errors="coerce").to_numpy(dtype=float)
+    else:
+        lfc = np.full(n_rows, np.nan, dtype=float)
+
+    if "padj" in per.columns:
+        padj = pd.to_numeric(per["padj"], errors="coerce").to_numpy(dtype=float)
+    else:
+        padj = np.full(n_rows, np.nan, dtype=float)
+
+    if "pvalue" in per.columns:
+        pval = pd.to_numeric(per["pvalue"], errors="coerce").to_numpy(dtype=float)
+    else:
+        pval = np.full(n_rows, np.nan, dtype=float)
+
     p_eff = _p_eff_from_columns(padj, pval, p_mode=p_mode)
 
     if p_mode == "padj_only":
@@ -664,13 +684,13 @@ def top_genes_for_contrast(
     if long.empty or "Symbol" not in long.columns or "log2FoldChange" not in long.columns:
         return pd.DataFrame()
 
-    padj = long["padj"].to_numpy(dtype=float) if "padj" in long.columns else np.full(len(long), np.nan, dtype=float)
-    pval = long["pvalue"].to_numpy(dtype=float) if "pvalue" in long.columns else np.full(len(long), np.nan, dtype=float)
+    padj0 = long["padj"].to_numpy(dtype=float) if "padj" in long.columns else np.full(len(long), np.nan, dtype=float)
+    pval0 = long["pvalue"].to_numpy(dtype=float) if "pvalue" in long.columns else np.full(len(long), np.nan, dtype=float)
 
     if p_mode == "padj_only":
-        keep = np.isfinite(padj)
+        keep = np.isfinite(padj0)
     elif p_mode == "pvalue_only":
-        keep = np.isfinite(pval)
+        keep = np.isfinite(pval0)
     else:
         keep = np.ones(len(long), dtype=bool)
 
@@ -734,11 +754,7 @@ def top_genes_for_contrast(
         iqr = pd.Series(dtype=float, name="iqr_log2FoldChange")
         stability = pd.Series(dtype=float, name="stability")
 
-    out = (
-        pd.concat([n_st, meta_lfc_s, meta_Z, meta_p, agree, iqr, stability], axis=1)
-        .reset_index()
-        .rename(columns={"index": "Symbol"})
-    )
+    out = pd.concat([n_st, meta_lfc_s, meta_Z, meta_p, agree, iqr, stability], axis=1).reset_index()
 
     out = out[out["n_studies"].fillna(0).astype(int) >= int(min_studies)].copy()
     if out.empty:
@@ -964,7 +980,6 @@ def render_bulk_omics_tab(
         except TypeError:
             st.plotly_chart(fig, use_container_width=True)
 
-    # Critical: if bulk_data is provided, do NOT call any loader/robust functions here.
     if isinstance(bulk_data, dict) and len(bulk_data) > 0:
         data = bulk_data
         root = None
