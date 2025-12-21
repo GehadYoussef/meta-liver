@@ -15,6 +15,7 @@ import sys
 import importlib
 import inspect
 from pathlib import Path
+from typing import Optional, Tuple, Any
 
 import streamlit as st
 import pandas as pd
@@ -28,53 +29,9 @@ APP_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from robust_data_loader import (
-    load_single_omics_studies,
-    load_kg_data,
-    load_ppi_data,
-)
-
-# Robust bulk loader import (prevents the ImportError you saw if the name differs)
-try:
-    from robust_data_loader import load_bulk_omics_tables  # if you defined this alias
-except ImportError:
-    from robust_data_loader import load_bulk_omics_studies as load_bulk_omics_tables  # canonical name
-
-from kg_analysis import (
-    get_gene_kg_info,
-    get_cluster_genes,
-    get_cluster_drugs,
-    get_cluster_diseases,
-    interpret_centrality,
-)
-
-from wgcna_ppi_analysis import (
-    load_wgcna_module_data,
-    get_gene_module,
-    get_module_genes,
-    find_ppi_interactors,
-    get_network_stats,
-    load_wgcna_mod_trait_cor,
-    load_wgcna_mod_trait_pval,
-    load_wgcna_pathways,
-    load_wgcna_active_drugs,
-    build_gene_to_drugs_index,
-)
-
-import invitro_analysis as iva
-iva = importlib.reload(iva)
-
-import single_omics_analysis as soa
-soa = importlib.reload(soa)
-
-import bulk_omics as bo
-bo = importlib.reload(bo)
-
-
-# =============================================================================
-# CONFIG
-# =============================================================================
-
+# -----------------------------------------------------------------------------
+# PAGE CONFIG (must be the first Streamlit call)
+# -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Meta Liver",
     page_icon="🔬",
@@ -101,11 +58,9 @@ APP_TEAM = (
     "Experimental models: Dr Milad Rezvani (Charité) and team; Dr Julian Weihs led the MAFLD in vitro model."
 )
 
-
-# =============================================================================
+# -----------------------------------------------------------------------------
 # STREAMLIT COMPAT SHIMS (avoid use_container_width deprecation warnings)
-# =============================================================================
-
+# -----------------------------------------------------------------------------
 def _st_df(df: pd.DataFrame, *, hide_index: bool = True):
     try:
         st.dataframe(df, width="stretch", hide_index=hide_index)
@@ -120,77 +75,44 @@ def _st_plotly(fig: go.Figure):
         st.plotly_chart(fig, use_container_width=True)
 
 
-# =============================================================================
-# DATA LOADING
-# =============================================================================
-
-@st.cache_data
-def load_all_data():
-    single_omics = load_single_omics_studies()
-    kg_data = load_kg_data()
-    wgcna_module_data = load_wgcna_module_data()
-    ppi_data = load_ppi_data()
-
-    wgcna_cor = load_wgcna_mod_trait_cor()
-    wgcna_pval = load_wgcna_mod_trait_pval()
-    wgcna_pathways = load_wgcna_pathways()
-
-    active_drugs = load_wgcna_active_drugs()
-    gene_to_drugs = (
-        build_gene_to_drugs_index(active_drugs)
-        if active_drugs is not None and not active_drugs.empty
-        else {}
-    )
-
-    bulk_omics_data = load_bulk_omics_tables()
-
-    return (
-        single_omics,
-        kg_data,
-        wgcna_module_data,
-        ppi_data,
-        wgcna_cor,
-        wgcna_pval,
-        wgcna_pathways,
-        active_drugs,
-        gene_to_drugs,
-        bulk_omics_data,
-    )
+# -----------------------------------------------------------------------------
+# SAFE IMPORT / RELOAD HELPERS (prevents one broken module killing the whole app)
+# -----------------------------------------------------------------------------
+def _safe_import_reload(module_name: str):
+    try:
+        mod = importlib.import_module(module_name)
+        mod = importlib.reload(mod)
+        return mod, None
+    except Exception as e:
+        return None, e
 
 
+# -----------------------------------------------------------------------------
+# CORE LOADERS (these should be robust_data_loader + analysis modules)
+# -----------------------------------------------------------------------------
+loader_err = None
 try:
-    (
-        single_omics_data,
-        kg_data,
-        wgcna_module_data,
-        ppi_data,
-        wgcna_cor,
-        wgcna_pval,
-        wgcna_pathways,
-        active_drugs_df,
-        gene_to_drugs,
-        bulk_omics_data,
-    ) = load_all_data()
-    data_loaded = True
+    from robust_data_loader import (
+        load_single_omics_studies,
+        load_kg_data,
+        load_ppi_data,
+    )
 except Exception as e:
-    st.error(f"Error loading data: {e}")
-    data_loaded = False
-    single_omics_data = {}
-    kg_data = {}
-    wgcna_module_data = {}
-    ppi_data = {}
-    wgcna_cor = pd.DataFrame()
-    wgcna_pval = pd.DataFrame()
-    wgcna_pathways = {}
-    active_drugs_df = pd.DataFrame()
-    gene_to_drugs = {}
-    bulk_omics_data = {}
+    loader_err = e
+    load_single_omics_studies = None  # type: ignore
+    load_kg_data = None  # type: ignore
+    load_ppi_data = None  # type: ignore
+
+kg_mod, kg_err = _safe_import_reload("kg_analysis")
+wgcna_mod, wgcna_err = _safe_import_reload("wgcna_ppi_analysis")
+iva, iva_err = _safe_import_reload("invitro_analysis")
+soa, soa_err = _safe_import_reload("single_omics_analysis")
+bo, bo_err = _safe_import_reload("bulk_omics")
 
 
 # =============================================================================
 # GENERAL FORMAT HELPERS
 # =============================================================================
-
 def _is_nanlike(x: object) -> bool:
     try:
         return x is None or (isinstance(x, float) and np.isnan(x))
@@ -242,21 +164,30 @@ def _fmt_num_commas(x: object, decimals: int = 2) -> str:
 
 
 # =============================================================================
-# PLOT HELPERS (RAW vs DISC vs ORIENTED)  [Single-omics tab]
+# SINGLE-OMICS PLOT HELPERS (uses soa methods for consistency)
 # =============================================================================
-
 def _collect_gene_metrics(gene_name: str, studies_data: dict) -> list[dict]:
     """
     Returns per-study dicts: study, auc_raw, auc_disc, auc_oriented, lfc, direction.
     Uses soa.find_gene_in_study + soa.extract_metrics_from_row for consistency.
     """
+    if soa is None:
+        return []
+
     out = []
     for study_name, df in (studies_data or {}).items():
-        row, _ = soa.find_gene_in_study(gene_name, df)
+        try:
+            row, _ = soa.find_gene_in_study(gene_name, df)
+        except Exception:
+            row = None
+
         if row is None:
             continue
 
-        auc, lfc, direction = soa.extract_metrics_from_row(row)
+        try:
+            auc, lfc, direction = soa.extract_metrics_from_row(row)
+        except Exception:
+            continue
 
         auc_raw = None
         try:
@@ -471,7 +402,6 @@ def make_auc_disc_distribution(metrics: list[dict]) -> go.Figure | None:
 # =============================================================================
 # KG DISPLAY HELPERS (UI ONLY)
 # =============================================================================
-
 def _fmt_pct(p: object) -> str:
     if _is_nanlike(p):
         return "N/A"
@@ -538,9 +468,8 @@ def _prepare_cluster_table(df: pd.DataFrame, sort_key: str, top_n: int) -> pd.Da
 
 
 # =============================================================================
-# WGCNA DISPLAY HELPERS (MODULE–TRAIT + PATHWAYS)
+# WGCNA DISPLAY HELPERS
 # =============================================================================
-
 def _match_module_row(df: pd.DataFrame, module: str) -> str | None:
     if df is None or df.empty:
         return None
@@ -620,16 +549,138 @@ def _annotate_genes_with_drugs(gene_df: pd.DataFrame, gene_to_drugs_map: dict, m
 
 
 # =============================================================================
-# MAIN APP
+# DATA LOADING (cached) – bulk uses bo.load_bulk_omics to avoid loader-name mismatch
 # =============================================================================
+@st.cache_data(show_spinner=False)
+def load_all_data_cached():
+    single_omics = {}
+    kg_data = {}
+    ppi_data = {}
+    wgcna_module_data = {}
+    wgcna_cor = pd.DataFrame()
+    wgcna_pval = pd.DataFrame()
+    wgcna_pathways = {}
+    active_drugs = pd.DataFrame()
+    gene_to_drugs = {}
+    bulk_omics_data = {}
 
+    # core loaders
+    if load_single_omics_studies is not None:
+        single_omics = load_single_omics_studies() or {}
+    if load_kg_data is not None:
+        kg_data = load_kg_data() or {}
+    if load_ppi_data is not None:
+        ppi_data = load_ppi_data() or {}
+
+    # WGCNA module
+    if wgcna_mod is not None:
+        try:
+            wgcna_module_data = wgcna_mod.load_wgcna_module_data() or {}
+        except Exception:
+            wgcna_module_data = {}
+
+        try:
+            wgcna_cor = wgcna_mod.load_wgcna_mod_trait_cor()
+        except Exception:
+            wgcna_cor = pd.DataFrame()
+
+        try:
+            wgcna_pval = wgcna_mod.load_wgcna_mod_trait_pval()
+        except Exception:
+            wgcna_pval = pd.DataFrame()
+
+        try:
+            wgcna_pathways = wgcna_mod.load_wgcna_pathways() or {}
+        except Exception:
+            wgcna_pathways = {}
+
+        try:
+            active_drugs = wgcna_mod.load_wgcna_active_drugs()
+            if active_drugs is None:
+                active_drugs = pd.DataFrame()
+        except Exception:
+            active_drugs = pd.DataFrame()
+
+        try:
+            if isinstance(active_drugs, pd.DataFrame) and not active_drugs.empty:
+                gene_to_drugs = wgcna_mod.build_gene_to_drugs_index(active_drugs) or {}
+        except Exception:
+            gene_to_drugs = {}
+
+    # Bulk omics
+    if bo is not None:
+        try:
+            bulk_omics_data = bo.load_bulk_omics() or {}
+        except Exception:
+            bulk_omics_data = {}
+
+    return (
+        single_omics,
+        kg_data,
+        wgcna_module_data,
+        ppi_data,
+        wgcna_cor,
+        wgcna_pval,
+        wgcna_pathways,
+        active_drugs,
+        gene_to_drugs,
+        bulk_omics_data,
+    )
+
+
+data_loaded = True
+load_error = None
+try:
+    (
+        single_omics_data,
+        kg_data,
+        wgcna_module_data,
+        ppi_data,
+        wgcna_cor,
+        wgcna_pval,
+        wgcna_pathways,
+        active_drugs_df,
+        gene_to_drugs,
+        bulk_omics_data,
+    ) = load_all_data_cached()
+except Exception as e:
+    data_loaded = False
+    load_error = e
+    single_omics_data = {}
+    kg_data = {}
+    wgcna_module_data = {}
+    ppi_data = {}
+    wgcna_cor = pd.DataFrame()
+    wgcna_pval = pd.DataFrame()
+    wgcna_pathways = {}
+    active_drugs_df = pd.DataFrame()
+    gene_to_drugs = {}
+    bulk_omics_data = {}
+
+
+# =============================================================================
+# SIDEBAR
+# =============================================================================
 st.sidebar.markdown("## 🔬 Meta Liver")
 search_query = st.sidebar.text_input("Search gene:", placeholder="e.g., SAA1, TP53, IL6").strip().upper()
 
-st.sidebar.caption(f"single_omics_analysis loaded from: {getattr(soa, '__file__', 'unknown')}")
-st.sidebar.caption(f"Citation: doi:{APP_DOI}")
+# diagnostics without crashing the app
+if loader_err is not None:
+    st.sidebar.error(f"Loader import failed: {loader_err}")
 
-if data_loaded:
+if soa is not None:
+    st.sidebar.caption(f"single_omics_analysis loaded from: {getattr(soa, '__file__', 'unknown')}")
+else:
+    st.sidebar.caption("single_omics_analysis not available")
+
+st.sidebar.caption(f"Citation: doi:{APP_DOI}")
+st.sidebar.markdown("---")
+
+if not data_loaded:
+    st.sidebar.error("✗ Error loading data")
+    if load_error is not None:
+        st.sidebar.caption(str(load_error))
+else:
     if single_omics_data:
         st.sidebar.success(f"✓ {len(single_omics_data)} studies loaded")
         with st.sidebar.expander("📊 Studies:"):
@@ -639,29 +690,44 @@ if data_loaded:
         st.sidebar.warning("⚠ No single-omics studies found")
 
     st.sidebar.success("✓ Knowledge graph loaded" if kg_data else "⚠ Knowledge graph not available")
-    st.sidebar.success(f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)" if wgcna_module_data else "⚠ WGCNA modules not available")
-    st.sidebar.success("✓ WGCNA moduleTraitCor loaded" if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty else "⚠ moduleTraitCor not available")
-    st.sidebar.success("✓ WGCNA moduleTraitPvalue loaded" if isinstance(wgcna_pval, pd.DataFrame) and not wgcna_pval.empty else "⚠ moduleTraitPvalue not available")
-    st.sidebar.success(f"✓ WGCNA pathways loaded ({len(wgcna_pathways)} modules)" if isinstance(wgcna_pathways, dict) and len(wgcna_pathways) > 0 else "⚠ WGCNA pathways not available")
-    st.sidebar.success("✓ Active drugs loaded" if isinstance(active_drugs_df, pd.DataFrame) and not active_drugs_df.empty else "⚠ Active drugs not available")
+    st.sidebar.success(
+        f"✓ WGCNA modules loaded ({len(wgcna_module_data)} modules)" if wgcna_module_data else "⚠ WGCNA modules not available"
+    )
+    st.sidebar.success(
+        "✓ WGCNA moduleTraitCor loaded" if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty else "⚠ moduleTraitCor not available"
+    )
+    st.sidebar.success(
+        "✓ WGCNA moduleTraitPvalue loaded" if isinstance(wgcna_pval, pd.DataFrame) and not wgcna_pval.empty else "⚠ moduleTraitPvalue not available"
+    )
+    st.sidebar.success(
+        f"✓ WGCNA pathways loaded ({len(wgcna_pathways)} modules)" if isinstance(wgcna_pathways, dict) and len(wgcna_pathways) > 0 else "⚠ WGCNA pathways not available"
+    )
+    st.sidebar.success(
+        "✓ Active drugs loaded" if isinstance(active_drugs_df, pd.DataFrame) and not active_drugs_df.empty else "⚠ Active drugs not available"
+    )
     st.sidebar.success("✓ PPI networks loaded" if ppi_data else "⚠ PPI networks not available")
 
-    try:
-        invitro_files = iva.discover_invitro_deg_files()
-        st.sidebar.success(f"✓ In vitro model DEGs found ({len(invitro_files)})" if invitro_files else "⚠ In vitro model DEGs not found (expected: stem_cell_model/*.parquet)")
-    except Exception as e:
-        st.sidebar.warning(f"⚠ In vitro model check failed: {e}")
+    if iva is not None:
+        try:
+            invitro_files = iva.discover_invitro_deg_files()
+            st.sidebar.success(
+                f"✓ In vitro model DEGs found ({len(invitro_files)})" if invitro_files else "⚠ In vitro model DEGs not found (expected: stem_cell_model/*.parquet)"
+            )
+        except Exception as e:
+            st.sidebar.warning(f"⚠ In vitro model check failed: {e}")
+    else:
+        st.sidebar.warning("⚠ In vitro module not available")
 
     if isinstance(bulk_omics_data, dict) and len(bulk_omics_data) > 0:
         n_files = int(sum(len(v) for v in bulk_omics_data.values()))
         st.sidebar.success(f"✓ Bulk-omics loaded ({n_files} files / {len(bulk_omics_data)} groups)")
     else:
-        st.sidebar.warning("⚠ Bulk-omics not available (expected: Bulk_Omics/<group>/*.tsv)")
-else:
-    st.sidebar.error("✗ Error loading data")
+        st.sidebar.warning("⚠ Bulk-omics not available (expected: Bulk_Omics/<group>/*.tsv|.csv|.parquet)")
 
-st.sidebar.markdown("---")
 
+# =============================================================================
+# MAIN PAGE
+# =============================================================================
 if not search_query:
     st.title("🔬 Meta Liver")
     st.markdown("*Hypothesis Engine for Liver Genomics in Metabolic Liver Dysfunction*")
@@ -681,13 +747,30 @@ doi: [{APP_DOI}]({APP_DOI_URL})
 else:
     st.title(f"🔬 {search_query}")
 
+    if soa is None:
+        st.error("single_omics_analysis module is not available, so the Single-Omics tab cannot run.")
+    if kg_mod is None:
+        st.warning("kg_analysis module is not available, so the Knowledge Graph tab may be limited.")
+    if wgcna_mod is None:
+        st.warning("wgcna_ppi_analysis module is not available, so the WGCNA tab may be limited.")
+    if iva is None:
+        st.warning("invitro_analysis module is not available, so the In vitro tab may be limited.")
+    if bo is None:
+        st.warning("bulk_omics module is not available, so the Bulk Omics tab may be limited.")
+
     if not single_omics_data:
         st.error("No single-omics studies found!")
     else:
-        consistency = soa.compute_consistency_score(search_query, single_omics_data)
+        consistency = None
+        if soa is not None:
+            try:
+                consistency = soa.compute_consistency_score(search_query, single_omics_data)
+            except Exception as e:
+                st.error(f"Single-omics scoring failed: {e}")
+                consistency = None
 
         if consistency is None:
-            st.warning(f"Gene '{search_query}' not found in any single-omics study")
+            st.warning(f"Gene '{search_query}' not found in any single-omics study (or scoring failed).")
         else:
             tab_omics, tab_kg, tab_wgcna, tab_invitro, tab_bulk = st.tabs(
                 [
@@ -851,227 +934,255 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
 
                 st.markdown("---")
                 st.markdown("**Detailed Results**")
-                results_df = soa.create_results_table(search_query, single_omics_data)
-                if results_df is not None:
-                    _st_df(results_df, hide_index=True)
+                if soa is not None:
+                    try:
+                        results_df = soa.create_results_table(search_query, single_omics_data)
+                    except Exception as e:
+                        results_df = None
+                        st.error(f"Failed to build results table: {e}")
+                    if results_df is not None:
+                        _st_df(results_df, hide_index=True)
+                    else:
+                        st.info("No per-study rows found for this gene.")
                 else:
-                    st.info("No per-study rows found for this gene.")
+                    st.info("single_omics_analysis not available.")
 
             with tab_kg:
-                st.markdown(
-                    """
-This tab places the selected gene in its network context within the MAFLD/MASH subgraph. It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness, eigenvector) indicating whether it behaves as a hub or peripheral node. The cluster view lists co-clustered genes, drugs, and disease annotations.
-"""
-                )
-                st.markdown("---")
-
-                if kg_data:
-                    kg_info = get_gene_kg_info(search_query, kg_data)
-
-                    if kg_info:
-                        cluster_id = kg_info.get("cluster", None)
-
-                        h1, h2, h3, h4 = st.columns(4)
-                        with h1:
-                            st.metric("Cluster", "N/A" if cluster_id is None else str(cluster_id))
-                        with h2:
-                            st.metric("Composite centrality", _fmt_pct(kg_info.get("composite_percentile")))
-                            st.caption(f"raw: {_fmt_num(kg_info.get('composite'), decimals=6)}")
-                        with h3:
-                            st.metric("Betweenness", _fmt_pct(kg_info.get("bet_percentile")))
-                            st.caption(f"raw: {_fmt_num_commas(kg_info.get('betweenness'), decimals=2)}")
-                        with h4:
-                            st.metric("PageRank", _fmt_pct(kg_info.get("pagerank_percentile")))
-                            st.caption(f"raw: {_fmt_num(kg_info.get('pagerank'), decimals=4)}")
-
-                        h5, h6, _, _ = st.columns(4)
-                        with h5:
-                            st.metric("Eigenvector", _fmt_pct(kg_info.get("eigen_percentile")))
-                            st.caption(f"raw: {_fmt_num(kg_info.get('eigen'), decimals=6, sci_if_small=True)}")
-                        with h6:
-                            st.caption("Percentiles computed across the MASH subgraph nodes table.")
-
-                        st.markdown("---")
-
-                        interpretation = interpret_centrality(
-                            kg_info.get("pagerank", np.nan),
-                            kg_info.get("betweenness", np.nan),
-                            kg_info.get("eigen", np.nan),
-                            pagerank_pct=kg_info.get("pagerank_percentile"),
-                            betweenness_pct=kg_info.get("bet_percentile"),
-                            eigen_pct=kg_info.get("eigen_percentile"),
-                            composite_pct=kg_info.get("composite_percentile"),
-                        )
-                        st.info(f"📍 {interpretation}")
-
-                        if cluster_id is None or str(cluster_id).strip() == "" or str(cluster_id).lower() == "nan":
-                            st.warning("Cluster ID missing for this node; cannot display cluster neighbours.")
-                        else:
-                            st.markdown("**Nodes in Cluster**")
-
-                            ctl1, ctl2 = st.columns(2)
-                            with ctl1:
-                                top_n = st.slider("Show top N per table", 10, 300, 50, step=10, key="kg_top_n")
-                            with ctl2:
-                                sort_key = st.selectbox(
-                                    "Sort by",
-                                    [
-                                        "Composite %ile",
-                                        "PR %ile",
-                                        "Bet %ile",
-                                        "Eigen %ile",
-                                        "PageRank (raw)",
-                                        "Betweenness (raw)",
-                                        "Eigen (raw)",
-                                        "Name",
-                                    ],
-                                    index=0,
-                                    key="kg_sort_key",
-                                )
-
-                            tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
-
-                            with tab_genes:
-                                genes_df = get_cluster_genes(cluster_id, kg_data)
-                                if genes_df is not None and not genes_df.empty:
-                                    _st_df(_prepare_cluster_table(genes_df, sort_key, top_n), hide_index=True)
-                                else:
-                                    st.write("No genes/proteins in this cluster")
-
-                            with tab_drugs:
-                                drugs_df = get_cluster_drugs(cluster_id, kg_data)
-                                if drugs_df is not None and not drugs_df.empty:
-                                    _st_df(_prepare_cluster_table(drugs_df, sort_key, top_n), hide_index=True)
-                                else:
-                                    st.write("No drugs in this cluster")
-
-                            with tab_diseases:
-                                diseases_df = get_cluster_diseases(cluster_id, kg_data)
-                                if diseases_df is not None and not diseases_df.empty:
-                                    _st_df(_prepare_cluster_table(diseases_df, sort_key, top_n), hide_index=True)
-                                else:
-                                    st.write("No diseases in this cluster")
-                    else:
-                        st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
+                if kg_mod is None:
+                    st.warning("⚠ Knowledge graph module not available.")
                 else:
-                    st.warning("⚠ Knowledge graph data not loaded")
+                    st.markdown(
+                        """
+This tab places the selected gene in its network context within the MAFLD/MASH subgraph. It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness, eigenvector). The cluster view lists co-clustered genes, drugs, and disease annotations.
+"""
+                    )
+                    st.markdown("---")
+
+                    if kg_data:
+                        kg_info = kg_mod.get_gene_kg_info(search_query, kg_data)
+
+                        if kg_info:
+                            cluster_id = kg_info.get("cluster", None)
+
+                            h1, h2, h3, h4 = st.columns(4)
+                            with h1:
+                                st.metric("Cluster", "N/A" if cluster_id is None else str(cluster_id))
+                            with h2:
+                                st.metric("Composite centrality", _fmt_pct(kg_info.get("composite_percentile")))
+                                st.caption(f"raw: {_fmt_num(kg_info.get('composite'), decimals=6)}")
+                            with h3:
+                                st.metric("Betweenness", _fmt_pct(kg_info.get("bet_percentile")))
+                                st.caption(f"raw: {_fmt_num_commas(kg_info.get('betweenness'), decimals=2)}")
+                            with h4:
+                                st.metric("PageRank", _fmt_pct(kg_info.get("pagerank_percentile")))
+                                st.caption(f"raw: {_fmt_num(kg_info.get('pagerank'), decimals=4)}")
+
+                            h5, h6, _, _ = st.columns(4)
+                            with h5:
+                                st.metric("Eigenvector", _fmt_pct(kg_info.get("eigen_percentile")))
+                                st.caption(f"raw: {_fmt_num(kg_info.get('eigen'), decimals=6, sci_if_small=True)}")
+                            with h6:
+                                st.caption("Percentiles computed across the MASH subgraph nodes table.")
+
+                            st.markdown("---")
+
+                            interpretation = kg_mod.interpret_centrality(
+                                kg_info.get("pagerank", np.nan),
+                                kg_info.get("betweenness", np.nan),
+                                kg_info.get("eigen", np.nan),
+                                pagerank_pct=kg_info.get("pagerank_percentile"),
+                                betweenness_pct=kg_info.get("bet_percentile"),
+                                eigen_pct=kg_info.get("eigen_percentile"),
+                                composite_pct=kg_info.get("composite_percentile"),
+                            )
+                            st.info(f"📍 {interpretation}")
+
+                            if cluster_id is None or str(cluster_id).strip() == "" or str(cluster_id).lower() == "nan":
+                                st.warning("Cluster ID missing for this node; cannot display cluster neighbours.")
+                            else:
+                                st.markdown("**Nodes in Cluster**")
+
+                                ctl1, ctl2 = st.columns(2)
+                                with ctl1:
+                                    top_n = st.slider("Show top N per table", 10, 300, 50, step=10, key="kg_top_n")
+                                with ctl2:
+                                    sort_key = st.selectbox(
+                                        "Sort by",
+                                        [
+                                            "Composite %ile",
+                                            "PR %ile",
+                                            "Bet %ile",
+                                            "Eigen %ile",
+                                            "PageRank (raw)",
+                                            "Betweenness (raw)",
+                                            "Eigen (raw)",
+                                            "Name",
+                                        ],
+                                        index=0,
+                                        key="kg_sort_key",
+                                    )
+
+                                tab_genes, tab_drugs, tab_diseases = st.tabs(["Genes/Proteins", "Drugs", "Diseases"])
+
+                                with tab_genes:
+                                    genes_df = kg_mod.get_cluster_genes(cluster_id, kg_data)
+                                    if genes_df is not None and not genes_df.empty:
+                                        _st_df(_prepare_cluster_table(genes_df, sort_key, top_n), hide_index=True)
+                                    else:
+                                        st.write("No genes/proteins in this cluster")
+
+                                with tab_drugs:
+                                    drugs_df = kg_mod.get_cluster_drugs(cluster_id, kg_data)
+                                    if drugs_df is not None and not drugs_df.empty:
+                                        _st_df(_prepare_cluster_table(drugs_df, sort_key, top_n), hide_index=True)
+                                    else:
+                                        st.write("No drugs in this cluster")
+
+                                with tab_diseases:
+                                    diseases_df = kg_mod.get_cluster_diseases(cluster_id, kg_data)
+                                    if diseases_df is not None and not diseases_df.empty:
+                                        _st_df(_prepare_cluster_table(diseases_df, sort_key, top_n), hide_index=True)
+                                    else:
+                                        st.write("No diseases in this cluster")
+                        else:
+                            st.warning(f"⚠ '{search_query}' not found in MASH subgraph")
+                    else:
+                        st.warning("⚠ Knowledge graph data not loaded")
 
             with tab_wgcna:
-                st.markdown(
-                    """
-This tab focuses on WGCNA-derived co-expression context, designed to support analyses stratified by fibrosis stage (for example F0–F4, when those layers are present in the underlying results). It reports WGCNA module assignment, module–trait relationships, and module-specific enrichment tables, then shows direct PPI interactors and local network statistics for the selected gene.
+                if wgcna_mod is None:
+                    st.warning("⚠ WGCNA module not available.")
+                else:
+                    st.markdown(
+                        """
+This tab focuses on WGCNA-derived co-expression context. It reports WGCNA module assignment, module–trait relationships, module enrichment tables, then shows direct PPI interactors and local network statistics for the selected gene.
 """
-                )
-                st.markdown("---")
+                    )
+                    st.markdown("---")
 
-                st.markdown("**WGCNA Co-expression Module**")
-                if wgcna_module_data:
-                    gene_module_info = get_gene_module(search_query, wgcna_module_data)
-                    if gene_module_info:
-                        module_name = gene_module_info["module"]
-                        st.markdown(f"**Module Assignment:** {module_name}")
+                    st.markdown("**WGCNA Co-expression Module**")
+                    if wgcna_module_data:
+                        gene_module_info = wgcna_mod.get_gene_module(search_query, wgcna_module_data)
+                        if gene_module_info:
+                            module_name = gene_module_info["module"]
+                            st.markdown(f"**Module Assignment:** {module_name}")
 
-                        module_genes = get_module_genes(module_name, wgcna_module_data)
-                        if module_genes is not None:
-                            st.markdown(f"Top genes in module {module_name}:")
+                            module_genes = wgcna_mod.get_module_genes(module_name, wgcna_module_data)
+                            if module_genes is not None:
+                                st.markdown(f"Top genes in module {module_name}:")
 
-                            show_top_genes = st.slider(
-                                "Show top N genes",
-                                min_value=5,
-                                max_value=200,
-                                value=15,
-                                step=5,
-                                key="wgcna_top_n_genes",
+                                show_top_genes = st.slider(
+                                    "Show top N genes",
+                                    min_value=5,
+                                    max_value=200,
+                                    value=15,
+                                    step=5,
+                                    key="wgcna_top_n_genes",
+                                )
+
+                                max_drugs_per_gene = st.slider(
+                                    "Show up to N drugs per gene",
+                                    min_value=1,
+                                    max_value=25,
+                                    value=5,
+                                    step=1,
+                                    key="wgcna_max_drugs_per_gene",
+                                )
+
+                                view_df = module_genes.head(int(show_top_genes)).copy()
+                                view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, max_drugs_per_gene)
+                                _st_df(view_df, hide_index=True)
+                            else:
+                                st.info(f"No other genes found in module {module_name}")
+
+                            st.markdown("---")
+                            st.markdown("**Module–trait relationships (WGCNA)**")
+                            mt = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
+                            if mt is None or mt.empty:
+                                st.info("Module–trait tables not available for this module (check module index names).")
+                            else:
+                                _st_df(mt, hide_index=True)
+
+                            st.markdown("---")
+                            st.markdown("**Pathways / enrichment (module)**")
+                            top_n_pathways = st.slider(
+                                "Show top N pathways",
+                                min_value=10,
+                                max_value=300,
+                                value=50,
+                                step=10,
+                                key="wgcna_top_n_pathways",
                             )
-
-                            max_drugs_per_gene = st.slider(
-                                "Show up to N drugs per gene",
-                                min_value=1,
-                                max_value=25,
-                                value=5,
-                                step=1,
-                                key="wgcna_max_drugs_per_gene",
-                            )
-
-                            view_df = module_genes.head(int(show_top_genes)).copy()
-                            view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, max_drugs_per_gene)
-                            _st_df(view_df, hide_index=True)
+                            key = str(module_name).strip().lower()
+                            dfp = (wgcna_pathways or {}).get(key)
+                            if dfp is None or dfp.empty:
+                                st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
+                            else:
+                                _st_df(dfp.head(int(top_n_pathways)), hide_index=True)
                         else:
-                            st.info(f"No other genes found in module {module_name}")
-
-                        st.markdown("---")
-                        st.markdown("**Module–trait relationships (WGCNA)**")
-                        mt = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
-                        if mt is None or mt.empty:
-                            st.info("Module–trait tables not available for this module (check module index names).")
-                        else:
-                            _st_df(mt, hide_index=True)
-
-                        st.markdown("---")
-                        st.markdown("**Pathways / enrichment (module)**")
-                        top_n_pathways = st.slider(
-                            "Show top N pathways",
-                            min_value=10,
-                            max_value=300,
-                            value=50,
-                            step=10,
-                            key="wgcna_top_n_pathways",
-                        )
-                        key = str(module_name).strip().lower()
-                        dfp = (wgcna_pathways or {}).get(key)
-                        if dfp is None or dfp.empty:
-                            st.info(f"No enrichment table found for module '{module_name}' under (wgcna|wcgna)/pathways/.")
-                        else:
-                            _st_df(dfp.head(int(top_n_pathways)), hide_index=True)
+                            st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
                     else:
-                        st.info(f"⚠ '{search_query}' not found in WGCNA module assignments")
-                else:
-                    st.info("⚠ WGCNA module data not available")
+                        st.info("⚠ WGCNA module data not available")
 
-                st.markdown("---")
-                st.markdown("**Protein–Protein Interaction Network**")
-                if ppi_data:
-                    ppi_df = find_ppi_interactors(search_query, ppi_data)
-                    if ppi_df is not None:
-                        net_stats = get_network_stats(search_query, ppi_data)
-                        if net_stats:
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric("Direct Interactors", net_stats["degree"])
-                            with col2:
-                                st.write(f"**Network Property:** {net_stats['description']}")
-                        st.markdown(f"Direct interaction partners of {search_query}:")
-                        _st_df(ppi_df, hide_index=True)
+                    st.markdown("---")
+                    st.markdown("**Protein–Protein Interaction Network**")
+                    if ppi_data and hasattr(wgcna_mod, "find_ppi_interactors") and hasattr(wgcna_mod, "get_network_stats"):
+                        ppi_df = wgcna_mod.find_ppi_interactors(search_query, ppi_data)
+                        if ppi_df is not None:
+                            net_stats = wgcna_mod.get_network_stats(search_query, ppi_data)
+                            if net_stats:
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("Direct Interactors", net_stats.get("degree", "N/A"))
+                                with col2:
+                                    st.write(f"**Network Property:** {net_stats.get('description', 'N/A')}")
+                            st.markdown(f"Direct interaction partners of {search_query}:")
+                            _st_df(ppi_df, hide_index=True)
+                        else:
+                            st.info(f"⚠ '{search_query}' not found in PPI networks")
                     else:
-                        st.info(f"⚠ '{search_query}' not found in PPI networks")
-                else:
-                    st.info("⚠ PPI network data not available")
+                        st.info("⚠ PPI network data not available")
 
             with tab_invitro:
-                st.markdown(
-                    """
+                if iva is None:
+                    st.warning("⚠ In vitro module not available.")
+                else:
+                    st.markdown(
+                        """
 This tab summarises differential expression from a human stem cell-derived MASLD model using induced hepatocytes (iHeps).
 
-Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA** (oleic and palmitic acid),
-**OA+PA + Resistin/Myostatin** (adipose- and muscle-derived signals), and **OA+PA + Resistin/Myostatin + PBMC co-culture**
-(immune cells were not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
+Healthy controls are labelled **HCM**. Disease modelling conditions include **OA+PA**, **OA+PA + Resistin/Myostatin**, and **OA+PA + Resistin/Myostatin + PBMC co-culture** (immune cells were not sequenced; iHeps RNA-seq only). Two iHeps lines are supported: **1b** and **5a**.
 """
-                )
-                st.markdown("---")
-                iva.render_invitro_tab(search_query)
+                    )
+                    st.markdown("---")
+                    try:
+                        iva.render_invitro_tab(search_query)
+                    except Exception as e:
+                        st.error(f"In vitro tab failed: {e}")
 
             with tab_bulk:
-                # Call whichever signature your bulk_omics.py currently exposes.
-                sig = None
-                try:
-                    sig = inspect.signature(bo.render_bulk_omics_tab)
-                except Exception:
-                    sig = None
-
-                if sig is not None and "bulk_data" in sig.parameters:
-                    bo.render_bulk_omics_tab(search_query, bulk_data=bulk_omics_data)
+                if bo is None:
+                    st.warning("⚠ Bulk omics module not available.")
                 else:
-                    bo.render_bulk_omics_tab(search_query)
+                    st.markdown(
+                        "In Bulk Omics contrasts, **log2FoldChange > 0 means the gene is enriched in the first-named group of the contrast folder** "
+                        "(for example ‘MASLD vs Control’: positive log2FC implies enriched in MASLD)."
+                    )
+                    st.markdown("---")
+
+                    sig = None
+                    try:
+                        sig = inspect.signature(bo.render_bulk_omics_tab)
+                    except Exception:
+                        sig = None
+
+                    try:
+                        if sig is not None and "bulk_data" in sig.parameters:
+                            bo.render_bulk_omics_tab(search_query, bulk_data=bulk_omics_data)
+                        else:
+                            bo.render_bulk_omics_tab(search_query)
+                    except Exception as e:
+                        st.error(f"Bulk Omics tab failed: {e}")
 
 st.markdown("---")
 st.markdown(
