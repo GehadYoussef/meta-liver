@@ -29,11 +29,48 @@ from robust_data_loader import load_single_omics_studies
 # ROBUST GENE MATCHING
 # =============================================================================
 
-def find_gene_in_study(gene_name: str, study_df: pd.DataFrame) -> Tuple[Optional[pd.Series], Optional[str]]:
+def _get_gene_lookup_cached(study_df: pd.DataFrame, gene_col: str) -> Dict[str, int]:
+    """
+    Build (and memoise) an exact-match lookup: lower(gene) -> first row index.
+    Stored in study_df.attrs to avoid recomputing on every gene query.
+    """
+    if study_df is None or study_df.empty:
+        return {}
+
+    try:
+        cached = study_df.attrs.get("_gene_lookup_cache", None)
+        if isinstance(cached, dict) and cached.get("gene_col") == gene_col and isinstance(cached.get("lookup"), dict):
+            return cached["lookup"]
+    except Exception:
+        cached = None
+
+    ser = study_df[gene_col].astype(str).str.strip().str.lower()
+    lookup: Dict[str, int] = {}
+    # keep first occurrence if duplicates exist
+    for i, g in enumerate(ser.tolist()):
+        if g and g not in lookup:
+            lookup[g] = i
+
+    try:
+        study_df.attrs["_gene_lookup_cache"] = {"gene_col": gene_col, "lookup": lookup}
+    except Exception:
+        pass
+
+    return lookup
+
+
+def find_gene_in_study(
+    gene_name: str,
+    study_df: pd.DataFrame,
+    *,
+    allow_substring: bool = True,
+) -> Tuple[Optional[pd.Series], Optional[str]]:
     """
     Find gene in study dataframe with robust matching.
+
+    Exact match uses a cached lookup (fast).
+    Substring match is optional and is expensive on large tables.
     Returns (matched_row, gene_col_name) or (None, None) if not found.
-    Exact match preferred over substring match.
     """
     if study_df is None or study_df.empty:
         return None, None
@@ -46,17 +83,24 @@ def find_gene_in_study(gene_name: str, study_df: pd.DataFrame) -> Tuple[Optional
     else:
         return None, None
 
-    col = study_df[gene_col].astype(str)
+    gkey = str(gene_name).strip().lower()
+    if not gkey:
+        return None, None
 
-    exact_mask = col.str.lower() == str(gene_name).lower()
-    exact_match = study_df[exact_mask]
-    if not exact_match.empty:
-        return exact_match.iloc[0], gene_col
+    lookup = _get_gene_lookup_cached(study_df, gene_col)
+    if gkey in lookup:
+        try:
+            return study_df.iloc[int(lookup[gkey])], gene_col
+        except Exception:
+            pass
 
-    sub_mask = col.str.contains(str(gene_name), case=False, na=False)
-    sub_match = study_df[sub_mask]
-    if not sub_match.empty:
-        return sub_match.iloc[0], gene_col
+    if allow_substring:
+        # Fallback: expensive scan. Keep it for interactive gene explorer use-cases.
+        col = study_df[gene_col].astype(str)
+        sub_mask = col.str.contains(str(gene_name), case=False, na=False)
+        sub_match = study_df[sub_mask]
+        if not sub_match.empty:
+            return sub_match.iloc[0], gene_col
 
     return None, None
 
@@ -169,7 +213,7 @@ def compute_consistency_score(
     found_count = 0
 
     for _, df in studies_data.items():
-        row, _ = find_gene_in_study(gene_name, df)
+        row, _ = find_gene_in_study(gene_name, df, allow_substring=False)
         if row is None:
             continue
 
@@ -319,7 +363,7 @@ def create_lollipop_plot(
     plot_data = []
 
     for study_name, df in (studies_data or {}).items():
-        row, _ = find_gene_in_study(gene_name, df)
+        row, _ = find_gene_in_study(gene_name, df, allow_substring=False)
         if row is None:
             continue
 
@@ -456,7 +500,7 @@ def create_auc_logfc_scatter(
     plot_data = []
 
     for study_name, df in (studies_data or {}).items():
-        row, _ = find_gene_in_study(gene_name, df)
+        row, _ = find_gene_in_study(gene_name, df, allow_substring=False)
         if row is None:
             continue
 
@@ -568,7 +612,7 @@ def create_results_table(
     results = []
 
     for study_name, df in (studies_data or {}).items():
-        row, _ = find_gene_in_study(gene_name, df)
+        row, _ = find_gene_in_study(gene_name, df, allow_substring=False)
         if row is None:
             continue
 

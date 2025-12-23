@@ -1500,27 +1500,34 @@ def _ensure_session_cache(name: str) -> dict:
     return st.session_state[name]
 
 
-@st.cache_data(show_spinner=False)
 def _single_omics_gene_universe(studies: dict) -> List[str]:
+    """
+    Gene universe for single-omics tables.
+
+    NOTE: Avoid st.cache_data with large dict/DataFrame inputs because Streamlit
+    will hash the full object graph on every run. We memoise in session_state
+    keyed by id(studies) instead.
+    """
+    cache = _ensure_session_cache("_cache_universe_single")
+    key = id(studies)
+    if key in cache:
+        return cache[key]
+
     genes: Set[str] = set()
-    for _nm, df in (studies or {}).items():
-        if df is None or df.empty:
-            continue
-        gcol = None
-        for c in ["Gene", "gene", "Symbol", "symbol", "gene_symbol", "GeneSymbol"]:
-            if c in df.columns:
-                gcol = c
-                break
-        if gcol is None:
-            continue
-        try:
-            vals = df[gcol].astype(str).map(_normalise_gene)
-            for v in vals:
-                if v:
-                    genes.add(v)
-        except Exception:
-            continue
-    return sorted(genes)
+    if studies:
+        for _, df in studies.items():
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                continue
+            if "Gene" in df.columns:
+                vals = df["Gene"].astype(str).map(_normalise_gene)
+                genes.update({v for v in vals if v})
+            elif "gene" in df.columns:
+                vals = df["gene"].astype(str).map(_normalise_gene)
+                genes.update({v for v in vals if v})
+
+    out = sorted(genes)
+    cache[key] = out
+    return out
 
 
 def _looks_like_gene_symbol(x: str) -> bool:
@@ -1539,37 +1546,40 @@ def _looks_like_gene_symbol(x: str) -> bool:
     return s.upper() == s
 
 
-@st.cache_data(show_spinner=False)
 def _kg_gene_universe(kg_data_in: dict) -> List[str]:
+    """
+    Gene universe for KG nodes.
+
+    Same rationale as _single_omics_gene_universe: avoid st.cache_data hashing
+    of large dict inputs.
+    """
+    cache = _ensure_session_cache("_cache_universe_kg")
+    key = id(kg_data_in)
+    if key in cache:
+        return cache[key]
+
     genes: Set[str] = set()
-    for _nm, df in (kg_data_in or {}).items():
-        if df is None or df.empty:
-            continue
-        if "Name" not in df.columns:
-            continue
-
-        type_col = None
-        for c in ["Type", "type", "NodeType", "node_type", "Node Type", "nodeType", "kind", "Kind"]:
-            if c in df.columns:
-                type_col = c
-                break
-
+    if kg_mod is not None and kg_data_in:
         try:
-            if type_col is not None:
-                t = df[type_col].astype(str).str.lower()
-                mask = t.str.contains("gene") | t.str.contains("protein")
-                names = df.loc[mask, "Name"].astype(str)
+            nodes = kg_data_in.get("nodes", None)
+            if isinstance(nodes, pd.DataFrame) and not nodes.empty:
+                if "gene" in nodes.columns:
+                    vals = nodes["gene"].astype(str).map(_normalise_gene)
+                    genes.update({v for v in vals if v})
+                elif "Gene" in nodes.columns:
+                    vals = nodes["Gene"].astype(str).map(_normalise_gene)
+                    genes.update({v for v in vals if v})
             else:
-                names = df["Name"].astype(str)
+                # fall back: try module helper
+                g = kg_mod.get_all_genes(kg_data_in)
+                if isinstance(g, (list, tuple, set)):
+                    genes.update({_normalise_gene(x) for x in g if _normalise_gene(x)})
         except Exception:
-            continue
+            pass
 
-        for v in names:
-            s = _normalise_gene(v)
-            if s and _looks_like_gene_symbol(s):
-                genes.add(s)
-
-    return sorted(genes)
+    out = sorted(genes)
+    cache[key] = out
+    return out
 
 
 def _normalise_module_name(m: object) -> str:
@@ -1847,8 +1857,15 @@ def _get_wgcna_summary(gene: str, wgcna_module_data_in: dict, trait: str) -> dic
     return out
 
 
-def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.DataFrame], padj_thr: float, require_both_lines: bool) -> dict:
+def _get_invitro_summary(
+    gene: str,
+    invitro_tables: Dict[Tuple[str, str], pd.DataFrame],
+    padj_thr: float,
+    require_both_lines: bool,
+) -> dict:
     cache = _ensure_session_cache("_cache_invitro")
+    dfidx_cache = _ensure_session_cache("_cache_invitro_dfidx")
+
     g = _normalise_gene(gene)
     if not g:
         return {}
@@ -1857,37 +1874,63 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
         return cache[key]
 
     per_contrast: Dict[str, dict] = {}
-    if invitro_tables:
-        contrasts = sorted({c for (_l, c) in invitro_tables.keys()})
-        for c in contrasts:
-            rows = []
-            for (line, cc), df in invitro_tables.items():
-                if cc != c or df is None or df.empty:
-                    continue
-                hit = df.loc[df["Gene"] == g]
-                if hit.empty:
-                    continue
-                r = hit.iloc[0]
-                lfc = float(r.get("log2FoldChange", np.nan)) if pd.notna(r.get("log2FoldChange", np.nan)) else np.nan
-                padj = float(r.get("padj", np.nan)) if pd.notna(r.get("padj", np.nan)) else np.nan
-                sig = True if np.isnan(padj) else (padj <= padj_thr)
-                if np.isnan(lfc):
-                    direction = "missing"
-                elif lfc > 0:
-                    direction = "up"
-                elif lfc < 0:
-                    direction = "down"
-                else:
-                    direction = "zero"
-                rows.append({"line": str(line), "lfc": lfc, "padj": padj, "sig": sig, "dir": direction})
 
+    if invitro_tables:
+        # First pass: collect hits by contrast (iterate tables once, O(#tables))
+        rows_by_contrast: Dict[str, List[dict]] = {}
+
+        for (line, contrast), df in invitro_tables.items():
+            if df is None or df.empty:
+                continue
+            dkey = (line, contrast)
+
+            dfi = dfidx_cache.get(dkey)
+            if dfi is None:
+                # Prefer index lookup on Gene
+                if "Gene" in df.columns:
+                    try:
+                        dfi = df.set_index("Gene", drop=False)
+                    except Exception:
+                        dfi = df
+                else:
+                    dfi = df
+                dfidx_cache[dkey] = dfi
+
+            if "Gene" not in dfi.columns:
+                continue
+
+            # Fast exact lookup
+            try:
+                hit = dfi.loc[g]
+            except Exception:
+                continue
+
+            r = hit.iloc[0] if isinstance(hit, pd.DataFrame) else hit
+            lfc = pd.to_numeric(r.get("log2FoldChange", np.nan), errors="coerce")
+            padj = pd.to_numeric(r.get("padj", np.nan), errors="coerce")
+
+            sig = True if pd.isna(padj) else (float(padj) <= float(padj_thr))
+            if pd.isna(lfc):
+                direction = "missing"
+            elif float(lfc) > 0:
+                direction = "up"
+            elif float(lfc) < 0:
+                direction = "down"
+            else:
+                direction = "zero"
+
+            rows_by_contrast.setdefault(str(contrast), []).append(
+                {"line": str(line), "lfc": float(lfc) if pd.notna(lfc) else np.nan, "padj": float(padj) if pd.notna(padj) else np.nan, "sig": sig, "dir": direction}
+            )
+
+        # Second pass: summarise per contrast (cheap)
+        for c, rows in rows_by_contrast.items():
             if not rows:
                 continue
 
-            # consistency logic
             sig_rows = [r for r in rows if r["sig"] and r["dir"] in ("up", "down")]
+
             if require_both_lines:
-                # need at least two lines, both significant, same direction
                 ok = False
                 cons_dir = "mixed"
                 if len(sig_rows) >= 2:
@@ -1904,7 +1947,6 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
                     "mean_lfc": float(np.nanmean([r["lfc"] for r in rows])),
                 }
             else:
-                # any line significant counts
                 ok = len(sig_rows) >= 1
                 cons_dir = "mixed"
                 if len(sig_rows) == 1:
@@ -1921,8 +1963,8 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
                     "mean_lfc": float(np.nanmean([r["lfc"] for r in rows])),
                 }
 
-    # compact summary strings
     ok_contrasts = [c for c, d in per_contrast.items() if d.get("ok") is True]
+
     out = {
         "ok_contrasts": ok_contrasts,
         "n_ok": len(ok_contrasts),
@@ -1930,8 +1972,6 @@ def _get_invitro_summary(gene: str, invitro_tables: Dict[Tuple[str, str], pd.Dat
     }
     cache[key] = out
     return out
-
-
 def _get_bulk_summary(
     gene: str,
     bulk_data_in: dict,
@@ -1942,6 +1982,8 @@ def _get_bulk_summary(
     require_sig_all_found: bool,
 ) -> dict:
     cache = _ensure_session_cache("_cache_bulk")
+    dfidx_cache = _ensure_session_cache("_cache_bulk_dfidx")
+
     g = _normalise_gene(gene)
     if not g:
         return {}
@@ -1964,7 +2006,7 @@ def _get_bulk_summary(
         sig_found = 0
         n_padj_testable = 0
 
-        for _study, df in studies.items():
+        for study_name, df in studies.items():
             if df is None or (isinstance(df, pd.DataFrame) and df.empty):
                 continue
 
@@ -1977,11 +2019,23 @@ def _get_bulk_summary(
             if "Symbol" not in dfn.columns:
                 continue
 
-            hit = dfn.loc[dfn["Symbol"] == g]
-            if hit.empty:
+            dkey = (grp, study_name)
+            dfi = dfidx_cache.get(dkey)
+            if dfi is None:
+                try:
+                    dfi = dfn.set_index("Symbol", drop=False)
+                except Exception:
+                    dfi = dfn
+                dfidx_cache[dkey] = dfi
+
+            # Fast exact lookup
+            try:
+                hit = dfi.loc[g]
+            except Exception:
                 continue
 
-            r = hit.iloc[0]
+            r = hit.iloc[0] if isinstance(hit, pd.DataFrame) else hit
+
             lfc = pd.to_numeric(r.get("log2FoldChange", np.nan), errors="coerce")
             padj = pd.to_numeric(r.get("padj", np.nan), errors="coerce")
 
@@ -2022,16 +2076,13 @@ def _get_bulk_summary(
                 else:
                     direction = "mixed"
                     dir_ok = False
-        else:
-            if len(signs) > 0:
-                direction = "up" if pos >= neg else "down"
 
-        ok = (found >= int(min_n_studies)) and dir_ok and sig_ok
+        ok = sig_ok and dir_ok and (found >= int(min_n_studies))
 
-        per_group[grp] = {
+        per_group[str(grp)] = {
             "ok": ok,
-            "n_found": found,
-            "n_sig": sig_found,
+            "found": found,
+            "sig_found": sig_found,
             "direction": direction,
             "pos": pos,
             "neg": neg,
@@ -2041,12 +2092,6 @@ def _get_bulk_summary(
     out = {"ok_groups": ok_groups, "n_ok": len(ok_groups), "per_group": per_group}
     cache[key] = out
     return out
-
-
-
-# =============================================================================
-# GENE SCREENER: MAIN DRIVER
-# =============================================================================
 def run_gene_screener(
     *,
     max_return: int,
@@ -2112,10 +2157,9 @@ def run_gene_screener(
                         except Exception:
                             dfn = dfn
                     if "Symbol" in dfn.columns:
-                        vals = dfn["Symbol"].astype(str).map(_normalise_gene)
-                        for v in vals:
-                            if v:
-                                candidates.add(v)
+                        vals = dfn["Symbol"].astype(str).str.strip().str.upper()
+                        vals = vals[vals != ""]
+                        candidates.update(set(vals.unique().tolist()))
 
     elif use_invitro and invitro_contrasts:
         for (_line, contrast), df in invitro_tables.items():
@@ -2123,9 +2167,9 @@ def run_gene_screener(
                 continue
             if df is None or df.empty:
                 continue
-            for v in df["Gene"].astype(str).map(_normalise_gene):
-                if v:
-                    candidates.add(v)
+            vals = df["Gene"].astype(str).str.strip().str.upper()
+            vals = vals[vals != ""]
+            candidates.update(set(vals.unique().tolist()))
 
     elif use_kg and all_kg:
         candidates = set(all_kg)
