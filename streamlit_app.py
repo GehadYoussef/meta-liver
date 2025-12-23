@@ -2883,8 +2883,6 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
             
             **Betweenness centrality**: how often a gene lies on shortest paths between other genes. High betweenness means a bridge/bottleneck that connects otherwise separate parts of the graph.
             
-            **Degree centrality**: how many direct neighbours a gene has (raw connectivity).
-            
             **Composite centrality (percentile)**: a simple aggregate rank across the above scores after normalisation; use it to sort, then sanity-check with the individual metrics.
                     """
                 )
