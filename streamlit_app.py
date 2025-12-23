@@ -2866,11 +2866,26 @@ This tab summarises gene-level evidence across the single-omics datasets. AUROC 
             st.warning("⚠ Knowledge graph module not available.")
         else:
             st.markdown(
-                """
+            """
 This tab places the selected gene in its network context within the MAFLD/MASH subgraph. It reports whether the gene is present, its assigned cluster, and centrality metrics (PageRank, betweenness, eigenvector). The cluster view lists co-clustered genes, drugs, and disease annotations.
 """
             )
-            st.markdown("---")
+
+            with st.expander("What do these centrality scores mean?"):
+                st.markdown(
+                """
+**Betweenness**: how often a node sits on shortest paths between other nodes; high means it is a bridge between network regions.
+
+**PageRank**: the probability a random walker lands on the node; high means it is influential, especially if connected to other influential nodes.
+
+**Eigenvector**: importance based on being connected to other important nodes; high means “well-connected to well-connected”.
+"""
+                )
+
+        st.markdown("---")
+
+
+st.markdown("---")
 
             if kg_data:
                 kg_info = kg_mod.get_gene_kg_info(search_query, kg_data)
