@@ -1387,7 +1387,7 @@ def _annotate_genes_with_drugs(gene_df: pd.DataFrame, gene_to_drugs_map: dict, m
 # =============================================================================
 # DATA LOADING (cached)
 # =============================================================================
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def load_all_data_cached():
     single_omics = {}
     kg_data = {}
@@ -2871,6 +2871,23 @@ This tab places the selected gene in its network context within the MAFLD/MASH s
 """
             )
             st.markdown("---")
+
+            with st.expander('What do the KG headline scores mean?'):
+                st.markdown(
+                    """
+            These are **network-topology** scores computed on the knowledge graph (gene nodes + their curated relationships). They tell you how a gene sits in the graph; they do **not** prove causality.
+            
+            **PageRank**: a random-walk score. A gene is high if you are likely to 'land on it' when you keep walking through edges; it rewards being connected to other well-connected genes.
+            
+            **Eigenvector centrality**: similar idea but based on the leading eigenvector of the adjacency matrix. You score high if you connect to other high-scoring genes (influence via influential neighbours).
+            
+            **Betweenness centrality**: how often a gene lies on shortest paths between other genes. High betweenness means a bridge/bottleneck that connects otherwise separate parts of the graph.
+            
+            **Degree centrality**: how many direct neighbours a gene has (raw connectivity).
+            
+            **Composite centrality (percentile)**: a simple aggregate rank across the above scores after normalisation; use it to sort, then sanity-check with the individual metrics.
+                    """
+                )
 
             if kg_data:
                 kg_info = kg_mod.get_gene_kg_info(search_query, kg_data)
