@@ -2985,135 +2985,329 @@ It is a structured description of the data inside this app, not a clinical recom
             iv_nok = iv_sum.get("n_ok", 0) if isinstance(iv_sum, dict) else 0
             bulk_nok = bulk_sum.get("n_ok", 0) if isinstance(bulk_sum, dict) else 0
 
-            st.subheader(f"Gene summary: {g}")
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-            with c1:
-                st.metric("Single-omics evidence", _fmt_pct01(so_ev))
-            with c2:
-                st.metric("AUROC support (n)", "missing" if _is_nanlike(so_n_auc) else f"{int(float(so_n_auc))}")
-            with c3:
-                st.metric("KG centrality (pct)", "missing" if _is_nanlike(kg_pct) else f"{float(kg_pct):.0f}")
-            with c4:
-                st.metric("WGCNA module", str(wg_module) if wg_module else "missing")
-            with c5:
-                st.metric("In vitro / Bulk hits", f"{int(iv_nok)} / {int(bulk_nok)}")
-
+                        # ----------------------------
+            # Plain-language snapshot
             # ----------------------------
-            # Build a coherent narrative
-            # ----------------------------
-            try:
-                so_gate_ok = int(float(so_n_auc)) >= int(MIN_SINGLE_OMICS_AUROC_STUDIES)
-            except Exception:
-                so_gate_ok = False
+            def _effect_stats_df(df: Optional[pd.DataFrame]) -> dict:
+                if df is None or getattr(df, "empty", True):
+                    return {"n": 0, "n_testable": 0, "n_supported": 0, "med_lfc": np.nan, "med_padj": np.nan}
 
-            so_dir = _infer_majority_direction(so_results_df)
-            iv_dir = _majority_from_contrasts(iv_sum)
+                # Find best-guess effect and significance columns
+                col_dir = _pick_col(df, ["direction", "dir", "sign"])
+                col_lfc = _pick_col(df, ["log2foldchange", "log2fc", "lfc", "effect", "beta", "estimate"])
+                col_p = _pick_col(df, ["padj", "fdr", "qvalue", "adj_p", "p_adj", "pval_adj", "p_value_adj", "pvalue_adj", "pvalue", "pval"])
 
-            if bulk_table is not None:
-                bulk_dir = _infer_majority_direction(bulk_table)
-            else:
-                pg = (bulk_sum or {}).get("per_group", {}) if isinstance(bulk_sum, dict) else {}
-                bulk_dir = _infer_majority_direction(
-                    pd.DataFrame.from_dict(pg, orient="index").reset_index() if isinstance(pg, dict) and pg else None
-                )
+                # Effect size
+                if col_lfc:
+                    lfc_s = pd.to_numeric(df[col_lfc], errors="coerce")
+                else:
+                    lfc_s = pd.Series([np.nan] * len(df))
 
-            direction_note = ""
-            dirs = [d for d in [so_dir, iv_dir, bulk_dir] if d in ("up", "down")]
-            if len(dirs) >= 2:
-                direction_note = (
-                    f"Direction is broadly consistent ({dirs[0]}) across the layers that report sign."
-                    if len(set(dirs)) == 1
-                    else "Direction is not consistent across layers that report sign."
-                )
+                # Significance
+                if col_p:
+                    p_s = pd.to_numeric(df[col_p], errors="coerce")
+                else:
+                    p_s = pd.Series([np.nan] * len(df))
 
-            kg_text = ""
-            if kg_sum:
+                n = int(len(df))
+                n_testable = int(p_s.notna().sum())
+                n_supported = int((p_s.notna() & (p_s <= 0.05)).sum())
+                med_lfc = float(lfc_s.median()) if lfc_s.notna().any() else np.nan
+                med_p = float(p_s.median()) if p_s.notna().any() else np.nan
+
+                # Fallback direction if no lfc
+                if np.isnan(med_lfc) and col_dir:
+                    vals = (
+                        df[col_dir]
+                        .astype(str)
+                        .str.lower()
+                        .str.strip()
+                        .replace({"increase": "up", "decrease": "down", "higher": "up", "lower": "down"})
+                    )
+                    up = int((vals == "up").sum())
+                    down = int((vals == "down").sum())
+                    if up > down:
+                        med_lfc = 0.25  # weak + (placeholder for direction only)
+                    elif down > up:
+                        med_lfc = -0.25
+
+                return {
+                    "n": n,
+                    "n_testable": n_testable,
+                    "n_supported": n_supported,
+                    "med_lfc": med_lfc,
+                    "med_padj": med_p,
+                    "col_lfc": col_lfc,
+                    "col_p": col_p,
+                }
+
+            def _fold_phrase_from_lfc(med_lfc: float, *, context: str) -> str:
+                if med_lfc is None or (isinstance(med_lfc, float) and np.isnan(med_lfc)):
+                    return "no clear direction"
                 try:
-                    if kg_mod is not None and hasattr(kg_mod, "interpret_centrality"):
-                        kg_text = str(kg_mod.interpret_centrality(kg_sum))
+                    m = float(med_lfc)
                 except Exception:
-                    kg_text = ""
+                    return "no clear direction"
 
-            module_trait_line = ""
+                if abs(m) < 1e-9:
+                    return f"about the same in {context}"
+                fc = float(2 ** abs(m))
+                # clamp display for readability
+                fc_disp = fc if fc < 50 else 50.0
+                if m > 0:
+                    return f"higher in {context} (about {fc_disp:.2g}×)"
+                else:
+                    return f"lower in {context} (about {fc_disp:.2g}×)"
+
+            def _support_phrase(n_supported: int, n_testable: int) -> str:
+                if n_testable <= 0:
+                    return "No statistical test results are available here."
+                if n_supported <= 0:
+                    return f"The direction is based on effect sizes, but none of the {n_testable} tests meet the usual threshold (FDR-adjusted p≤0.05)."
+                if n_supported == n_testable:
+                    return f"All {n_testable} tests meet the usual threshold (FDR-adjusted p≤0.05)."
+                return f"{n_supported} of {n_testable} tests meet the usual threshold (FDR-adjusted p≤0.05)."
+
+            def _evidence_word(score01: Any) -> str:
+                try:
+                    x = float(score01)
+                    if np.isnan(x):
+                        return "missing"
+                    if x >= 0.75:
+                        return "high"
+                    if x >= 0.5:
+                        return "moderate"
+                    if x >= 0.25:
+                        return "low"
+                    return "very low"
+                except Exception:
+                    return "missing"
+
+            def _iv_stats(iv_sum_in: dict) -> dict:
+                pc = (iv_sum_in or {}).get("per_contrast", {}) if isinstance(iv_sum_in, dict) else {}
+                if not isinstance(pc, dict) or not pc:
+                    return {"n": 0, "n_testable": 0, "n_supported": 0, "med_lfc": np.nan, "med_padj": np.nan}
+                lfc_vals = []
+                p_vals = []
+                supported = 0
+                testable = 0
+                for _, d in pc.items():
+                    if not isinstance(d, dict):
+                        continue
+                    lfc = d.get("mean_lfc", np.nan)
+                    p = d.get("min_padj", np.nan)
+                    if pd.notna(lfc):
+                        lfc_vals.append(float(lfc))
+                    if pd.notna(p):
+                        testable += 1
+                        p_vals.append(float(p))
+                        if float(p) <= 0.05:
+                            supported += 1
+                med_lfc = float(np.median(lfc_vals)) if lfc_vals else np.nan
+                med_p = float(np.median(p_vals)) if p_vals else np.nan
+                return {"n": len(pc), "n_testable": testable, "n_supported": supported, "med_lfc": med_lfc, "med_padj": med_p}
+
+            # Compute layer stats
+            so_stats = _effect_stats_df(so_results_df)
+            bulk_stats = _effect_stats_df(bulk_table)
+            iv_stats = _iv_stats(iv_sum)
+
+            def _dir_from_med_lfc(med_lfc: Any) -> str:
+                if med_lfc is None or (isinstance(med_lfc, float) and np.isnan(med_lfc)):
+                    return "unknown"
+                try:
+                    m = float(med_lfc)
+                except Exception:
+                    return "unknown"
+                if m > 0:
+                    return "up"
+                if m < 0:
+                    return "down"
+                return "unknown"
+
+            so_dir = _dir_from_med_lfc(so_stats.get("med_lfc", np.nan))
+            iv_dir = _dir_from_med_lfc(iv_stats.get("med_lfc", np.nan))
+            bulk_dir = _dir_from_med_lfc(bulk_stats.get("med_lfc", np.nan))
+
+# WGCNA fibrosis association (module → trait)
+            wg_trait = ""
+            wg_r = np.nan
+            wg_p = np.nan
             if wg_module and isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty:
                 try:
                     trait_cols = list(wgcna_cor.columns)
                     fibrosis_like = [t for t in trait_cols if ("fibros" in str(t).lower()) or ("stage" in str(t).lower())]
-                    trait_name = fibrosis_like[0] if fibrosis_like else (trait_cols[0] if trait_cols else "")
-                    if trait_name:
-                        corr, pval = _get_module_trait_value(str(wg_module), str(trait_name), wgcna_cor, wgcna_pval)
-                        module_trait_line = f"Module–trait: {trait_name} correlation {corr:.3f}, p={_fmt_num(pval, decimals=2, sci_if_small=True)}."
+                    wg_trait = str(fibrosis_like[0] if fibrosis_like else (trait_cols[0] if trait_cols else "")).strip()
+                    if wg_trait:
+                        wg_r, wg_p = _get_module_trait_value(str(wg_module), wg_trait, wgcna_cor, wgcna_pval)
                 except Exception:
-                    module_trait_line = ""
+                    wg_trait, wg_r, wg_p = "", np.nan, np.nan
 
-            ppi_line = ""
-            if ppi_stats:
-                deg = ppi_stats.get("degree", None)
-                desc = ppi_stats.get("description", "")
-                if deg is not None:
-                    ppi_line = f"PPI: {g} has {deg} direct interactors in the loaded network. {desc}".strip()
+            def _wg_phrase(trait: str, r: float, p: float) -> str:
+                if not trait or _is_nanlike(r):
+                    return "no fibrosis link available"
+                try:
+                    rr = float(r)
+                except Exception:
+                    return "no fibrosis link available"
+                if abs(rr) < 0.05:
+                    base = "no clear change across fibrosis stages"
+                elif rr > 0:
+                    base = "higher in later fibrosis stages"
+                else:
+                    base = "lower in later fibrosis stages"
+                if _is_nanlike(p):
+                    return base
+                try:
+                    pp = float(p)
+                    if pp <= 0.05:
+                        return base + " (statistically supported)"
+                    return base + " (not statistically supported)"
+                except Exception:
+                    return base
 
-            pathways_line = ""
-            if module_pathways_df is not None and isinstance(module_pathways_df, pd.DataFrame) and not module_pathways_df.empty:
-                term_col = _pick_col(module_pathways_df, ["term", "pathway", "name", "description"])
-                if term_col:
-                    top_terms = module_pathways_df[term_col].astype(str).head(5).tolist()
-                    top_terms = [t for t in top_terms if t.strip()]
-                    if top_terms:
-                        pathways_line = "Module enrichment highlights: " + "; ".join(top_terms) + "."
+            # ----------------------------
+            # Headline: what a non-technical reader should take away
+            # ----------------------------
+            st.subheader(f"Plain-language summary: {g}")
 
-            inv_line = (
-                f"In vitro (iHeps): {int(iv_sum.get('n_ok', 0))} contrasts pass padj≤0.05 with consistent direction across both lines (require_both_lines=True)."
-                if iv_sum
-                else "In vitro (iHeps): no tables loaded."
+            # "Disease-like hepatocytes" anchor comes from single-omics first, then bulk, then in vitro
+            anchor_lfc = so_stats.get("med_lfc", np.nan)
+            anchor_ctx = "diseased vs healthy hepatocytes"
+            if _is_nanlike(anchor_lfc):
+                anchor_lfc = bulk_stats.get("med_lfc", np.nan)
+                anchor_ctx = "diseased vs healthy liver tissue"
+            if _is_nanlike(anchor_lfc):
+                anchor_lfc = iv_stats.get("med_lfc", np.nan)
+                anchor_ctx = "disease-like vs control conditions (iHeps model)"
+
+            headline = _fold_phrase_from_lfc(anchor_lfc, context=anchor_ctx)
+            st.info(
+                f"In the datasets loaded in this app, **{g}** is **{headline}**. "
+                "Read the notes below for how strong (or weak) the evidence is."
             )
 
-            bulk_line = (
-                f"Bulk tissue: {int(bulk_sum.get('n_ok', 0))} contrast groups pass padj≤0.05 (min_n_studies=1)."
-                if bulk_sum
-                else "Bulk tissue: no tables loaded."
-            )
+            # ----------------------------
+            # At-a-glance metrics (no jargon)
+            # ----------------------------
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("Hepatocytes (single-omics)", _fold_phrase_from_lfc(so_stats.get("med_lfc", np.nan), context="diseased hepatocytes"))
+            with c2:
+                st.metric("Fibrosis stage trend", _wg_phrase(wg_trait, wg_r, wg_p))
+            with c3:
+                st.metric("Network prominence", "missing" if _is_nanlike(kg_pct) else f"~{float(kg_pct):.0f}th percentile")
+            with c4:
+                st.metric("iHeps model", _fold_phrase_from_lfc(iv_stats.get("med_lfc", np.nan), context="disease-like conditions"))
+            with c5:
+                st.metric("Bulk tissue", _fold_phrase_from_lfc(bulk_stats.get("med_lfc", np.nan), context="diseased tissue"))
 
+            # ----------------------------
+            # Coherent narrative (keep it readable)
+            # ----------------------------
+            # Single-omics narrative
             if so_consistency:
+                so_strength = _evidence_word(so_ev)
+                so_n = int(so_stats.get("n", 0))
+                so_testable = int(so_stats.get("n_testable", 0))
+                so_supported = int(so_stats.get("n_supported", 0))
+                so_phrase = _fold_phrase_from_lfc(so_stats.get("med_lfc", np.nan), context="diseased hepatocytes")
+                so_support = _support_phrase(so_supported, so_testable)
+                try:
+                    so_sep_n = int(float(so_n_auc)) if not _is_nanlike(so_n_auc) else 0
+                except Exception:
+                    so_sep_n = 0
+                so_gate_ok = so_sep_n >= int(MIN_SINGLE_OMICS_AUROC_STUDIES)
+                so_gate_line = (
+                    f"The screener requires at least {int(MIN_SINGLE_OMICS_AUROC_STUDIES)} datasets with a disease-vs-control separation metric; "
+                    f"this gene has {so_sep_n}. That requirement is {'met' if so_gate_ok else 'not met'}."
+                )
                 so_line = (
-                    f"Single-omics: evidence {_fmt_pct01(so_ev)}, direction agreement {_fmt_pct01(so_ag)}, "
-                    f"median AUROC-disc {_fmt_auc(so_auc)}, based on "
-                    f"{'missing' if _is_nanlike(so_n_auc) else int(float(so_n_auc))} valid AUROC values across "
-                    f"{'missing' if _is_nanlike(so_found) else int(float(so_found))} studies. "
-                    f"The screener gate (≥{int(MIN_SINGLE_OMICS_AUROC_STUDIES)} AUROC studies) is {'met' if so_gate_ok else 'not met'}."
+                    f"**Hepatocyte evidence (single-omics):** Across {so_n} loaded study rows, {g} is {so_phrase}. "
+                    f"Overall consistency looks {so_strength} within this app’s single-omics layer. {so_support} {so_gate_line}"
                 )
             else:
-                so_line = "Single-omics: no score available for this gene in the loaded single-omics study tables."
+                so_line = (
+                    f"**Hepatocyte evidence (single-omics):** There isn’t enough single-omics evidence loaded for {g} to summarise direction or strength."
+                )
 
-            kg_line = ""
+            # WGCNA narrative (fibrosis context)
+            if wg_module and wg_trait:
+                if _is_nanlike(wg_r):
+                    wg_line = f"**Fibrosis stage model (WGCNA):** {g} sits in module {wg_module}, but the module–fibrosis association is not available."
+                else:
+                    direction = "increases" if float(wg_r) > 0 else "decreases" if float(wg_r) < 0 else "does not clearly change"
+                    p_note = "statistically supported" if (not _is_nanlike(wg_p) and float(wg_p) <= 0.05) else "not statistically supported"
+                    wg_line = (
+                        f"**Fibrosis stage model (WGCNA):** {g} is in module {wg_module}. In the fibrosis-stage cohort used for WGCNA, this module "
+                        f"{direction} as fibrosis stage becomes more severe (correlation r={float(wg_r):.2f}). "
+                        f"This trend is {p_note} (p={_fmt_num(wg_p, decimals=2, sci_if_small=True)})."
+                    )
+            elif wg_module:
+                wg_line = f"**Fibrosis stage model (WGCNA):** {g} is in module {wg_module}, but no fibrosis-stage trait column was detected to summarise."
+            else:
+                wg_line = f"**Fibrosis stage model (WGCNA):** No module assignment is available for {g} in the loaded WGCNA tables."
+
+            # Knowledge graph / network narrative
             if kg_sum:
-                kg_s = "missing" if _is_nanlike(kg_pct) else f"{float(kg_pct):.0f}"
-                pr_s = "missing" if _is_nanlike(pr_pct) else f"{float(pr_pct):.0f}"
-                bet_s = "missing" if _is_nanlike(bet_pct) else f"{float(bet_pct):.0f}"
-                eig_s = "missing" if _is_nanlike(eig_pct) else f"{float(eig_pct):.0f}"
-                kg_line = f"Knowledge graph: composite centrality percentile {kg_s} (PageRank {pr_s}, betweenness {bet_s}, eigenvector {eig_s})."
-                cid = kg_sum.get("community_id", None) or kg_sum.get("module_id", None)
-                cname = kg_sum.get("community_name", None) or kg_sum.get("module_name", None)
-                if cid is not None or cname:
-                    kg_line += f" Assigned to {cname or cid}."
+                kg_s = "missing" if _is_nanlike(kg_pct) else f"{float(kg_pct):.0f}th percentile"
+                kg_line = f"**Network context (knowledge graph):** {g} sits around the {kg_s} for network prominence within the curated graph loaded in this app."
                 if kg_text:
                     kg_line += f" {kg_text}"
-
-            if wg_module:
-                wg_line = f"WGCNA: assigned to module {wg_module}. {module_trait_line}".strip()
-                if pathways_line:
-                    wg_line += f" {pathways_line}"
-                if ppi_line:
-                    wg_line += f" {ppi_line}"
             else:
-                wg_line = "WGCNA: no module assignment available for this gene in the loaded module tables."
+                kg_line = f"**Network context (knowledge graph):** {g} is not present in the loaded knowledge graph tables."
 
-            summary_text = "\n\n".join([so_line, kg_line, wg_line, inv_line, bulk_line, direction_note]).strip()
+            # iHeps narrative (do not hide non-significant)
+            if iv_sum:
+                iv_n = int(iv_stats.get("n", 0))
+                iv_testable = int(iv_stats.get("n_testable", 0))
+                iv_supported = int(iv_stats.get("n_supported", 0))
+                iv_phrase = _fold_phrase_from_lfc(iv_stats.get("med_lfc", np.nan), context="disease-like conditions (iHeps)")
+                iv_support = _support_phrase(iv_supported, iv_testable)
+                inv_line = (
+                    f"**In vitro hepatocyte model (iHeps):** Across {iv_n} contrasts, {g} is {iv_phrase}. {iv_support} "
+                    "Even when not statistically supported, the direction gives a practical sense of what the model trends toward."
+                )
+            else:
+                inv_line = "**In vitro hepatocyte model (iHeps):** No iHeps tables are loaded."
+
+            # Bulk narrative (do not hide non-significant)
+            if bulk_table is not None and not getattr(bulk_table, "empty", True):
+                b_n = int(bulk_stats.get("n", 0))
+                b_testable = int(bulk_stats.get("n_testable", 0))
+                b_supported = int(bulk_stats.get("n_supported", 0))
+                b_phrase = _fold_phrase_from_lfc(bulk_stats.get("med_lfc", np.nan), context="diseased liver tissue")
+                b_support = _support_phrase(b_supported, b_testable)
+                bulk_line = (
+                    f"**Bulk liver tissue:** Across {b_n} contrasts in the loaded bulk datasets, {g} is {b_phrase}. {b_support}"
+                )
+            elif bulk_sum:
+                pg = (bulk_sum or {}).get("per_group", {}) if isinstance(bulk_sum, dict) else {}
+                b_n = len(pg) if isinstance(pg, dict) else 0
+                bulk_line = (
+                    f"**Bulk liver tissue:** {g} was found in {b_n} bulk contrast groups, but effect-size rows were not available to summarise magnitude."
+                )
+            else:
+                bulk_line = "**Bulk liver tissue:** No bulk omics tables are loaded."
+
+            # Cross-layer consistency note
+            dirs = []
+            for dval in [so_dir, iv_dir, bulk_dir]:
+                if dval in ("up", "down"):
+                    dirs.append(dval)
+            if len(dirs) >= 2:
+                if len(set(dirs)) == 1:
+                    direction_note = f"Across layers that report a sign, the direction is broadly consistent ({'higher' if dirs[0]=='up' else 'lower'} in disease-like conditions)."
+                else:
+                    direction_note = "Across layers that report a sign, the direction is mixed. Treat the overall pattern as uncertain."
+            else:
+                direction_note = "There is not enough overlap across layers to check whether the direction agrees."
+
+            summary_text = "\n\n".join([so_line, wg_line, inv_line, bulk_line, kg_line, direction_note]).strip()
             st.markdown(summary_text)
 
             with st.expander("Copyable summary text", expanded=False):
-                st.text_area("", summary_text, height=220)
+                st.text_area("", summary_text, height=260)
 
             st.markdown("---")
             st.markdown("**Details (optional)**")
