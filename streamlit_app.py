@@ -1682,6 +1682,40 @@ def _load_invitro_ensg_to_symbol_cached() -> Dict[str, str]:
     cache["ensg_to_symbol"] = ensg_to_symbol
     return ensg_to_symbol
 
+
+def _load_invitro_gene_maps_cached() -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Cached (SYMBOL->ENSG, ENSG->SYMBOL) mappings for iHeps tables.
+    Used to join and harmonise symbols across tabs.
+    """
+    cache = _ensure_session_cache("_cache_invitro_gene_map")
+
+    sym_to_ensg: Dict[str, str] = cache.get("symbol_to_ensg", {})
+    ensg_to_sym: Dict[str, str] = cache.get("ensg_to_symbol", {})
+
+    if sym_to_ensg and ensg_to_sym:
+        return sym_to_ensg, ensg_to_sym
+
+    # Reuse existing ENSG->SYMBOL loader (also stores into the same cache)
+    ensg_to_sym = _load_invitro_ensg_to_symbol_cached()
+
+    sym_to_ensg = {}
+    if iva is not None:
+        try:
+            _sym_to_ensg, _ensg_to_sym = iva._load_gene_mapping()  # type: ignore[attr-defined]
+            if isinstance(_sym_to_ensg, dict):
+                for k, v in _sym_to_ensg.items():
+                    ks = str(k).strip().upper()
+                    vs = str(v).strip().upper()
+                    if ks and vs:
+                        sym_to_ensg[ks] = vs
+        except Exception:
+            sym_to_ensg = {}
+
+    cache["symbol_to_ensg"] = sym_to_ensg
+    cache["ensg_to_symbol"] = ensg_to_sym
+    return sym_to_ensg, ensg_to_sym
+
 def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
     """
     Loads all invitro DEG tables under meta-liver-data/stem_cell_model/.
@@ -2783,8 +2817,8 @@ else:
     with tab_summary:
         st.markdown(
             """
-This tab gives a plain-language snapshot of what the app currently shows for the selected gene across the loaded evidence layers.
-It is descriptive of the data inside this app, not a clinical recommendation.
+This tab pulls together what the app currently shows for the selected gene across all loaded evidence layers.
+It is a structured description of the data inside this app, not a clinical recommendation.
 """
         )
         st.markdown("---")
@@ -2793,68 +2827,384 @@ It is descriptive of the data inside this app, not a clinical recommendation.
         if not g:
             st.info("Type a gene symbol in the sidebar to see a summary here.")
         else:
-            def _fmt(x: Any, nd: int = 2) -> str:
+            # ----------------------------
+            # Collect layer-level outputs
+            # ----------------------------
+            so_consistency = {}
+            so_results_df = None
+            if soa is not None and single_omics_data:
                 try:
-                    if x is None or (isinstance(x, float) and np.isnan(x)):
-                        return "—"
-                    if isinstance(x, (int, np.integer)):
-                        return str(int(x))
-                    if isinstance(x, (float, np.floating)):
-                        return f"{float(x):.{nd}f}"
-                    s = str(x).strip()
-                    return s if s else "—"
+                    so_consistency = soa.compute_consistency_score(g, single_omics_data) or {}
                 except Exception:
-                    return "—"
+                    so_consistency = {}
+                try:
+                    so_results_df = soa.create_results_table(g, single_omics_data)
+                except Exception:
+                    so_results_df = None
 
-            so_sum = _get_single_omics_summary(g, single_omics_data) if single_omics_data else {}
             kg_sum = _get_kg_summary(g, kg_data) if kg_data else {}
 
-            trait_cols = list(wgcna_cor.columns) if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty else []
-            fibrosis_like = [t for t in trait_cols if "fibros" in str(t).lower()]
-            w_trait = fibrosis_like[0] if fibrosis_like else (trait_cols[0] if trait_cols else "")
-            wg_sum = _get_wgcna_summary(g, wgcna_module_data, w_trait) if (wgcna_module_data and w_trait) else {}
+            wg_gene_module = None
+            module_genes_df = None
+            mt_table = None
+            module_pathways_df = None
+            ppi_stats = {}
+            ppi_df = None
+
+            if wgcna_mod is not None and wgcna_module_data:
+                try:
+                    wg_gene_module = wgcna_mod.get_gene_module(g, wgcna_module_data) or None
+                except Exception:
+                    wg_gene_module = None
+
+                module_name = None
+                if isinstance(wg_gene_module, dict):
+                    module_name = wg_gene_module.get("module", None)
+
+                if module_name:
+                    try:
+                        module_genes_df = wgcna_mod.get_module_genes(module_name, wgcna_module_data)
+                    except Exception:
+                        module_genes_df = None
+                    try:
+                        mt_table = _module_trait_table(module_name, wgcna_cor, wgcna_pval)
+                    except Exception:
+                        mt_table = None
+
+                    try:
+                        key = str(module_name).strip().lower()
+                        module_pathways_df = (wgcna_pathways or {}).get(key)
+                    except Exception:
+                        module_pathways_df = None
+
+            if ppi_data and hasattr(wgcna_mod, "find_ppi_interactors") and hasattr(wgcna_mod, "get_network_stats"):
+                try:
+                    ppi_stats = wgcna_mod.get_network_stats(g, ppi_data) or {}
+                except Exception:
+                    ppi_stats = {}
+                try:
+                    ppi_df = wgcna_mod.find_ppi_interactors(g, ppi_data)
+                except Exception:
+                    ppi_df = None
 
             invitro_tables = _load_invitro_all_tables_cached()
             iv_sum = _get_invitro_summary(g, invitro_tables, 0.05, True) if invitro_tables else {}
+            iv_table = None
+            if iva is not None and invitro_tables:
+                try:
+                    sym_to_ensg, ensg_to_sym = _load_invitro_gene_maps_cached()
+                    iv_table = iva.gene_summary_table(invitro_tables, g, sym_to_ensg, ensg_to_sym)
+                except Exception:
+                    iv_table = None
 
+            bulk_sum = {}
+            bulk_table = None
             bulk_groups = _bulk_groups_available(bulk_omics_data)
-            bulk_sum = _get_bulk_summary(g, bulk_omics_data, bulk_groups, 0.05, 1, False, False) if bulk_omics_data else {}
+            if bulk_omics_data:
+                bulk_sum = _get_bulk_summary(g, bulk_omics_data, bulk_groups, 0.05, 1, False, False)
+            if bo is not None and bulk_omics_data and hasattr(bo, "gene_across_all_contrasts"):
+                try:
+                    bulk_table = bo.gene_across_all_contrasts(bulk_omics_data, g)
+                except Exception:
+                    bulk_table = None
+
+            # ----------------------------
+            # Helpers for narrative glue
+            # ----------------------------
+            def _pick_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+                if df is None or df.empty:
+                    return None
+                cols = list(df.columns)
+                lower = {str(c).lower(): c for c in cols}
+                for cand in candidates:
+                    c0 = lower.get(str(cand).lower())
+                    if c0 is not None:
+                        return c0
+                for cand in candidates:
+                    cl = str(cand).lower()
+                    for c in cols:
+                        if cl in str(c).lower():
+                            return c
+                return None
+
+            def _infer_majority_direction(df: Optional[pd.DataFrame]) -> str:
+                if df is None or getattr(df, "empty", True):
+                    return "unknown"
+                cdir = _pick_col(df, ["direction", "dir"])
+                if cdir:
+                    vals = (
+                        df[cdir]
+                        .astype(str)
+                        .str.strip()
+                        .str.lower()
+                        .replace({"upregulated": "up", "downregulated": "down"})
+                    )
+                    vals = vals[vals.isin(["up", "down"])]
+                    if len(vals) == 0:
+                        return "unknown"
+                    return "up" if (vals == "up").sum() >= (vals == "down").sum() else "down"
+                clfc = _pick_col(df, ["log2foldchange", "log2fc", "lfc", "effect"])
+                if clfc:
+                    s = pd.to_numeric(df[clfc], errors="coerce").dropna()
+                    if len(s) == 0:
+                        return "unknown"
+                    med = float(s.median())
+                    return "up" if med > 0 else "down" if med < 0 else "unknown"
+                return "unknown"
+
+            def _majority_from_contrasts(iv_sum_in: dict) -> str:
+                try:
+                    pc = (iv_sum_in or {}).get("per_contrast", {}) or {}
+                    ok = [d for d in pc.values() if d.get("ok") is True and d.get("direction") in ("up", "down")]
+                    if not ok:
+                        return "unknown"
+                    ups = sum(1 for d in ok if d.get("direction") == "up")
+                    dns = sum(1 for d in ok if d.get("direction") == "down")
+                    return "up" if ups >= dns else "down"
+                except Exception:
+                    return "unknown"
+
+            # ----------------------------
+            # Headline metrics
+            # ----------------------------
+            so_ev = so_consistency.get("evidence_score", np.nan) if isinstance(so_consistency, dict) else np.nan
+            so_ag = so_consistency.get("direction_agreement", np.nan) if isinstance(so_consistency, dict) else np.nan
+            so_auc = so_consistency.get("auc_median_discriminative", np.nan) if isinstance(so_consistency, dict) else np.nan
+            so_n_auc = so_consistency.get("n_auc", np.nan) if isinstance(so_consistency, dict) else np.nan
+            so_found = so_consistency.get("found_count", np.nan) if isinstance(so_consistency, dict) else np.nan
+
+            kg_pct = kg_sum.get("composite_percentile", np.nan) if isinstance(kg_sum, dict) else np.nan
+            pr_pct = kg_sum.get("pagerank_percentile", np.nan) if isinstance(kg_sum, dict) else np.nan
+            bet_pct = kg_sum.get("bet_percentile", np.nan) if isinstance(kg_sum, dict) else np.nan
+            eig_pct = kg_sum.get("eigen_percentile", np.nan) if isinstance(kg_sum, dict) else np.nan
+
+            wg_module = None
+            if isinstance(wg_gene_module, dict):
+                wg_module = wg_gene_module.get("module", None)
+
+            iv_nok = iv_sum.get("n_ok", 0) if isinstance(iv_sum, dict) else 0
+            bulk_nok = bulk_sum.get("n_ok", 0) if isinstance(bulk_sum, dict) else 0
 
             st.subheader(f"Gene summary: {g}")
 
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
-                st.metric("Single-omics evidence", _fmt(so_sum.get("evidence_score", np.nan)))
+                st.metric("Single-omics evidence", _fmt_pct01(so_ev))
             with c2:
-                st.metric("Knowledge graph %ile", _fmt(kg_sum.get("composite_percentile", np.nan), 0))
+                st.metric("AUROC support (n)", "missing" if _is_nanlike(so_n_auc) else f"{int(float(so_n_auc))}")
             with c3:
-                st.metric("WGCNA module", _fmt(wg_sum.get("module", "")))
+                st.metric("KG centrality (pct)", "missing" if _is_nanlike(kg_pct) else f"{float(kg_pct):.0f}")
+            with c4:
+                st.metric("WGCNA module", str(wg_module) if wg_module else "missing")
+            with c5:
+                st.metric("In vitro / Bulk hits", f"{int(iv_nok)} / {int(bulk_nok)}")
 
-            if so_sum:
-                st.markdown(f"Single-omics: {_fmt(so_sum.get('n_auc', np.nan), 0)} AUROC study/studies, median discrimination AUC {_fmt(so_sum.get('auc_median_discriminative', np.nan))}.")
-                st.markdown(f"For Gene Screener filtering, this layer is counted only when at least {int(MIN_SINGLE_OMICS_AUROC_STUDIES)} AUROC studies exist for the gene.")
+            # ----------------------------
+            # Build a coherent narrative
+            # ----------------------------
+            try:
+                so_gate_ok = int(float(so_n_auc)) >= int(MIN_SINGLE_OMICS_AUROC_STUDIES)
+            except Exception:
+                so_gate_ok = False
+
+            so_dir = _infer_majority_direction(so_results_df)
+            iv_dir = _majority_from_contrasts(iv_sum)
+
+            if bulk_table is not None:
+                bulk_dir = _infer_majority_direction(bulk_table)
             else:
-                st.markdown("Single-omics: no usable AUROC evidence loaded for this gene, or it is too sparse.")
+                pg = (bulk_sum or {}).get("per_group", {}) if isinstance(bulk_sum, dict) else {}
+                bulk_dir = _infer_majority_direction(
+                    pd.DataFrame.from_dict(pg, orient="index").reset_index() if isinstance(pg, dict) and pg else None
+                )
 
+            direction_note = ""
+            dirs = [d for d in [so_dir, iv_dir, bulk_dir] if d in ("up", "down")]
+            if len(dirs) >= 2:
+                direction_note = (
+                    f"Direction is broadly consistent ({dirs[0]}) across the layers that report sign."
+                    if len(set(dirs)) == 1
+                    else "Direction is not consistent across layers that report sign."
+                )
+
+            kg_text = ""
             if kg_sum:
-                st.markdown(f"Knowledge graph: overall connectivity percentile around {_fmt(kg_sum.get('composite_percentile', np.nan), 0)}.")
-            else:
-                st.markdown("Knowledge graph: gene not found in the loaded KG tables.")
+                try:
+                    if kg_mod is not None and hasattr(kg_mod, "interpret_centrality"):
+                        kg_text = str(kg_mod.interpret_centrality(kg_sum))
+                except Exception:
+                    kg_text = ""
 
-            if wg_sum and wg_sum.get('module'):
-                st.markdown(f"WGCNA: maps to module {_fmt(wg_sum.get('module', ''))} for the default trait used by this app.")
-            else:
-                st.markdown("WGCNA: no module assignment available for this gene with the loaded tables.")
+            module_trait_line = ""
+            if wg_module and isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty:
+                try:
+                    trait_cols = list(wgcna_cor.columns)
+                    fibrosis_like = [t for t in trait_cols if ("fibros" in str(t).lower()) or ("stage" in str(t).lower())]
+                    trait_name = fibrosis_like[0] if fibrosis_like else (trait_cols[0] if trait_cols else "")
+                    if trait_name:
+                        corr, pval = _get_module_trait_value(str(wg_module), str(trait_name), wgcna_cor, wgcna_pval)
+                        module_trait_line = f"Module–trait: {trait_name} correlation {corr:.3f}, p={_fmt_num(pval, decimals=2, sci_if_small=True)}."
+                except Exception:
+                    module_trait_line = ""
 
-            if iv_sum and int(iv_sum.get('n_ok', 0) or 0) > 0:
-                st.markdown(f"In vitro (iHeps): passes default thresholds in {_fmt(iv_sum.get('n_ok', 0), 0)} contrast(s).")
-            else:
-                st.markdown("In vitro (iHeps): does not pass default thresholds in the loaded contrasts.")
+            ppi_line = ""
+            if ppi_stats:
+                deg = ppi_stats.get("degree", None)
+                desc = ppi_stats.get("description", "")
+                if deg is not None:
+                    ppi_line = f"PPI: {g} has {deg} direct interactors in the loaded network. {desc}".strip()
 
-            if bulk_sum and int(bulk_sum.get('n_ok', 0) or 0) > 0:
-                st.markdown(f"Bulk tissue: passes default thresholds in {_fmt(bulk_sum.get('n_ok', 0), 0)} group(s).")
+            pathways_line = ""
+            if module_pathways_df is not None and isinstance(module_pathways_df, pd.DataFrame) and not module_pathways_df.empty:
+                term_col = _pick_col(module_pathways_df, ["term", "pathway", "name", "description"])
+                if term_col:
+                    top_terms = module_pathways_df[term_col].astype(str).head(5).tolist()
+                    top_terms = [t for t in top_terms if t.strip()]
+                    if top_terms:
+                        pathways_line = "Module enrichment highlights: " + "; ".join(top_terms) + "."
+
+            inv_line = (
+                f"In vitro (iHeps): {int(iv_sum.get('n_ok', 0))} contrasts pass padj≤0.05 with consistent direction across both lines (require_both_lines=True)."
+                if iv_sum
+                else "In vitro (iHeps): no tables loaded."
+            )
+
+            bulk_line = (
+                f"Bulk tissue: {int(bulk_sum.get('n_ok', 0))} contrast groups pass padj≤0.05 (min_n_studies=1)."
+                if bulk_sum
+                else "Bulk tissue: no tables loaded."
+            )
+
+            if so_consistency:
+                so_line = (
+                    f"Single-omics: evidence {_fmt_pct01(so_ev)}, direction agreement {_fmt_pct01(so_ag)}, "
+                    f"median AUROC-disc {_fmt_auc(so_auc)}, based on "
+                    f"{'missing' if _is_nanlike(so_n_auc) else int(float(so_n_auc))} valid AUROC values across "
+                    f"{'missing' if _is_nanlike(so_found) else int(float(so_found))} studies. "
+                    f"The screener gate (≥{int(MIN_SINGLE_OMICS_AUROC_STUDIES)} AUROC studies) is {'met' if so_gate_ok else 'not met'}."
+                )
             else:
-                st.markdown("Bulk tissue: does not pass default thresholds in the loaded groups.")
+                so_line = "Single-omics: no score available for this gene in the loaded single-omics study tables."
+
+            kg_line = ""
+            if kg_sum:
+                kg_s = "missing" if _is_nanlike(kg_pct) else f"{float(kg_pct):.0f}"
+                pr_s = "missing" if _is_nanlike(pr_pct) else f"{float(pr_pct):.0f}"
+                bet_s = "missing" if _is_nanlike(bet_pct) else f"{float(bet_pct):.0f}"
+                eig_s = "missing" if _is_nanlike(eig_pct) else f"{float(eig_pct):.0f}"
+                kg_line = f"Knowledge graph: composite centrality percentile {kg_s} (PageRank {pr_s}, betweenness {bet_s}, eigenvector {eig_s})."
+                cid = kg_sum.get("community_id", None) or kg_sum.get("module_id", None)
+                cname = kg_sum.get("community_name", None) or kg_sum.get("module_name", None)
+                if cid is not None or cname:
+                    kg_line += f" Assigned to {cname or cid}."
+                if kg_text:
+                    kg_line += f" {kg_text}"
+
+            if wg_module:
+                wg_line = f"WGCNA: assigned to module {wg_module}. {module_trait_line}".strip()
+                if pathways_line:
+                    wg_line += f" {pathways_line}"
+                if ppi_line:
+                    wg_line += f" {ppi_line}"
+            else:
+                wg_line = "WGCNA: no module assignment available for this gene in the loaded module tables."
+
+            summary_text = "\n\n".join([so_line, kg_line, wg_line, inv_line, bulk_line, direction_note]).strip()
+            st.markdown(summary_text)
+
+            with st.expander("Copyable summary text", expanded=False):
+                st.text_area("", summary_text, height=220)
+
+            st.markdown("---")
+            st.markdown("**Details (optional)**")
+
+            with st.expander("Single-omics per-study details", expanded=False):
+                if so_results_df is None or getattr(so_results_df, "empty", True):
+                    st.info("No per-study single-omics rows available for this gene.")
+                else:
+                    _st_df(so_results_df, hide_index=True)
+
+            with st.expander("Knowledge graph context", expanded=False):
+                if not kg_sum:
+                    st.info("No knowledge graph summary available for this gene.")
+                else:
+                    _st_df(pd.DataFrame([kg_sum]), hide_index=True)
+                    cid = kg_sum.get("community_id", None) or kg_sum.get("module_id", None)
+                    if cid is not None and kg_mod is not None and kg_data:
+                        try:
+                            gdf = kg_mod.get_cluster_genes(cid, kg_data)
+                        except Exception:
+                            gdf = None
+                        try:
+                            ddf = kg_mod.get_cluster_drugs(cid, kg_data)
+                        except Exception:
+                            ddf = None
+                        try:
+                            disdf = kg_mod.get_cluster_diseases(cid, kg_data)
+                        except Exception:
+                            disdf = None
+
+                        if isinstance(gdf, pd.DataFrame) and not gdf.empty:
+                            st.markdown("Top genes in the same KG cluster (first rows shown):")
+                            _st_df(gdf.head(25), hide_index=True)
+                        if isinstance(ddf, pd.DataFrame) and not ddf.empty:
+                            st.markdown("Drug links in the same KG cluster (first rows shown):")
+                            _st_df(ddf.head(25), hide_index=True)
+                        if isinstance(disdf, pd.DataFrame) and not disdf.empty:
+                            st.markdown("Disease/phenotype links in the same KG cluster (first rows shown):")
+                            _st_df(disdf.head(25), hide_index=True)
+
+            with st.expander("WGCNA module and PPI details", expanded=False):
+                if wg_module is None:
+                    st.info("No WGCNA module data for this gene.")
+                else:
+                    st.markdown(f"Module: {wg_module}")
+                    if isinstance(module_genes_df, pd.DataFrame) and not module_genes_df.empty:
+                        view_df = module_genes_df.head(25).copy()
+                        view_df = _annotate_genes_with_drugs(view_df, gene_to_drugs, 5)
+                        st.markdown("Top genes in the same module (first rows shown):")
+                        _st_df(view_df, hide_index=True)
+                    if isinstance(mt_table, pd.DataFrame) and not mt_table.empty:
+                        st.markdown("Module–trait table (first rows shown):")
+                        _st_df(mt_table.head(25), hide_index=True)
+                    if isinstance(module_pathways_df, pd.DataFrame) and not module_pathways_df.empty:
+                        st.markdown("Module pathways/enrichment (first rows shown):")
+                        _st_df(module_pathways_df.head(25), hide_index=True)
+                    if ppi_stats:
+                        st.markdown("PPI network stats:")
+                        _st_df(pd.DataFrame([ppi_stats]), hide_index=True)
+                    if isinstance(ppi_df, pd.DataFrame) and not ppi_df.empty:
+                        st.markdown("Direct PPI interactors (first rows shown):")
+                        _st_df(ppi_df.head(50), hide_index=True)
+
+            with st.expander("In vitro (iHeps) details", expanded=False):
+                if iv_table is not None and isinstance(iv_table, pd.DataFrame) and not iv_table.empty:
+                    _st_df(iv_table, hide_index=True)
+                elif iv_sum:
+                    pc = (iv_sum or {}).get("per_contrast", {}) or {}
+                    if isinstance(pc, dict) and pc:
+                        dfc = pd.DataFrame.from_dict(pc, orient="index").reset_index().rename(columns={"index": "contrast"})
+                        dfc = dfc.sort_values(by=["ok", "min_padj"], ascending=[False, True], kind="mergesort")
+                        _st_df(dfc, hide_index=True)
+                    else:
+                        st.info("No in vitro rows available for this gene under the current thresholds.")
+                else:
+                    st.info("No in vitro tables loaded.")
+
+            with st.expander("Bulk tissue details", expanded=False):
+                if bulk_table is not None and isinstance(bulk_table, pd.DataFrame) and not bulk_table.empty:
+                    _st_df(bulk_table, hide_index=True)
+                elif bulk_sum:
+                    pg = (bulk_sum or {}).get("per_group", {}) or {}
+                    if isinstance(pg, dict) and pg:
+                        dfg = pd.DataFrame.from_dict(pg, orient="index").reset_index().rename(columns={"index": "group"})
+                        dfg = dfg.sort_values(by=["ok", "sig_found", "found"], ascending=[False, False, False], kind="mergesort")
+                        _st_df(dfg, hide_index=True)
+                    else:
+                        st.info("No bulk tissue rows available for this gene.")
+                else:
+                    st.info("No bulk omics tables loaded.")
+
 
     with tab_omics:
         st.markdown(
