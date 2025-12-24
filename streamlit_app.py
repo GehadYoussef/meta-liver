@@ -3188,19 +3188,77 @@ It is a structured description of the data inside this app, not a clinical recom
             )
 
             # ----------------------------
-            # At-a-glance metrics (no jargon)
+            # At-a-glance summary table (no truncation)
             # ----------------------------
-            c1, c2, c3, c4, c5 = st.columns(5)
-            with c1:
-                st.metric("Hepatocytes (single-omics)", _fold_phrase_from_lfc(so_stats.get("med_lfc", np.nan), context="diseased hepatocytes"))
-            with c2:
-                st.metric("Fibrosis stage trend", _wg_phrase(wg_trait, wg_r, wg_p))
-            with c3:
-                st.metric("Network prominence", "missing" if _is_nanlike(kg_pct) else f"~{float(kg_pct):.0f}th percentile")
-            with c4:
-                st.metric("iHeps model", _fold_phrase_from_lfc(iv_stats.get("med_lfc", np.nan), context="disease-like conditions"))
-            with c5:
-                st.metric("Bulk tissue", _fold_phrase_from_lfc(bulk_stats.get("med_lfc", np.nan), context="diseased tissue"))
+            so_phrase_at_a_glance = _fold_phrase_from_lfc(
+                so_stats.get("med_lfc", np.nan),
+                context="diseased hepatocytes",
+            )
+            iv_phrase_at_a_glance = _fold_phrase_from_lfc(
+                iv_stats.get("med_lfc", np.nan),
+                context="disease-like conditions",
+            )
+            bulk_phrase_at_a_glance = _fold_phrase_from_lfc(
+                bulk_stats.get("med_lfc", np.nan),
+                context="diseased tissue",
+            )
+
+            if _is_nanlike(kg_pct):
+                kg_phrase_at_a_glance = "No network evidence loaded for this gene."
+            else:
+                kg_phrase_at_a_glance = f"More connected than about {float(kg_pct):.0f}% of genes in the knowledge graph."
+
+            # Confidence notes (plain language; do not hide non-significant results)
+            so_conf = _support_phrase(int(so_stats.get("n_supported", 0)), int(so_stats.get("n_testable", 0)))
+            if not _is_nanlike(so_ev):
+                so_conf = f"{so_conf} Evidence strength: {_evidence_word(so_ev)}."
+
+            if _is_nanlike(wg_p) or _is_nanlike(wg_r) or not wg_trait:
+                wg_conf = "No fibrosis-stage correlation is available here."
+            else:
+                try:
+                    if float(wg_p) <= 0.05:
+                        wg_conf = "This trend is statistically supported in the WGCNA module–trait analysis."
+                    else:
+                        wg_conf = "This trend is not statistically supported (it may be noise)."
+                except Exception:
+                    wg_conf = "No fibrosis-stage significance information is available here."
+
+            iv_conf = _support_phrase(int(iv_stats.get("n_supported", 0)), int(iv_stats.get("n_testable", 0)))
+            bulk_conf = _support_phrase(int(bulk_stats.get("n_supported", 0)), int(bulk_stats.get("n_testable", 0)))
+
+            at_a_glance = pd.DataFrame(
+                [
+                    {
+                        "Area": "Hepatocytes (single-omics)",
+                        "What it says": so_phrase_at_a_glance,
+                        "How strong is it?": so_conf,
+                    },
+                    {
+                        "Area": "Fibrosis stage trend (WGCNA)",
+                        "What it says": _wg_phrase(wg_trait, wg_r, wg_p),
+                        "How strong is it?": wg_conf,
+                    },
+                    {
+                        "Area": "Network prominence (knowledge graph)",
+                        "What it says": kg_phrase_at_a_glance,
+                        "How strong is it?": "This is a network percentile (not a statistical test).",
+                    },
+                    {
+                        "Area": "iHeps model",
+                        "What it says": iv_phrase_at_a_glance,
+                        "How strong is it?": iv_conf,
+                    },
+                    {
+                        "Area": "Bulk tissue",
+                        "What it says": bulk_phrase_at_a_glance,
+                        "How strong is it?": bulk_conf,
+                    },
+                ]
+            )
+
+            st.markdown("#### At a glance")
+            st.table(at_a_glance)
 
             # ----------------------------
             # Coherent narrative (keep it readable)
