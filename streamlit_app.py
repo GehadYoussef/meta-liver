@@ -3249,6 +3249,7 @@ It is a structured description of the data inside this app, not a clinical recom
                 wg_line = f"**Fibrosis stage model (WGCNA):** No module assignment is available for {g} in the loaded WGCNA tables."
 
             # Knowledge graph / network narrative
+            kg_text = ""  # optional extra plain-language note
             if kg_sum:
                 kg_s = "missing" if _is_nanlike(kg_pct) else f"{float(kg_pct):.0f}th percentile"
                 kg_line = f"**Network context (knowledge graph):** {g} sits around the {kg_s} for network prominence within the curated graph loaded in this app."
