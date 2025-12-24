@@ -862,8 +862,6 @@ st.set_page_config(
 APP_DOI = "10.1101/2024.10.10.617610"
 APP_DOI_URL = "https://doi.org/10.1101/2024.10.10.617610"
 
-MIN_SINGLE_OMICS_AUROC_STUDIES = 2  # enforce ≥2 AUROC studies for Single-Omics screening
-
 APP_CITATION = (
     "Weihs J, Baldo F, Cardinali A, Youssef G, Ludwik K, Haep N, Tang P, Kumar P, "
     "Engelmann C, Quach S, Meindl M, Kucklick M, Engelmann S, Chillian B, Rothe M, "
@@ -1659,29 +1657,6 @@ def _infer_padj_col(df: pd.DataFrame) -> Optional[str]:
 
 
 @st.cache_data(show_spinner=False)
-
-def _load_invitro_ensg_to_symbol_cached() -> Dict[str, str]:
-    """Best-effort ENSG->SYMBOL mapping used to harmonise iHeps outputs with the rest of the app."""
-    cache = _ensure_session_cache("_cache_invitro_gene_map")
-    if "ensg_to_symbol" in cache:
-        return cache["ensg_to_symbol"]
-
-    ensg_to_symbol: Dict[str, str] = {}
-    if iva is not None:
-        try:
-            _sym_to_ensg, _ensg_to_sym = iva._load_gene_mapping()  # type: ignore[attr-defined]
-            if isinstance(_ensg_to_sym, dict):
-                for k, v in _ensg_to_sym.items():
-                    ks = str(k).strip().upper()
-                    vs = str(v).strip().upper()
-                    if ks and vs:
-                        ensg_to_symbol[ks] = vs
-        except Exception:
-            ensg_to_symbol = {}
-
-    cache["ensg_to_symbol"] = ensg_to_symbol
-    return ensg_to_symbol
-
 def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
     """
     Loads all invitro DEG tables under meta-liver-data/stem_cell_model/.
@@ -1746,16 +1721,7 @@ def _load_invitro_all_tables_cached() -> Dict[Tuple[str, str], pd.DataFrame]:
 
         tmp = df.copy()
         tmp = tmp.rename(columns={gcol: "Gene", lfc_col: "log2FoldChange"})
-        tmp["Gene"] = tmp["Gene"].astype(str)
-        tmp["Gene"] = tmp["Gene"].str.replace(r"\..*$", "", regex=True)
-        tmp["Gene"] = tmp["Gene"].map(_normalise_gene)
-
-        ensg_to_symbol = _load_invitro_ensg_to_symbol_cached()
-        if ensg_to_symbol:
-            s_ensg = tmp["Gene"].astype(str)
-            frac_ensg = float(s_ensg.str.startswith("ENSG").mean()) if len(s_ensg) else 0.0
-            if frac_ensg >= 0.25:
-                tmp["Gene"] = s_ensg.map(lambda x: ensg_to_symbol.get(str(x).strip().upper(), str(x).strip().upper()))
+        tmp["Gene"] = tmp["Gene"].astype(str).map(_normalise_gene)
         tmp = tmp.loc[tmp["Gene"] != ""].copy()
         tmp["log2FoldChange"] = pd.to_numeric(tmp["log2FoldChange"], errors="coerce")
 
@@ -2322,14 +2288,6 @@ def run_gene_screener(
             aucd = so_sum.get("auc_median_discriminative", np.nan)
             ev = so_sum.get("evidence_score", np.nan)
 
-            n_auc = so_sum.get("n_auc", np.nan)
-            try:
-                n_auc_i = int(float(n_auc))
-            except Exception:
-                n_auc_i = 0
-            if n_auc_i < int(MIN_SINGLE_OMICS_AUROC_STUDIES):
-                continue
-
             if pd.isna(da) or float(da) < float(min_agreement):
                 continue
             if pd.isna(aucd) or float(aucd) < float(min_auc_disc):
@@ -2358,7 +2316,6 @@ def run_gene_screener(
                 "SingleOmics_evidence": so_all.get("evidence_score", np.nan),
                 "SingleOmics_dir_agreement": so_all.get("direction_agreement", np.nan),
                 "SingleOmics_auc_disc_median": so_all.get("auc_median_discriminative", np.nan),
-                "SingleOmics_n_auc": so_all.get("n_auc", np.nan),
                 "SingleOmics_found": so_all.get("found_count", np.nan),
                 "KG_cluster": kg_all.get("cluster", None),
                 "KG_composite_%ile": kg_all.get("composite_percentile", np.nan),
@@ -2377,11 +2334,11 @@ def run_gene_screener(
 
     df_out = pd.DataFrame(rows)
     if not df_out.empty:
-        for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median", "SingleOmics_n_auc"]:
+        for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"]:
             if c in df_out.columns:
                 df_out[c] = pd.to_numeric(df_out[c], errors="coerce")
         df_out = df_out.sort_values(
-            by=[c for c in ["SingleOmics_evidence", "SingleOmics_n_auc", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"] if c in df_out.columns],
+            by=[c for c in ["SingleOmics_evidence", "SingleOmics_dir_agreement", "SingleOmics_auc_disc_median"] if c in df_out.columns],
             ascending=False,
             na_position="last",
         )
@@ -2566,9 +2523,12 @@ with st.sidebar.expander("Gene screener", expanded=True):
                 key="screener_wgcna_modules",
             )
 
-            trait_sel = str(trait_default or "")
-            if trait_sel:
-                st.caption(f"Trait fixed to {trait_sel}")
+            trait_sel = st.selectbox(
+                "Trait column",
+                options=(fibrosis_like if fibrosis_like else trait_cols) if trait_cols else [""],
+                index=0,
+                key="screener_wgcna_trait",
+            )
 
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -2753,7 +2713,6 @@ doi: [{APP_DOI}]({APP_DOI_URL})
 else:
     # tabs: gene explorer + optional screener tab
     tab_names = [
-        "Gene Summary",
         "Single-Omics Evidence",
         "MAFLD Knowledge Graph",
         "WGCNA Fibrosis Networks",
@@ -2764,8 +2723,8 @@ else:
         tab_names.append("Gene Screener Results")
 
     tabs = st.tabs(tab_names)
-    tab_summary, tab_omics, tab_kg, tab_wgcna, tab_invitro, tab_bulk = tabs[:6]
-    tab_screen = tabs[6] if has_screener and len(tabs) > 6 else None
+    tab_omics, tab_kg, tab_wgcna, tab_invitro, tab_bulk = tabs[:5]
+    tab_screen = tabs[5] if has_screener and len(tabs) > 5 else None
 
     st.title(f"🔬 {search_query}")
 
@@ -2779,82 +2738,6 @@ else:
         st.warning("invitro_analysis module is not available, so the In vitro tab may be limited.")
     if bo is None:
         st.warning("bulk_omics module is not available, so the Bulk Omics tab may be limited.")
-
-    with tab_summary:
-        st.markdown(
-            """
-This tab gives a plain-language snapshot of what the app currently shows for the selected gene across the loaded evidence layers.
-It is descriptive of the data inside this app, not a clinical recommendation.
-"""
-        )
-        st.markdown("---")
-
-        g = _normalise_gene(search_query)
-        if not g:
-            st.info("Type a gene symbol in the sidebar to see a summary here.")
-        else:
-            def _fmt(x: Any, nd: int = 2) -> str:
-                try:
-                    if x is None or (isinstance(x, float) and np.isnan(x)):
-                        return "—"
-                    if isinstance(x, (int, np.integer)):
-                        return str(int(x))
-                    if isinstance(x, (float, np.floating)):
-                        return f"{float(x):.{nd}f}"
-                    s = str(x).strip()
-                    return s if s else "—"
-                except Exception:
-                    return "—"
-
-            so_sum = _get_single_omics_summary(g, single_omics_data) if single_omics_data else {}
-            kg_sum = _get_kg_summary(g, kg_data) if kg_data else {}
-
-            trait_cols = list(wgcna_cor.columns) if isinstance(wgcna_cor, pd.DataFrame) and not wgcna_cor.empty else []
-            fibrosis_like = [t for t in trait_cols if "fibros" in str(t).lower()]
-            w_trait = fibrosis_like[0] if fibrosis_like else (trait_cols[0] if trait_cols else "")
-            wg_sum = _get_wgcna_summary(g, wgcna_module_data, w_trait) if (wgcna_module_data and w_trait) else {}
-
-            invitro_tables = _load_invitro_all_tables_cached()
-            iv_sum = _get_invitro_summary(g, invitro_tables, [], "Any", 0.05, True) if invitro_tables else {}
-
-            bulk_groups = _bulk_groups_available(bulk_omics_data)
-            bulk_sum = _get_bulk_summary(g, bulk_omics_data, bulk_groups, 0.05, 1, False, False) if bulk_omics_data else {}
-
-            st.subheader(f"Gene summary: {g}")
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Single-omics evidence", _fmt(so_sum.get("evidence_score", np.nan)))
-            with c2:
-                st.metric("Knowledge graph %ile", _fmt(kg_sum.get("composite_percentile", np.nan), 0))
-            with c3:
-                st.metric("WGCNA module", _fmt(wg_sum.get("module", "")))
-
-            if so_sum:
-                st.markdown(f"Single-omics: {_fmt(so_sum.get('n_auc', np.nan), 0)} AUROC study/studies, median discrimination AUC {_fmt(so_sum.get('auc_median_discriminative', np.nan))}.")
-                st.markdown(f"For Gene Screener filtering, this layer is counted only when at least {int(MIN_SINGLE_OMICS_AUROC_STUDIES)} AUROC studies exist for the gene.")
-            else:
-                st.markdown("Single-omics: no usable AUROC evidence loaded for this gene, or it is too sparse.")
-
-            if kg_sum:
-                st.markdown(f"Knowledge graph: overall connectivity percentile around {_fmt(kg_sum.get('composite_percentile', np.nan), 0)}.")
-            else:
-                st.markdown("Knowledge graph: gene not found in the loaded KG tables.")
-
-            if wg_sum and wg_sum.get('module'):
-                st.markdown(f"WGCNA: maps to module {_fmt(wg_sum.get('module', ''))} for the default trait used by this app.")
-            else:
-                st.markdown("WGCNA: no module assignment available for this gene with the loaded tables.")
-
-            if iv_sum and int(iv_sum.get('n_ok', 0) or 0) > 0:
-                st.markdown(f"In vitro (iHeps): passes default thresholds in {_fmt(iv_sum.get('n_ok', 0), 0)} contrast(s).")
-            else:
-                st.markdown("In vitro (iHeps): does not pass default thresholds in the loaded contrasts.")
-
-            if bulk_sum and int(bulk_sum.get('n_ok', 0) or 0) > 0:
-                st.markdown(f"Bulk tissue: passes default thresholds in {_fmt(bulk_sum.get('n_ok', 0), 0)} group(s).")
-            else:
-                st.markdown("Bulk tissue: does not pass default thresholds in the loaded groups.")
 
     with tab_omics:
         st.markdown(
