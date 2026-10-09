@@ -1,0 +1,5 @@
+"dataset","genes_compared","auc_correlation","direction_agreement_strong_genes","top50_overlap","old_cell_level_padj_lt_0.05","new_pseudobulk_fdr_lt_0.05","new_pvalue_method"
+"su_GSE166504",3603,0.815,0.959,31,3839,1023,"edgeR QL pseudobulk (3 disease vs 6 control samples)"
+"xiao_GSE189600",7713,0.911,0.994,25,6086,7,"edgeR QL pseudobulk (3 disease vs 3 control samples)"
+"coassolo_GSE210501",134,0.733,0.977,0,67,0,"not testable: 1 disease vs 1 control samples (need >= 2 per group)"
+"wang_human_GSE212837",6767,0.823,0.965,30,0,183,"edgeR QL pseudobulk (9 disease vs 3 control samples)"

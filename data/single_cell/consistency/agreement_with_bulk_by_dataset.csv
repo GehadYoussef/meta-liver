@@ -1,0 +1,5 @@
+"dataset","genes_auc","agreement_auc","genes_pseudobulk","agreement_pseudobulk","cor_pseudobulk_logFC"
+"coassolo_GSE210501",300,0.38,0,NA,NA
+"su_GSE166504",224,0.402,2632,0.42,-0.061
+"wang_human_GSE212837",335,0.684,4608,0.596,0.284
+"xiao_GSE189600",414,0.539,4443,0.527,0.177

@@ -1,0 +1,501 @@
+DrugBank_Accession,Drug Name
+DB09130,Copper
+DB00162,Vitamin A
+DB00163,Vitamin E
+DB00255,Diethylstilbestrol
+DB01645,Genistein
+DB02266,Flufenamic acid
+DB02709,Resveratrol
+DB13751,Glycyrrhizic acid
+DB00070,Hyaluronidase (ovine)
+DB00159,Icosapent
+DB00252,Phenytoin
+DB00266,Dicoumarol
+DB00278,Argatroban
+DB00313,Valproic acid
+DB00328,Indomethacin
+DB00412,Rosiglitazone
+DB00421,Spironolactone
+DB00503,Ritonavir
+DB00515,Cisplatin
+DB00530,Erlotinib
+DB00573,Fenoprofen
+DB00584,Enalapril
+DB00605,Sulindac
+DB00608,Chloroquine
+DB00655,Estrone
+DB00675,Tamoxifen
+DB00677,Isoflurophate
+DB00682,Warfarin
+DB00755,Tretinoin
+DB00783,Estradiol
+DB00852,Pseudoephedrine
+DB00881,Quinapril
+DB00903,Etacrynic acid
+DB00924,Cyclobenzaprine
+DB00951,Isoniazid
+DB00977,Ethinylestradiol
+DB01006,Letrozole
+DB01016,Glyburide
+DB01026,Ketoconazole
+DB01032,Probenecid
+DB01039,Fenofibrate
+DB01045,Rifampicin
+DB01050,Ibuprofen
+DB01053,Benzylpenicillin
+DB01068,Clonazepam
+DB01076,Atorvastatin
+DB01110,Miconazole
+DB01115,Nifedipine
+DB01118,Amiodarone
+DB01183,Naloxone
+DB01197,Captopril
+DB01212,Ceftriaxone
+DB01234,Dexamethasone
+DB01241,Gemfibrozil
+DB01242,Clomipramine
+DB01327,Cefazolin
+DB01370,Aluminium
+DB03017,Lauric acid
+DB03193,Stearic acid
+DB03796,Palmitic Acid
+DB04216,Quercetin
+DB04224,Oleic Acid
+DB04539,Glyphosate
+DB04557,Arachidonic Acid
+DB05812,Abiraterone
+DB08231,Myristic acid
+DB08864,Rilpivirine
+DB08895,Tofacitinib
+DB09213,Dexibuprofen
+DB11397,Dichlorvos
+DB13014,Hypericin
+DB13952,Estradiol acetate
+DB13953,Estradiol benzoate
+DB13954,Estradiol cypionate
+DB13955,Estradiol dienanthate
+DB13956,Estradiol valerate
+DB14517,Aluminium phosphate
+DB14518,Aluminum acetate
+DB14533,Zinc chloride
+DB14548,"Zinc sulfate, unspecified form"
+DB14649,Dexamethasone acetate
+DB00532,Mephenytoin
+DB00636,Clofibrate
+DB00754,Ethotoin
+DB01629,5-fluorouridine
+DB14001,alpha-Tocopherol succinate
+DB14002,D-alpha-Tocopherol acetate
+DB01406,Danazol
+DB02342,2-Methoxyestradiol
+DB14738,Turoctocog alfa pegol
+DB00132,alpha-Linolenic acid
+DB01138,Sulfinpyrazone
+DB02659,Cholic Acid
+DB00157,NADH
+DB00145,Glycine
+DB13151,Anti-inhibitor coagulant complex
+DB01041,Thalidomide
+DB01181,Ifosfamide
+DB01708,Prasterone
+DB09539,Omega-3-acid ethyl esters
+DB00988,Dopamine
+DB06695,Dabigatran etexilate
+DB09061,Cannabidiol
+DB11133,Omega-3 fatty acids
+DB14009,Medical Cannabis
+DB14011,Nabiximols
+DB00158,Folic acid
+DB01593,Zinc
+DB14487,Zinc acetate
+DB00118,Ademetionine
+DB00396,Progesterone
+DB06777,Chenodeoxycholic acid
+DB09462,Glycerin
+DB00086,Streptokinase
+DB04786,Suramin
+DB09332,Kappadione
+DB09221,Polaprezinc
+DB11672,Curcumin
+DB09301,Chondroitin sulfate
+DB14635,Curcumin sulfate
+DB00006,Bivalirudin
+DB00338,Omeprazole
+DB00499,Flutamide
+DB01229,Paclitaxel
+DB01248,Docetaxel
+DB00013,Urokinase
+DB12831,Gabexate
+DB00668,Epinephrine
+DB00197,Troglitazone
+DB00990,Exemestane
+DB01127,Econazole
+DB00170,Menadione
+DB00542,Benazepril
+DB00178,Ramipril
+DB00790,Perindopril
+DB00143,Glutathione
+DB00184,Nicotine
+DB00780,Phenelzine
+DB02509,Farnesol
+DB03147,Flavin adenine dinucleotide
+DB02486,2-Hydroxyethyl Disulfide
+DB02943,N-(4-Aminobutanoyl)-S-(4-methoxybenzyl)-L-cysteinylglycine
+DB03602,S-benzylglutathione
+DB04132,S-Hexylglutathione
+DB00531,Cyclophosphamide
+DB00564,Carbamazepine
+DB00822,Disulfiram
+DB00834,Mifepristone
+DB01174,Phenobarbital
+DB01217,Anastrozole
+DB06595,Midostaurin
+DB13179,Troleandomycin
+DB00257,Clotrimazole
+DB00363,Clozapine
+DB00379,Mexiletine
+DB00836,Loperamide
+DB01074,Perhexiline
+DB11638,Artenimol
+DB12500,Fedratinib
+DB13174,Rhein
+DB00428,Streptozocin
+DB01094,Hesperetin
+DB01097,Leflunomide
+DB05928,Dovitinib
+DB05990,Obeticholic acid
+DB06510,Muraglitazar
+DB06732,beta-Naphthoflavone
+DB08910,Pomalidomide
+DB11967,Binimetinib
+DB01752,S-adenosyl-L-homocysteine
+DB00239,Oxiconazole
+DB00312,Pentobarbital
+DB00357,Aminoglutethimide
+DB00393,Nimodipine
+DB01220,Rifaximin
+DB01393,Bezafibrate
+DB01411,Pranlukast
+DB02789,Pregnenolone
+DB08827,Lomitapide
+DB08877,Ruxolitinib
+DB09030,Vorapaxar
+DB11752,Bryostatin 1
+DB11817,Baricitinib
+DB11986,Entrectinib
+DB12010,Fostamatinib
+DB12582,Piperine
+DB13961,Fish oil
+DB15035,Zanubrutinib
+DB00519,Trandolapril
+DB00374,Treprostinil
+DB00945,Acetylsalicylic acid
+DB03756,Doconexent
+DB04898,Ximelagatran
+DB11995,Avatrombopag
+DB01213,Fomepizole
+DB01586,Ursodeoxycholic acid
+DB08846,Ellagic acid
+DB00849,Methylphenobarbital
+DB00171,ATP
+DB01064,Isoprenaline
+DB01407,Clenbuterol
+DB04930,Permethrin
+DB08904,Certolizumab pegol
+DB11605,Myrrh
+DB06757,Manganese
+DB00114,Pyridoxal phosphate
+DB00142,Glutamic acid
+DB11300,Thrombin
+DB01017,Minocycline
+DB03366,Imidazole
+DB03461,Nicotinamide adenine dinucleotide phosphate
+DB00055,Drotrecogin alfa
+DB00100,Coagulation Factor IX (Recombinant)
+DB13152,Coagulation Factor IX Human
+DB01892,Hyperforin
+DB02110,Protoporphyrin Ix Containing Co
+DB00048,Collagenase clostridium histolyticum
+DB10770,Foreskin fibroblast (neonatal)
+DB05777,Thrombomodulin Alfa
+DB00001,Lepirudin
+DB01123,Proflavine
+DB01725,"2-{2-hydroxy-[1,1'-biphenyl]-3-yl}-1H-1,3-benzodiazole-5-carboximidamide"
+DB01766,Beta-(2-Naphthyl)-Alanine
+DB01767,Hemi-Babim
+DB02287,2-(2-hydroxy-phenyl)-3H-benzoimidazole-5-carboxamidine
+DB02723,"4-Oxo-2-Phenylmethanesulfonyl-Octahydro-Pyrrolo[1,2-a]Pyrazine-6-Carboxylic Acid [1-(N-Hydroxycarbamimidoyl)-Piperidin-4-Ylmethyl]-Amide"
+DB03136,4-Iodobenzo[B]Thiophene-2-Carboxamidine
+DB03159,CRA_8696
+DB03847,gamma-carboxy-L-glutamic acid
+DB03865,6-Chloro-2-(2-Hydroxy-Biphenyl-3-Yl)-1h-Indole-5-Carboxamidine
+DB04136,Lysophosphotidylserine
+DB04591,"N-{2,2-DIFLUORO-2-[(2R)-PIPERIDIN-2-YL]ETHYL}-2-[2-(1H-1,2,4-TRIAZOL-1-YL)BENZYL][1,3]OXAZOLO[4,5-C]PYRIDIN-4-AMINE"
+DB04697,TRANS-4-(GUANIDINOMETHYL)-CYCLOHEXANE-L-YL-D-3-CYCLOHEXYLALANYL-L-AZETIDINE-2-YL-D-TYROSINYL-L-HOMOARGININAMIDE
+DB04722,"2-[3-chloro-6-[2,2-difluoro-2-(1-oxidopyridin-1-ium-2-yl)ethyl]imino-1-hydroxypyridin-2-yl]-N-[(1R)-1-(3-chlorophenyl)ethyl]acetamide"
+DB04771,1-GUANIDINO-4-(N-NITRO-BENZOYLAMINO-L-LEUCYL-L-PROLYLAMINO)BUTANE
+DB04772,1-GUANIDINO-4-(N-PHENYLMETHANESULFONYL-L-LEUCYL-L-PROLYLAMINO)BUTANE
+DB05714,Flovagatran
+DB06404,Human C1-esterase inhibitor
+DB06838,methyl L-phenylalaninate
+DB06841,"[(2R)-1-[(2S)-2-[[(2S,3S)-1-Chloro-6-(diaminomethylideneamino)-2-hydroxyhexan-3-yl]carbamoyl]pyrrolidin-1-yl]-1-oxo-3-phenylpropan-2-yl]azanium"
+DB06845,(S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclopentylamino)ethanoyl)pyrrolidine-2-carboxamide
+DB06850,(S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclohexylamino)ethanoyl)pyrrolidine-2-carboxamide
+DB06853,N-cycloheptylglycyl-N-(4-carbamimidoylbenzyl)-L-prolinamide
+DB06858,N-cyclooctylglycyl-N-(4-carbamimidoylbenzyl)-L-prolinamide
+DB06859,N-ALLYL-5-AMIDINOAMINOOXY-PROPYLOXY-3-CHLORO-N-CYCLOPENTYLBENZAMIDE
+DB06861,6-(2-HYDROXY-CYCLOPENTYL)-7-OXO-HEPTANAMIDINE
+DB06865,6-CARBAMIMIDOYL-2-[2-HYDROXY-6-(4-HYDROXY-PHENYL)-INDAN-1-YL]-HEXANOIC ACID
+DB06866,6-CARBAMIMIDOYL-2-[2-HYDROXY-5-(3-METHOXY-PHENYL)-INDAN-1-YL]-HEXANOIC ACID
+DB06868,N-(3-chlorobenzyl)-1-(4-methylpentanoyl)-L-prolinamide
+DB06869,1-[2-AMINO-2-CYCLOHEXYL-ACETYL]-PYRROLIDINE-3-CARBOXYLIC ACID 5-CHLORO-2-(2-ETHYLCARBAMOYL-ETHOXY)-BENZYLAMIDE
+DB06878,1-[(2R)-2-aminobutanoyl]-N-(3-chlorobenzyl)-L-prolinamide
+DB06911,D-leucyl-N-(3-chlorobenzyl)-L-prolinamide
+DB06919,D-phenylalanyl-N-(3-chlorobenzyl)-L-prolinamide
+DB06929,1-butanoyl-N-(4-carbamimidoylbenzyl)-L-prolinamide
+DB06936,N-(4-carbamimidoylbenzyl)-1-(4-methylpentanoyl)-L-prolinamide
+DB06942,N-(4-carbamimidoylbenzyl)-1-(3-phenylpropanoyl)-L-prolinamide
+DB06947,1-[(2R)-2-aminobutanoyl]-N-(4-carbamimidoylbenzyl)-L-prolinamide
+DB06996,D-leucyl-N-(4-carbamimidoylbenzyl)-L-prolinamide
+DB07005,D-phenylalanyl-N-{4-[amino(iminio)methyl]benzyl}-L-prolinamide
+DB07016,"(3R)-8-(dioxidosulfanyl)-3-methyl-1,2,3,4-tetrahydroquinoline"
+DB07027,D-phenylalanyl-N-(3-fluorobenzyl)-L-prolinamide
+DB07083,beta-phenyl-D-phenylalanyl-N-propyl-L-prolinamide
+DB07088,(S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclopentyloxy)ethanoyl)pyrrolidine-2-carboxamide
+DB07091,(S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclohexyloxy)ethanoyl)pyrrolidine-2-carboxamide
+DB07095,(S)-N-(4-carbamimidoylbenzyl)-1-(3-cyclopentylpropanoyl)pyrrolidine-2-carboxamide
+DB07105,2-[2-(4-Chloro-Phenylsulfanyl)-Acetylamino]-3-(4-Guanidino-Phenyl)-Propionamide
+DB07120,"3-Carbamimidamido-1,1-diphenylurea"
+DB07128,"N7-BUTYL-N2-(5-CHLORO-2-METHYLPHENYL)-5-METHYL[1,2,4]TRIAZOLO[1,5-A]PYRIMIDINE-2,7-DIAMINE"
+DB07131,(S)-N-(4-carbamimidoylbenzyl)-1-(3-cyclohexylpropanoyl)pyrrolidine-2-carboxamide
+DB07133,D-phenylalanyl-N-(3-methylbenzyl)-L-prolinamide
+DB07143,D-phenylalanyl-N-benzyl-L-prolinamide
+DB07165,N-(5-CHLORO-BENZO[B]THIOPHEN-3-YLMETHYL)-2-[6-CHLORO-OXO-3-(2-PYRIDIN-2-YL-ETHYLAMINO)-2H-PYRAZIN-1-YL]-ACETAMIDE
+DB07190,3-cyclohexyl-D-alanyl-N-(3-chlorobenzyl)-L-prolinamide
+DB07211,(2R)-2-(5-CHLORO-2-THIENYL)-N-{(3S)-1-[(1S)-1-METHYL-2-MORPHOLIN-4-YL-2-OXOETHYL]-2-OXOPYRROLIDIN-3-YL}PROPENE-1-SULFONAMIDE
+DB07277,2-(5-CHLORO-2-THIENYL)-N-{(3S)-1-[(1S)-1-METHYL-2-MORPHOLIN-4-YL-2-OXOETHYL]-2-OXOPYRROLIDIN-3-YL}ETHANESULFONAMIDE
+DB07278,GW-813893
+DB07279,N-ETHYL-N-ISOPROPYL-3-METHYL-5-{[(2S)-2-(PYRIDIN-4-YLAMINO)PROPYL]OXY}BENZAMIDE
+DB07353,"4-(2,5-DIAMINO-5-HYDROXY-PENTYL)-PHENOL"
+DB07366,2-[N'-(4-AMINO-BUTYL)-HYDRAZINOCARBONYL]-PYRROLIDINE-1-CARBOXYLIC ACID BENZYL ESTER
+DB07376,5-(DIMETHYLAMINO)-1-NAPHTHALENESULFONIC ACID(DANSYL ACID)
+DB07400,1-ETHOXYCARBONYL-D-PHE-PRO-2(4-AMINOBUTYL)HYDRAZINE
+DB07440,4-TERT-BUTYLBENZENESULFONIC ACID
+DB07461,"3-AMINO-3-BENZYL-9-CARBOXAMIDE[4.3.0]BICYCLO-1,6-DIAZANONAN-2-ONE"
+DB07508,4-(5-BENZENESULFONYLAMINO-1-METHYL-1H-BENZOIMIDAZOL-2-YLMETHYL)-BENZAMIDINE
+DB07515,"1-(2-{[(6-amino-2-methylpyridin-3-yl)methyl]amino}ethyl)-6-chloro-3-[(2,2-difluoro-2-pyridin-2-ylethyl)amino]-1,4-dihydropyrazin-2-ol"
+DB07521,"(3Z,6S)-6-Chloro-1-(2-{[(5-chloro-1-benzothiophen-3-yl)methyl]amino}ethyl)-3-({2-[(2R)-2-piperidinyl]ethyl}imino)-2-piperazinol"
+DB07522,"N-[(2R,3S)-3-AMINO-2-HYDROXY-4-PHENYLBUTYL]NAPHTHALENE-2-SULFONAMIDE"
+DB07527,"N-[(2R,3S)-3-AMINO-2-HYDROXY-4-PHENYLBUTYL]-4-METHOXY-2,3,6-TRIMETHYLBENZENESULFONAMIDE"
+DB07548,"2-(6-CHLORO-3-{[2,2-DIFLUORO-2-(2-PYRIDINYL)ETHYL]AMINO}-2-OXO-1(2H)-PYRAZINYL)-N-[(2-FLUORO-6-PYRIDINYL)METHYL]ACETAMIDE"
+DB07549,"2-(6-CHLORO-3-{[2,2-DIFLUORO-2-(2-PYRIDINYL)ETHYL]AMINO}-2-OXO-1(2H)-PYRAZINYL)-N-[(2-FLUORO-3-METHYL-6-PYRIDINYL)METHYL]ACETAMIDE"
+DB07550,"2-(6-CHLORO-3-{[2,2-DIFLUORO-2-(1-OXIDO-2-PYRIDINYL)ETHYL]AMINO}-2-OXO-1(2H)-PYRAZINYL)-N-[(2-FLUOROPHENYL)METHYL]ACETAMIDE"
+DB07639,3-(7-DIAMINOMETHYL-NAPHTHALEN-2-YL)-PROPIONIC ACID ETHYL ESTER
+DB07658,AC-(D)Phe-pro-borolys-OH
+DB07659,AC-(D)PHE-PRO-BOROHOMOLYS-OH
+DB07660,AC-(D)PHE-PRO-BOROHOMOORNITHINE-OH
+DB07665,"N-[2-(carbamimidamidooxy)ethyl]-2-{6-cyano-3-[(2,2-difluoro-2-pyridin-2-ylethyl)amino]-2-fluorophenyl}acetamide"
+DB07718,4-Hydroxyphenylpyruvic acid
+DB07741,"4-(1R,3AS,4R,8AS,8BR)-[1-DIFLUOROMETHYL-2-(4-FLUOROBENZYL)-3-OXODECAHYDROPYRROLO[3,4-A]PYRROLIZIN-4-YL]BENZAMIDINE"
+DB07796,"(3ASR,4RS,8ASR,8BRS)-4-(2-(4-FLUOROBENZYL)-1,3-DIOXODEACAHYDROPYRROLO[3,4-A] PYRROLIZIN-4-YL)BENZAMIDINE"
+DB07809,4-({[4-(3-METHYLBENZOYL)PYRIDIN-2-YL]AMINO}METHYL)BENZENECARBOXIMIDAMIDE
+DB07897,1-(HYDROXYMETHYLENEAMINO)-8-HYDROXY-OCTANE
+DB07934,[[CYCLOHEXANESULFONYL-GLYCYL]-3[PYRIDIN-4-YL-AMINOMETHYL]ALANYL]PIPERIDINE
+DB07944,N-{3-METHYL-5-[2-(PYRIDIN-4-YLAMINO)-ETHOXY]-PHENYL}-BENZENESULFONAMIDE
+DB07946,"N-[2-({[amino(imino)methyl]amino}oxy)ethyl]-2-{6-chloro-3-[(2,2-difluoro-2-phenylethyl)amino]-2-fluorophenyl}acetamide"
+DB08061,4-[3-(4-CHLOROPHENYL)-1H-PYRAZOL-5-YL]PIPERIDINE
+DB08062,"3-(4-CHLOROPHENYL)-5-(METHYLTHIO)-4H-1,2,4-TRIAZOLE"
+DB08152,{(2S)-1-[N-(tert-butoxycarbonyl)glycyl]pyrrolidin-2-yl}methyl (3-chlorophenyl)acetate
+DB08187,N-Methylphenylalanyl-N-[(trans-4-aminocyclohexyl)methyl]-L-prolinamide
+DB08254,2-Naphthalenesulfonic acid
+DB08422,[PHENYLALANINYL-PROLINYL]-[2-(PYRIDIN-4-YLAMINO)-ETHYL]-AMINE
+DB08546,"4-[(3AS,4R,7R,8AS,8BR)-2-(1,3-BENZODIOXOL-5-YLMETHYL)-7-HYDROXY-1,3-DIOXODECAHYDROPYRROLO[3,4-A]PYRROLIZIN-4-YL]BENZENECARBOXIMIDAMIDE"
+DB08624,"1-[(4S)-4-amino-5-(1,3-benzothiazol-2-yl)-5-oxopentyl]guanidine"
+DB09109,Turoctocog alfa
+DB09228,Conestat alfa
+DB11166,Antithrombin Alfa
+DB12598,Nafamostat
+DB00431,Lindane
+DB00786,Marimastat
+DB01296,Glucosamine
+DB01890,"N,N-Bis(3-(D-gluconamido)propyl)deoxycholamide"
+DB02746,Phthalic Acid
+DB04519,Caprylic acid
+DB04971,Reglitazar
+DB05187,Elafibranor
+DB05416,Cardarine
+DB06521,Ertiprotafib
+DB06533,Ragaglitazar
+DB06536,Tesaglitazar
+DB07215,GW-590735
+DB07724,Indeglitazar
+DB08915,Aleglitazar
+DB09006,Clinofibrate
+DB09064,Ciprofibrate
+DB09422,Soybean oil
+DB12007,Isoflavone
+DB12961,Leukotriene B4
+DB13873,Fenofibric acid
+DB07080,TO-901317
+DB07929,"N-(TERT-BUTYL)-3,5-DIMETHYL-N'-[(5-METHYL-2,3-DIHYDRO-1,4-BENZODIOXIN-6-YL)CARBONYL]BENZOHYDRAZIDE"
+DB08175,"(2E,4E)-11-METHOXY-3,7,11-TRIMETHYLDODECA-2,4-DIENOIC ACID"
+DB01162,Terazosin
+DB00583,Levocarnitine
+DB00160,Alanine
+DB01592,Iron
+DB14488,Ferrous gluconate
+DB14489,Ferrous succinate
+DB14490,Ferrous ascorbate
+DB14491,Ferrous fumarate
+DB14501,Ferrous glycine sulfate
+DB03467,Naringenin
+DB04468,Afimoxifene
+DB04824,Phenolphthalein
+DB07931,Hexestrol
+DB01025,Amlexanox
+DB08604,Triclosan
+DB00536,Guanidine
+DB02115,Daidzin
+DB04381,Crotonaldehyde
+DB05475,Golotimod
+DB05434,ABT-510
+DB10772,Foreskin keratinocyte (neonatal)
+DB04447,"1,4-Dithiothreitol"
+DB06246,Exisulind
+DB00144,Phosphatidyl serine
+DB00009,Alteplase
+DB00015,Reteplase
+DB00029,Anistreplase
+DB00031,Tenecteplase
+DB03435,Uridine-5'-Diphosphate
+DB06245,Lanoteplase
+DB00492,Fosinopril
+DB00616,Candoxatril
+DB00691,Moexipril
+DB00722,Lisinopril
+DB00886,Omapatrilat
+DB01180,Rescinnamine
+DB01340,Cilazapril
+DB01348,Spirapril
+DB02032,Epicaptopril
+DB03740,N-acetyl-alpha-D-glucosamine
+DB08836,Temocapril
+DB09477,Enalaprilat
+DB13166,Zofenopril
+DB15565,Cilazaprilat
+DB02721,4-Iodopyrazole
+DB04065,N-Cyclopentyl-N-Cyclobutylformamide
+DB04852,Implitapide
+DB05678,SLx-4090
+DB05254,Fibrinolysin
+DB11994,Diacerein
+DB01055,Mimosine
+DB03814,2-(N-morpholino)ethanesulfonic acid
+DB01404,Ginseng
+DB05168,Vintafolide
+DB05361,SR-123781A
+DB08813,Nadroparin
+DB04530,"S,S-(2-Hydroxyethyl)Thiocysteine"
+DB02292,Irosustat
+DB03559,Cyclohexylformamide
+DB02481,N-Benzylformamide
+DB03703,Cyclohexanol
+DB04105,N-Heptylformamide
+DB03191,3-Oxiran-2ylalanine
+DB03611,L-2-amino-4-methoxy-cis-but-3-enoic acid
+DB08063,"1-BENZYL-3-(4-METHOXYPHENYLAMINO)-4-PHENYLPYRROLE-2,5-DIONE"
+DB03977,Trimethyllysine
+DB01497,Etorphine
+DB01565,Dihydromorphine
+DB06641,Perifosine
+DB01427,Amrinone
+DB00707,Porfimer sodium
+DB00493,Cefotaxime
+DB05207,SD118
+DB05303,OMS-103HP
+DB05194,KB002
+DB03310,Glutathione disulfide
+DB03338,Heptyl glucoside
+DB00005,Etanercept
+DB00051,Adalimumab
+DB00065,Infliximab
+DB04956,Afelimomab
+DB05017,YSIL6
+DB05218,PN0621
+DB05412,Talmapimod
+DB05470,VX-702
+DB05513,Atiprimod
+DB05744,CRx-139
+DB05758,CYT007-TNFQb
+DB05767,Andrographolide
+DB05869,Ethyl pyruvate
+DB05879,AME-527
+DB05968,PR-104
+DB05992,Plinabulin
+DB06444,Dexanabinol
+DB06495,Onercept
+DB06674,Golimumab
+DB12140,Dilmapimod
+DB01834,"(9R,10R)-9-(S-glutathionyl)-10-hydroxy-9,10-dihydrophenanthrene"
+DB02165,Zinc trihydroxide
+DB02458,"S-(2,4-dinitrophenyl)glutathione"
+DB03314,5-fluorotryptophan
+DB04187,"(9S,10S)-9-(S-glutathionyl)-10-hydroxy-9,10-dihydrophenanthrene"
+DB03003,Glutathione sulfonic acid
+DB01915,S-Hydroxycysteine
+DB02633,Cibacron Blue
+DB03619,Deoxycholic acid
+DB03686,S-(4-nitrobenzyl)glutathione
+DB04339,Carbocisteine
+DB04972,Canfosfamide
+DB05460,Ezatiostat
+DB07849,S-NONYL-CYSTEINE
+DB08370,S-(4-BROMOBENZYL)CYSTEINE
+DB11831,Dinitrochlorobenzene
+DB05855,Rivanicline
+DB02052,Indirubin-3'-monoxime
+DB12116,Epigallocatechin gallate
+DB04522,Dexfosfoserine
+DB06083,Tapinarof
+DB07556,CGS-27023
+DB07926,N-[3-(N'-HYDROXYCARBOXAMIDO)-2-(2-METHYLPROPYL)-PROPANOYL]-O-TYROSINE-N-METHYLAMIDE
+DB08403,METHYLAMINO-PHENYLALANYL-LEUCYL-HYDROXAMIC ACID
+DB08482,[[1-[N-HYDROXY-ACETAMIDYL]-3-METHYL-BUTYL]-CARBONYL-LEUCINYL]-ALANINE ETHYL ESTER
+DB08491,N-HYDROXY-2-[4-(4-PHENOXY-BENZENESULFONYL)-TETRAHYDRO-PYRAN-4-YL]-ACETAMIDE
+DB02482,Phosphonothreonine
+DB11626,Tasonermin
+DB04466,SR12813
+DB11087,Pyrethrum extract
+DB05484,MDX-018
+DB06205,Hyaluronidase (human recombinant)
+DB14740,Hyaluronidase
+DB04801,cis-Vaccenic acid
+DB05188,KD3010
+DB07070,(2S)-2-{3-[({[2-fluoro-4-(trifluoromethyl)phenyl]carbonyl}amino)methyl]-4-methoxybenzyl}butanoic acid
+DB07691,"2-({[3-(3,4-dihydroisoquinolin-2(1H)-ylsulfonyl)phenyl]carbonyl}amino)benzoic acid"
+DB08078,{4-[3-(4-acetyl-3-hydroxy-2-propylphenoxy)propoxy]phenoxy}acetic acid
+DB03317,Ferroheme C
+DB03934,Protoporphyrin Ix Containing Zn
+DB04249,Zinc Substituted Heme C
+DB04707,Hydroxyfasudil
+DB07876,(S)-2-METHYL-1-[(4-METHYL-5-ISOQUINOLINE)SULFONYL]-HOMOPIPERAZINE
+DB08162,Fasudil
+DB08756,Y-27632
+DB03297,Benzylsulfonic acid
+DB06372,Rilonacept
+DB07859,4-(4-CHLOROPHENYL)-4-[4-(1H-PYRAZOL-4-YL)PHENYL]PIPERIDINE
+DB07947,ISOQUINOLINE-5-SULFONIC ACID (2-(2-(4-CHLOROBENZYLOXY)ETHYLAMINO)ETHYL)AMIDE
+DB08073,(2S)-1-(1H-INDOL-3-YL)-3-{[5-(3-METHYL-1H-INDAZOL-5-YL)PYRIDIN-3-YL]OXY}PROPAN-2-AMINE
+DB07776,Flavone
+DB05013,Ingenol mebutate
+DB06451,Aprinocarsen
+DB04327,Phosphatidylethanolamine
+DB01927,Duroquinone
+DB02395,"3-Hydroxymethyl-5-Aziridinyl-1methyl-2-[1h-Indole-4,7-Dione]-Propanol"
+DB02400,ES-936
+DB03626,"5-Methoxy-1,2-Dimethyl-3-(Phenoxymethyl)Indole-4,7-Dione"
+DB04090,RH-1
+DB04392,"Bishydroxy[2h-1-Benzopyran-2-One,1,2-Benzopyrone]"
+DB07385,"3-(HYDROXYMETHYL)-1-METHYL-5-(2-METHYLAZIRIDIN-1-YL)-2-PHENYL-1H-INDOLE-4,7-DIONE"
+DB02735,2-Amino-3-Oxo-4-Sulfo-Butyric Acid
+DB07715,Emodin

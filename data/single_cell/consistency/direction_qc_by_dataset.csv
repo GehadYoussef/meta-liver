@@ -1,0 +1,5 @@
+"dataset","genes_tested","pct_up","directions_reliable"
+"coassolo_GSE210501",4796,90.8,FALSE
+"su_GSE166504",3627,54.8,TRUE
+"wang_human_GSE212837",6791,61.9,TRUE
+"xiao_GSE189600",7725,54.4,TRUE

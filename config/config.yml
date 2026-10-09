@@ -1,0 +1,176 @@
+# Pipeline configuration. Relative paths are from the project root.
+
+defaults:
+  seed: 42
+  min_features: 200            # QC: minimum genes per cell
+  # Mitochondrial % cut-off per capture: median + mt_n_mads * MAD, kept within [mt_floor, mt_cap].
+  # These suit nuclei. Whole-cell datasets override them below.
+  mt_n_mads: 3
+  mt_floor: 5
+  mt_cap: 20
+  n_pcs: 20
+  cluster_resolution: 0.5
+  batch_var: null              # e.g. "sample" to integrate with Harmony before clustering
+  min_detect_pct: 0.10         # test a gene only if detected in at least 10% of cells in either group
+  depth_match_auc: true        # thin the deeper group's counts to equal median depth before the AUC
+  cells_per_sample_cap: 2000   # max cells per sample in the AUC (equal weight per donor)
+  min_cells_per_sample_pseudobulk: 20
+  target_genes_mouse: data/reference/target_genes_mouse.txt
+  signature_min_auc: 0.6       # target gene joins the signature if discovery AUC is at least this
+  # Lineage annotation, see annotate_lineages() in R/sc_pipeline.R
+  lineage_min_z: 3             # cluster gets a non-hepatocyte lineage if its score z across clusters is at least this
+  lineage_min_score: 0.25      # and score at least this (also the per-cell contamination cut-off)
+  hepatocyte_min_score: 0.1    # otherwise hepatocyte if hepatocyte score is at least this, else "ambiguous"
+  ambient_correction: none     # decontX lowered agreement with bulk in Xiao and Wang, so it is off
+  cell_purity_filter: true     # drop single non-hepatocyte cells/nuclei inside hepatocyte clusters
+  lineage_override: {}         # e.g. {"7": "macrophage"} to correct a cluster label by hand
+
+datasets:
+
+  # Xiao et al. 2023, human liver snRNA-seq, 3 healthy vs 3 NASH livers (1 capture each).
+  xiao_GSE189600:
+    species: human
+    assay: snRNA-seq
+    raw_dir: data/raw/GSE189600_Xiao
+    batch_var: capture
+    samples:
+      - {id: GSM6808755, folder: GSM6808755_Control1, condition: control}
+      - {id: GSM6808756, folder: GSM6808756_Control2, condition: control}
+      - {id: GSM6808757, folder: GSM6808757_Control3, condition: control}
+      - {id: GSM6808758, folder: GSM6808758_NASH1, condition: disease}
+      - {id: GSM6808759, folder: GSM6808759_NASH2, condition: disease}
+      - {id: GSM6808760, folder: GSM6808760_NASH3, condition: disease}
+
+  # Su et al. 2021 (PMID 34755088), mouse hepatocyte scRNA-seq. Disease: 15 weeks HFHFD
+  # (3 mice x 2 captures). Control: chow (6 mice x 1 capture).
+  su_GSE166504:
+    species: mouse
+    assay: scRNA-seq
+    # Whole hepatocytes are mitochondria-rich (median about 30% mt). 50% still removes dead cells.
+    mt_floor: 20
+    mt_cap: 50
+    counts_file: data/raw/GSE166504_Su/GSE166504_cell_raw_counts.20220204.txt.gz
+    metadata_file: data/raw/GSE166504_Su/GSE166504_cell_metadata.20220204.tsv.gz
+    batch_var: capture
+    library_filter: "^Hepatocyte"
+    disease_pattern: "_15weeks_"
+    control_pattern: "_Chow_"
+    control_age_pattern: null    # GEO does not record the chow mice's ages
+    require_author_hepatocyte: true
+
+  # Coassolo/Svensson lab, mouse liver scRNA-seq, chow vs NASH diet 6.5 weeks. One liver
+  # per condition, so there are no p-values and AUCs are descriptive only.
+  coassolo_GSE210501:
+    species: mouse
+    assay: scRNA-seq
+    # Whole cells, same mt cut-offs as su_GSE166504
+    mt_floor: 20
+    mt_cap: 50
+    raw_dir: data/raw/GSE210501_Coassolo
+    samples:
+      - {id: GSM6431458, folder: GSM6431458_Chow, condition: control}
+      - {id: GSM6431459, folder: GSM6431459_NASH, condition: disease}
+
+  # Wang et al. 2023 (Friedman lab, PMID 36599008), human liver snRNA-seq, 3 control vs
+  # 9 NASH livers. NASH livers 1-5 have 2-3 captures each, so donor and capture differ.
+  wang_human_GSE212837:
+    species: human
+    assay: snRNA-seq
+    raw_dir: data/raw/GSE212837_Wang
+    batch_var: capture
+    samples:
+      - {id: GSM6556449, donor: CTRL_1, folder: GSM6556449_humanCTRL_1, condition: control}
+      - {id: GSM6556450, donor: CTRL_2, folder: GSM6556450_humanCTRL_2, condition: control}
+      - {id: GSM6556451, donor: CTRL_3, folder: GSM6556451_humanCTRL_3, condition: control}
+      - {id: GSM6556452, donor: NASH_1, folder: GSM6556452_humanNASH_1_40kNuclei_R1C1_DMSO, condition: disease}
+      - {id: GSM6556453, donor: NASH_1, folder: GSM6556453_humanNASH_1_40kNuclei_R1C2_Flash, condition: disease}
+      - {id: GSM6556454, donor: NASH_2, folder: GSM6556454_humanNASH_2_R1C1_30kNuclei, condition: disease}
+      - {id: GSM6556455, donor: NASH_2, folder: GSM6556455_humanNASH_2_R2C1_30kNuclei, condition: disease}
+      - {id: GSM6556456, donor: NASH_3, folder: GSM6556456_humanNASH_3_R4C1_30kNuclei, condition: disease}
+      - {id: GSM6556457, donor: NASH_3, folder: GSM6556457_humanNASH_3_R5C2_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556458, donor: NASH_3, folder: GSM6556458_humanNASH_3_R6C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556459, donor: NASH_4, folder: GSM6556459_humanNASH_4_R4C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556460, donor: NASH_4, folder: GSM6556460_humanNASH_4_R6C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556461, donor: NASH_5, folder: GSM6556461_humanNASH_5_R3C8_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556462, donor: NASH_5, folder: GSM6556462_humanNASH_5_R5C5_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556463, donor: NASH_6, folder: GSM6556463_humanNASH_6, condition: disease}
+      - {id: GSM6556464, donor: NASH_7, folder: GSM6556464_humanNASH_7, condition: disease}
+      - {id: GSM6556465, donor: NASH_8, folder: GSM6556465_humanNASH_8, condition: disease}
+      - {id: GSM6556466, donor: NASH_9, folder: GSM6556466_humanNASH_9, condition: disease}
+
+  # Sensitivity analysis: Wang human without the five FACS-sorted NASH captures (about 0% mt),
+  # since all controls are unsorted.
+  wang_human_GSE212837_unsorted:
+    species: human
+    assay: snRNA-seq
+    raw_dir: data/raw/GSE212837_Wang
+    batch_var: capture
+    output_dir: data/single_cell/sensitivity
+    samples:
+      - {id: GSM6556449, donor: CTRL_1, folder: GSM6556449_humanCTRL_1, condition: control}
+      - {id: GSM6556450, donor: CTRL_2, folder: GSM6556450_humanCTRL_2, condition: control}
+      - {id: GSM6556451, donor: CTRL_3, folder: GSM6556451_humanCTRL_3, condition: control}
+      - {id: GSM6556457, donor: NASH_3, folder: GSM6556457_humanNASH_3_R5C2_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556458, donor: NASH_3, folder: GSM6556458_humanNASH_3_R6C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556459, donor: NASH_4, folder: GSM6556459_humanNASH_4_R4C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556460, donor: NASH_4, folder: GSM6556460_humanNASH_4_R6C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556461, donor: NASH_5, folder: GSM6556461_humanNASH_5_R3C8_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556462, donor: NASH_5, folder: GSM6556462_humanNASH_5_R5C5_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556463, donor: NASH_6, folder: GSM6556463_humanNASH_6, condition: disease}
+      - {id: GSM6556464, donor: NASH_7, folder: GSM6556464_humanNASH_7, condition: disease}
+      - {id: GSM6556465, donor: NASH_8, folder: GSM6556465_humanNASH_8, condition: disease}
+      - {id: GSM6556466, donor: NASH_9, folder: GSM6556466_humanNASH_9, condition: disease}
+
+  # Sensitivity analyses: Xiao and Wang with decontX ambient RNA correction (scripts/04c)
+  xiao_GSE189600_decontx:
+    species: human
+    assay: snRNA-seq
+    raw_dir: data/raw/GSE189600_Xiao
+    batch_var: capture
+    ambient_correction: decontx
+    output_dir: data/single_cell/sensitivity
+    samples:
+      - {id: GSM6808755, folder: GSM6808755_Control1, condition: control}
+      - {id: GSM6808756, folder: GSM6808756_Control2, condition: control}
+      - {id: GSM6808757, folder: GSM6808757_Control3, condition: control}
+      - {id: GSM6808758, folder: GSM6808758_NASH1, condition: disease}
+      - {id: GSM6808759, folder: GSM6808759_NASH2, condition: disease}
+      - {id: GSM6808760, folder: GSM6808760_NASH3, condition: disease}
+
+  wang_human_GSE212837_decontx:
+    species: human
+    assay: snRNA-seq
+    raw_dir: data/raw/GSE212837_Wang
+    batch_var: capture
+    ambient_correction: decontx
+    output_dir: data/single_cell/sensitivity
+    samples:
+      - {id: GSM6556449, donor: CTRL_1, folder: GSM6556449_humanCTRL_1, condition: control}
+      - {id: GSM6556450, donor: CTRL_2, folder: GSM6556450_humanCTRL_2, condition: control}
+      - {id: GSM6556451, donor: CTRL_3, folder: GSM6556451_humanCTRL_3, condition: control}
+      - {id: GSM6556452, donor: NASH_1, folder: GSM6556452_humanNASH_1_40kNuclei_R1C1_DMSO, condition: disease}
+      - {id: GSM6556453, donor: NASH_1, folder: GSM6556453_humanNASH_1_40kNuclei_R1C2_Flash, condition: disease}
+      - {id: GSM6556454, donor: NASH_2, folder: GSM6556454_humanNASH_2_R1C1_30kNuclei, condition: disease}
+      - {id: GSM6556455, donor: NASH_2, folder: GSM6556455_humanNASH_2_R2C1_30kNuclei, condition: disease}
+      - {id: GSM6556456, donor: NASH_3, folder: GSM6556456_humanNASH_3_R4C1_30kNuclei, condition: disease}
+      - {id: GSM6556457, donor: NASH_3, folder: GSM6556457_humanNASH_3_R5C2_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556458, donor: NASH_3, folder: GSM6556458_humanNASH_3_R6C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556459, donor: NASH_4, folder: GSM6556459_humanNASH_4_R4C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556460, donor: NASH_4, folder: GSM6556460_humanNASH_4_R6C1_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556461, donor: NASH_5, folder: GSM6556461_humanNASH_5_R3C8_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556462, donor: NASH_5, folder: GSM6556462_humanNASH_5_R5C5_20kNoFacsNuclei, condition: disease}
+      - {id: GSM6556463, donor: NASH_6, folder: GSM6556463_humanNASH_6, condition: disease}
+      - {id: GSM6556464, donor: NASH_7, folder: GSM6556464_humanNASH_7, condition: disease}
+      - {id: GSM6556465, donor: NASH_8, folder: GSM6556465_humanNASH_8, condition: disease}
+      - {id: GSM6556466, donor: NASH_9, folder: GSM6556466_humanNASH_9, condition: disease}
+
+  # Wang et al. 2023, mouse NASH liver snRNA-seq (2 NASH mice, 30 weeks, no controls):
+  # are the target genes hepatocyte-specific?
+  wang_mouse_hep_specificity:
+    species: mouse
+    assay: snRNA-seq
+    raw_dir: data/raw/GSE212837_Wang
+    batch_var: capture
+    samples:
+      - {id: GSM6556467, folder: GSM6556467_mouseNASH_1, condition: disease}
+      - {id: GSM6556468, folder: GSM6556468_mouseNASH_2, condition: disease}

@@ -1,0 +1,8 @@
+* text=auto
+*.R text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.csv text eol=lf
+*.rds binary
+*.xlsx binary
+*.gz binary

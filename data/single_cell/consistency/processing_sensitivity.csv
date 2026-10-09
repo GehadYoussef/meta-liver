@@ -1,0 +1,8 @@
+"variant","cells_xiao","cells_wang","xiao_vs_wang_pb_cor","xiao_vs_wang_pb_sign","n_pb","xiao_vs_wang_auc_naive","xiao_vs_wang_auc_depth_matched","n_auc","xiao_vs_bulk_pb_cor","wang_vs_bulk_pb_cor","pct_up_xiao","pct_up_wang"
+"1 all nuclei, nFeature>200 only",65827,252056,-0.071,0.439,5134,0.344,0.371,251,0.189,0.287,57,34
+"2 all nuclei, fixed mt<5% (original QC)",55784,130902,-0.083,0.427,5290,0.58,0.412,408,0.208,0.3,57.8,65.8
+"3 marker-gated hepatocytes, fixed mt<5% (original scripts)",33357,115820,-0.113,0.389,4869,0.544,0.417,494,0.193,0.294,54.5,63.1
+"4 marker-gated hepatocytes, adaptive mt QC",34141,216615,-0.128,0.375,4826,0.295,0.333,339,0.193,0.282,56.9,35.8
+"5 cluster-annotated hepatocytes, adaptive mt QC, no purity filter",42899,178328,-0.121,0.384,5074,0.333,0.304,342,0.186,0.286,62.2,34.6
+"6 full pipeline (cluster + per-cell purity, adaptive mt QC)",27210,120022,-0.132,0.38,4478,0.335,0.34,430,0.177,0.284,54.4,61.9
+"7 full pipeline but fixed mt<5%",25405,80412,-0.119,0.39,4601,0.581,0.426,582,0.175,0.301,51.1,67.4

@@ -1,0 +1,463 @@
+# ============================================================
+# Wang human liver scRNA-seq (CTRL vs NASH)
+# Merge -> QC -> Normalise -> PCA -> Harmony -> UMAP -> Cluster
+# Then: hepatocyte subset (ALB/TTR/CYP2E1) -> BALANCED downsample
+# Then: per-gene AUROC + direction + p-values with rule:
+#   if max(pct.NASH, pct.CTRL) < MIN_DETECT_PCT_FOR_AUC => AUC = 0
+#
+# LIVE PROGRESS:
+# - Prints timestamps + elapsed time around heavy steps
+# - Prints cell counts / gene counts before ROC and DE calls
+# ============================================================
+
+rm(list = ls())
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(Matrix)
+  library(dplyr)
+  library(patchwork)
+  library(harmony)
+})
+
+setwd("/scratch_data/gy260/new_MASH_April_2025/Wang_paper")
+
+# ----------------------------
+# GLOBAL THRESHOLDS / SETTINGS
+# ----------------------------
+MIN_DETECT_PCT_FOR_AUC <- 0.10
+MIN_PCT_CLUSTER_MARKERS <- 0.25
+LOGFC_CLUSTER_MARKERS <- 0.25
+RANDOM_SEED <- 42
+CAP_PER_GROUP <- NA_integer_   # e.g. 20000L to cap; NA keeps all of smaller group
+
+# ----------------------------
+# INPUTS
+# ----------------------------
+samples <- c(
+  "humanCTRL_1","humanCTRL_2","humanCTRL_3",
+  "humanNASH_1","humanNASH_2","humanNASH_3","humanNASH_4",
+  "humanNASH_5","humanNASH_6","humanNASH_7","humanNASH_8","humanNASH_9"
+)
+
+raw_base <- "/scratch_data/gy260/new_MASH_April_2025/Wang_paper/raw_data"
+
+cat("\n============================================================\n")
+cat("START:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+cat("============================================================\n")
+
+# ----------------------------
+# LOAD + CREATE SEURAT OBJECTS
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Loading 10X samples...\n", sep = "")
+t0 <- Sys.time()
+
+seu_list <- lapply(samples, function(sample) {
+  sample_dir <- file.path(raw_base, sample)
+  sample_data <- Read10X(data.dir = sample_dir)
+  seu_obj <- CreateSeuratObject(counts = sample_data, project = sample)
+  seu_obj$sample <- sample
+  seu_obj
+})
+
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Loaded ", length(seu_list),
+    " objects in ", round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+# ----------------------------
+# MERGE
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Merging objects...\n", sep = "")
+t0 <- Sys.time()
+obj <- merge(seu_list[[1]], y = seu_list[-1], add.cell.ids = samples)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Merge done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+cat("Cells:", ncol(obj), "  Genes:", nrow(obj), "\n")
+
+cat("\nMeta-data columns:\n")
+print(colnames(obj@meta.data))
+
+# ----------------------------
+# JOIN LAYERS (Seurat v5)
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Joining layers (Seurat v5)...\n", sep = "")
+t0 <- Sys.time()
+obj <- JoinLayers(obj)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] JoinLayers done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+# ----------------------------
+# CONDITION LABEL (CTRL vs NASH)
+# ----------------------------
+obj$condition <- ifelse(grepl("CTRL", obj$sample, ignore.case = TRUE), "CTRL", "NASH")
+obj$condition <- factor(obj$condition, levels = c("CTRL","NASH"))
+
+cat("\nCondition counts (all cells):\n")
+print(table(obj$condition, obj$sample))
+
+# ----------------------------
+# QC (human mt genes usually MT-)
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] QC metrics...\n", sep = "")
+t0 <- Sys.time()
+obj[["percent.mt"]] <- PercentageFeatureSet(obj, pattern = "^MT-")
+cat("[", format(Sys.time(), "%H:%M:%S"), "] QC metric computed in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1),
+    " secs\n", sep = "")
+
+cat("\nQC summary (before filtering):\n")
+print(summary(obj$percent.mt))
+print(summary(obj$nFeature_RNA))
+print(summary(obj$nCount_RNA))
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Filtering cells...\n", sep = "")
+t0 <- Sys.time()
+obj <- subset(obj, subset = nFeature_RNA > 200 & percent.mt < 5)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Filtering done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1),
+    " secs\n", sep = "")
+cat("After filtering -> Cells:", ncol(obj), "  Genes:", nrow(obj), "\n")
+
+# ----------------------------
+# NORMALISE + FEATURES + SCALE + PCA
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] NormalizeData...\n", sep = "")
+t0 <- Sys.time()
+obj <- NormalizeData(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] NormalizeData done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] FindVariableFeatures...\n", sep = "")
+t0 <- Sys.time()
+obj <- FindVariableFeatures(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] FindVariableFeatures done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] ScaleData...\n", sep = "")
+t0 <- Sys.time()
+obj <- ScaleData(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] ScaleData done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] RunPCA...\n", sep = "")
+t0 <- Sys.time()
+obj <- RunPCA(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] RunPCA done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+# ----------------------------
+# HARMONY + UMAP
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] RunHarmony (batch = sample)...\n", sep = "")
+t0 <- Sys.time()
+obj <- RunHarmony(obj, group.by.vars = "sample", verbose = TRUE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] RunHarmony done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] RunUMAP (harmony dims 1:10)...\n", sep = "")
+t0 <- Sys.time()
+obj <- RunUMAP(obj, reduction = "harmony", dims = 1:10, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] RunUMAP done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+pdf("UMAP_after_harmony_correction.pdf", width = 8, height = 6)
+print(DimPlot(obj, reduction = "umap", label = TRUE, group.by = "sample") +
+        ggtitle("UMAP After Harmony Correction"))
+dev.off()
+
+# ----------------------------
+# CLUSTERING
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] FindNeighbors (harmony dims 1:10)...\n", sep = "")
+t0 <- Sys.time()
+obj <- FindNeighbors(obj, reduction = "harmony", dims = 1:10, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] FindNeighbors done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] FindClusters (resolution 0.5)...\n", sep = "")
+t0 <- Sys.time()
+obj <- FindClusters(obj, resolution = 0.5, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] FindClusters done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+pdf("UMAP_clusters_after_harmony.pdf", width = 8, height = 6)
+print(DimPlot(obj, reduction = "umap", label = TRUE) +
+        ggtitle("UMAP Clusters (Harmony)"))
+dev.off()
+
+# ----------------------------
+# OPTIONAL: CLUSTER MARKERS + HEATMAP
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] FindAllMarkers (optional cluster markers)...\n", sep = "")
+cat("Processing cells:", ncol(obj), " genes:", nrow(obj), "\n")
+t0 <- Sys.time()
+markers <- FindAllMarkers(
+  obj,
+  only.pos = TRUE,
+  min.pct = MIN_PCT_CLUSTER_MARKERS,
+  logfc.threshold = LOGFC_CLUSTER_MARKERS
+)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] FindAllMarkers done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+write.csv(markers, "markers_after_harmony.csv", row.names = FALSE)
+
+cat("\nFindAllMarkers columns:\n")
+print(colnames(markers))
+
+cluster_col <- if ("cluster" %in% colnames(markers)) {
+  "cluster"
+} else if ("ident" %in% colnames(markers)) {
+  "ident"
+} else if ("group" %in% colnames(markers)) {
+  "group"
+} else {
+  stop("No cluster/ident/group column found in FindAllMarkers output.")
+}
+
+fc_col <- if ("avg_log2FC" %in% colnames(markers)) {
+  "avg_log2FC"
+} else if ("avg_logFC" %in% colnames(markers)) {
+  "avg_logFC"
+} else {
+  stop("No avg_log2FC/avg_logFC column found in FindAllMarkers output.")
+}
+
+top10 <- markers %>%
+  dplyr::group_by(.data[[cluster_col]]) %>%
+  dplyr::slice_max(order_by = .data[[fc_col]], n = 10, with_ties = FALSE) %>%
+  dplyr::ungroup()
+
+pdf("cluster_heatmap_after_harmony.pdf", width = 10, height = 12)
+print(DoHeatmap(obj, features = unique(top10$gene)) + NoLegend())
+dev.off()
+
+# ----------------------------
+# HEPATOCYTE SUBSET (ALB/TTR/CYP2E1 gating)
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Hepatocyte gating...\n", sep = "")
+
+DefaultAssay(obj) <- "RNA"
+hep_markers_try1 <- c("ALB","TTR","CYP2E1")
+hep_markers_try2 <- c("Alb","Ttr","Cyp2e1")
+
+hep_markers <- intersect(hep_markers_try1, rownames(obj))
+if (length(hep_markers) == 0) {
+  hep_markers <- intersect(hep_markers_try2, rownames(obj))
+}
+
+if (length(hep_markers) < 2) {
+  cat("\nCould not find hepatocyte markers in rownames(obj). First 30 rownames are:\n")
+  print(head(rownames(obj), 30))
+  stop("Hepatocyte marker symbols not found. Matrix may use Ensembl IDs or different symbols.")
+}
+
+cat("Hepatocyte markers found:", paste(hep_markers, collapse = ", "), "\n")
+
+t0 <- Sys.time()
+m <- FetchData(obj, vars = hep_markers)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] FetchData done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1),
+    " secs\n", sep = "")
+
+if (length(hep_markers) >= 3) {
+  hep_cells <- rownames(m)[ m[[hep_markers[1]]] > 0 & (m[[hep_markers[2]]] > 0 | m[[hep_markers[3]]] > 0) ]
+} else {
+  hep_cells <- rownames(m)[ m[[hep_markers[1]]] > 0 & m[[hep_markers[2]]] > 0 ]
+}
+
+cat("Hepatocyte-gated cells:", length(hep_cells), "\n")
+
+obj_hep <- subset(obj, cells = hep_cells)
+cat("Hepatocyte subset counts (before balancing):\n")
+print(table(obj_hep$condition))
+
+# ----------------------------
+# BALANCE CTRL vs NASH by downsampling hepatocytes
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Balancing CTRL vs NASH by downsampling...\n", sep = "")
+set.seed(RANDOM_SEED)
+Idents(obj_hep) <- "condition"
+
+ctrl_cells <- WhichCells(obj_hep, idents = "CTRL")
+nash_cells <- WhichCells(obj_hep, idents = "NASH")
+
+n_bal <- min(length(ctrl_cells), length(nash_cells))
+if (!is.na(CAP_PER_GROUP)) n_bal <- min(n_bal, CAP_PER_GROUP)
+
+cat("CTRL hepatocytes:", length(ctrl_cells), "  NASH hepatocytes:", length(nash_cells), "\n")
+cat("Balanced n per group:", n_bal, "\n")
+
+ctrl_sub <- sample(ctrl_cells, n_bal)
+nash_sub <- sample(nash_cells, n_bal)
+
+obj_hep_bal <- subset(obj_hep, cells = c(ctrl_sub, nash_sub))
+
+cat("Hepatocyte subset counts (after balancing):\n")
+print(table(obj_hep_bal$condition))
+cat("Balanced hepatocyte object -> Cells:", ncol(obj_hep_bal), "  Genes:", nrow(obj_hep_bal), "\n")
+
+# Join layers on BALANCED subset (Seurat v5)
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] JoinLayers on balanced hepatocytes...\n", sep = "")
+t0 <- Sys.time()
+obj_hep_bal <- JoinLayers(obj_hep_bal)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] JoinLayers(balanced) done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+# ----------------------------
+# PER-GENE AUROC + direction + p-values (balanced hepatocytes)
+# Rule: if max(pct_NASH, pct_CTRL) < MIN_DETECT_PCT_FOR_AUC => AUC = 0
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Computing per-gene detection rates...\n", sep = "")
+
+DefaultAssay(obj_hep_bal) <- "RNA"
+Idents(obj_hep_bal) <- "condition"
+
+cells_ctrl <- WhichCells(obj_hep_bal, idents = "CTRL")
+cells_nash <- WhichCells(obj_hep_bal, idents = "NASH")
+
+cat("Balanced cells CTRL:", length(cells_ctrl), "  NASH:", length(cells_nash), "\n")
+
+t0 <- Sys.time()
+counts <- GetAssayData(obj_hep_bal, assay = "RNA", slot = "counts")
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Retrieved counts matrix dim: ",
+    nrow(counts), " genes x ", ncol(counts), " cells in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1),
+    " secs\n", sep = "")
+
+t0 <- Sys.time()
+pct_ctrl <- Matrix::rowSums(counts[, cells_ctrl, drop = FALSE] > 0) / length(cells_ctrl)
+pct_nash <- Matrix::rowSums(counts[, cells_nash, drop = FALSE] > 0) / length(cells_nash)
+pct_max <- pmax(pct_ctrl, pct_nash)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Detection rates done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+keep_genes <- names(pct_max)[pct_max >= MIN_DETECT_PCT_FOR_AUC]
+cat("Genes total:", length(pct_max), "\n")
+cat("Genes with max(pct) >= ", MIN_DETECT_PCT_FOR_AUC, ": ", length(keep_genes), "\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Computing group means for direction (AverageExpression)...\n", sep = "")
+t0 <- Sys.time()
+avg_expr <- AverageExpression(
+  obj_hep_bal,
+  assays = "RNA",
+  slot = "data",
+  group.by = "condition",
+  verbose = FALSE
+)$RNA
+cat("[", format(Sys.time(), "%H:%M:%S"), "] AverageExpression done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+if (!all(c("CTRL","NASH") %in% colnames(avg_expr))) {
+  stop("AverageExpression did not return both CTRL and NASH columns. Check obj_hep_bal$condition.")
+}
+
+avg_ctrl <- avg_expr[, "CTRL"]
+avg_nash <- avg_expr[, "NASH"]
+
+avg_logFC <- avg_nash - avg_ctrl
+direction <- ifelse(avg_logFC > 0, "enriched_in_NASH",
+                    ifelse(avg_logFC < 0, "enriched_in_CTRL", "no_change"))
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"),
+    "] Running ROC AUC on ", length(keep_genes), " genes (this is the slow step)...\n", sep = "")
+t0 <- Sys.time()
+auc_keep <- FindMarkers(
+  obj_hep_bal,
+  ident.1 = "NASH",
+  ident.2 = "CTRL",
+  test.use = "roc",
+  features = keep_genes,
+  min.pct = 0,
+  logfc.threshold = 0,
+  verbose = TRUE
+)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] ROC AUC done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+auc_vec <- rep(0, nrow(avg_expr))
+names(auc_vec) <- rownames(avg_expr)
+auc_vec[rownames(auc_keep)] <- auc_keep$myAUC
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"),
+    "] Running Wilcoxon p-values on ", length(keep_genes), " genes...\n", sep = "")
+t0 <- Sys.time()
+de_keep <- FindMarkers(
+  obj_hep_bal,
+  ident.1 = "NASH",
+  ident.2 = "CTRL",
+  test.use = "wilcox",
+  features = keep_genes,
+  min.pct = 0,
+  logfc.threshold = 0,
+  verbose = TRUE
+)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Wilcoxon done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Building full results table (all genes)...\n", sep = "")
+t0 <- Sys.time()
+
+res <- data.frame(
+  gene = rownames(avg_expr),
+  AUC = as.numeric(auc_vec),
+  avg_logFC = as.numeric(avg_logFC[rownames(avg_expr)]),
+  direction = direction[rownames(avg_expr)],
+  mean_logexpr_CTRL = as.numeric(avg_ctrl[rownames(avg_expr)]),
+  mean_logexpr_NASH = as.numeric(avg_nash[rownames(avg_expr)]),
+  pct_CTRL = as.numeric(pct_ctrl[rownames(avg_expr)]),
+  pct_NASH = as.numeric(pct_nash[rownames(avg_expr)]),
+  max_pct = as.numeric(pct_max[rownames(avg_expr)]),
+  p_val = NA_real_,
+  p_val_adj = NA_real_,
+  tested = FALSE,
+  stringsAsFactors = FALSE
+)
+
+res$tested[res$gene %in% rownames(de_keep)] <- TRUE
+res$p_val[match(rownames(de_keep), res$gene)] <- de_keep$p_val
+res$p_val_adj[match(rownames(de_keep), res$gene)] <- de_keep$p_val_adj
+
+res$AUC[res$max_pct < MIN_DETECT_PCT_FOR_AUC] <- 0
+
+res <- res[order(-res$AUC, -abs(res$avg_logFC)), ]
+
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Table built in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1),
+    " secs\n", sep = "")
+
+write.csv(res, "Hepatocyte_gene_AUC_direction_stats_balanced.csv", row.names = FALSE)
+
+cat("\nTop 20 genes (AUC, direction, avg_logFC, padj):\n")
+print(head(res[, c("gene","AUC","direction","avg_logFC","pct_CTRL","pct_NASH","p_val_adj")], 20))
+
+# ----------------------------
+# SAVE OBJECTS
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Saving RDS objects...\n", sep = "")
+t0 <- Sys.time()
+saveRDS(obj, "Wang_harmony_full_object.rds")
+saveRDS(obj_hep, "Wang_hepatocytes_object.rds")
+saveRDS(obj_hep_bal, "Wang_hepatocytes_balanced_object.rds")
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Saved RDS in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2),
+    " mins\n", sep = "")
+
+cat("\n============================================================\n")
+cat("DONE:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+cat("============================================================\n")

@@ -1,0 +1,263 @@
+# ============================================================
+# Xiao et al / GSE189600 (human snRNA-seq) — SU-style loader + merge (FIXED)
+# Loads ONLY the GSM folders you downloaded (barcodes/features(or genes)/matrix),
+# checks each folder has the 3 files, then Read10X() -> CreateSeuratObject()
+# -> merge -> basic QC+normalise+PCA+UMAP.
+#
+# Expected per GSM folder (ALL gz or ALL non-gz, but not mixed):
+#   barcodes.tsv.gz / barcodes.tsv
+#   features.tsv.gz / features.tsv    (or genes.tsv(.gz) -> will be renamed)
+#   matrix.mtx.gz   / matrix.mtx
+# ============================================================
+
+rm(list = ls())
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(Matrix)
+  library(dplyr)
+  library(ggplot2)
+})
+
+setwd("/scratch_data/gy260/new_MASH_April_2025/Xiao_GSE189600")  # <-- change
+
+# ----------------------------
+# CONFIG
+# ----------------------------
+RANDOM_SEED <- 42
+
+gsm_map <- data.frame(
+  gsm = c("GSM6808755","GSM6808756","GSM6808757","GSM6808758","GSM6808759","GSM6808760"),
+  condition = c("Healthy","Healthy","Healthy","NASH","NASH","NASH"),
+  stringsAsFactors = FALSE
+)
+
+MIN_FEATURES <- 200
+MAX_MT_PCT   <- 5
+PCA_DIMS <- 1:20
+
+cat("\n============================================================\n")
+cat("START:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+cat("============================================================\n")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Checking/standardising GSM folders...\n", sep = "")
+
+for (i in seq_len(nrow(gsm_map))) {
+  gsm <- gsm_map$gsm[i]
+  dir_path <- file.path(getwd(), gsm)
+
+  if (!dir.exists(dir_path)) {
+    stop("Missing folder: ", dir_path, "\nCreate it and place the 3 files inside.")
+  }
+
+  f <- list.files(dir_path, full.names = FALSE)
+
+  # Accept either gz trio OR plain trio
+  has_gz  <- all(c("barcodes.tsv.gz","features.tsv.gz","matrix.mtx.gz") %in% f) ||
+             all(c("barcodes.tsv.gz","genes.tsv.gz","matrix.mtx.gz") %in% f)
+  has_raw <- all(c("barcodes.tsv","features.tsv","matrix.mtx") %in% f) ||
+             all(c("barcodes.tsv","genes.tsv","matrix.mtx") %in% f)
+
+  if (!(has_gz || has_raw)) {
+    # Try to auto-rename GEO-style names to standard names
+    bar <- f[grepl("barcodes\\.tsv(\\.gz)?$", f)]
+    fea <- f[grepl("(features|genes)\\.tsv(\\.gz)?$", f)]
+    mtx <- f[grepl("matrix\\.mtx(\\.gz)?$", f)]
+
+    if (length(bar) != 1 || length(fea) != 1 || length(mtx) != 1) {
+      cat("\nFolder:", dir_path, "\nFiles:\n")
+      print(f)
+      stop("Could not uniquely identify barcodes/features(or genes)/matrix in: ", dir_path,
+           "\nMake sure ONLY one of each exists for that GSM folder.")
+    }
+
+    bar_is_gz <- grepl("\\.gz$", bar)
+    fea_is_gz <- grepl("\\.gz$", fea)
+    mtx_is_gz <- grepl("\\.gz$", mtx)
+
+    if (!(bar_is_gz == fea_is_gz && fea_is_gz == mtx_is_gz)) {
+      stop("Mixed gz/non-gz inside ", dir_path, ". Make all three gz or all three non-gz.")
+    }
+
+    if (bar_is_gz) {
+      file.rename(file.path(dir_path, bar), file.path(dir_path, "barcodes.tsv.gz"))
+      file.rename(file.path(dir_path, fea), file.path(dir_path, "features.tsv.gz"))
+      file.rename(file.path(dir_path, mtx), file.path(dir_path, "matrix.mtx.gz"))
+    } else {
+      file.rename(file.path(dir_path, bar), file.path(dir_path, "barcodes.tsv"))
+      file.rename(file.path(dir_path, fea), file.path(dir_path, "features.tsv"))
+      file.rename(file.path(dir_path, mtx), file.path(dir_path, "matrix.mtx"))
+    }
+  } else {
+    # If they used genes.tsv(.gz), normalise to features.tsv(.gz) (Read10X is fine either way,
+    # but keeping consistent helps you later)
+    if ("genes.tsv.gz" %in% f && !("features.tsv.gz" %in% f)) {
+      file.rename(file.path(dir_path, "genes.tsv.gz"), file.path(dir_path, "features.tsv.gz"))
+    }
+    if ("genes.tsv" %in% f && !("features.tsv" %in% f)) {
+      file.rename(file.path(dir_path, "genes.tsv"), file.path(dir_path, "features.tsv"))
+    }
+  }
+
+  # Final sanity check + reject “mixed gz/non-gz” if user accidentally has both
+  f2 <- list.files(dir_path, full.names = FALSE)
+  gz_present  <- any(grepl("\\.gz$", c("barcodes.tsv.gz","features.tsv.gz","matrix.mtx.gz")) & c("barcodes.tsv.gz","features.tsv.gz","matrix.mtx.gz") %in% f2)
+  raw_present <- any(c("barcodes.tsv","features.tsv","matrix.mtx") %in% f2)
+
+  # If any gz exists, require all three gz and none of the plain trio
+  if (any(c("barcodes.tsv.gz","features.tsv.gz","matrix.mtx.gz") %in% f2)) {
+    if (!all(c("barcodes.tsv.gz","features.tsv.gz","matrix.mtx.gz") %in% f2)) {
+      stop("In ", dir_path, ": expected all 3 gz files but some are missing.")
+    }
+    if (any(c("barcodes.tsv","features.tsv","matrix.mtx") %in% f2)) {
+      stop("In ", dir_path, ": you have BOTH gz and non-gz versions. Remove one set.")
+    }
+  }
+
+  # If no gz, require all three plain
+  if (!any(c("barcodes.tsv.gz","features.tsv.gz","matrix.mtx.gz") %in% f2)) {
+    if (!all(c("barcodes.tsv","features.tsv","matrix.mtx") %in% f2)) {
+      stop("In ", dir_path, ": expected all 3 plain files but some are missing.")
+    }
+  }
+}
+
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Folder checks OK.\n", sep = "")
+
+# ----------------------------
+# Load each GSM -> Seurat -> merge
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Loading GSMs with Read10X...\n", sep = "")
+t0 <- Sys.time()
+
+seu_list <- vector("list", nrow(gsm_map))
+names(seu_list) <- gsm_map$gsm
+
+for (i in seq_len(nrow(gsm_map))) {
+  gsm <- gsm_map$gsm[i]
+  cond <- gsm_map$condition[i]
+  dir_path <- file.path(getwd(), gsm)
+
+  cat("  - ", gsm, " (", cond, ") ... ", sep = "")
+  t_i <- Sys.time()
+
+  mat <- Read10X(data.dir = dir_path)
+
+  # FIX: Read10X may return a LIST (e.g. Gene Expression + other modalities)
+  if (is.list(mat)) {
+    if ("Gene Expression" %in% names(mat)) {
+      mat <- mat[["Gene Expression"]]
+    } else {
+      mat <- mat[[1]]
+    }
+  }
+
+  seu <- CreateSeuratObject(counts = mat, project = gsm)
+  seu$sample <- gsm
+  seu$Condition <- cond
+
+  seu_list[[gsm]] <- seu
+
+  cat("cells=", ncol(seu), " genes=", nrow(seu),
+      " [", round(as.numeric(difftime(Sys.time(), t_i, units = "secs")), 1), "s]\n", sep = "")
+}
+
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Loaded all GSMs in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Merging...\n", sep = "")
+t0 <- Sys.time()
+
+obj <- merge(
+  x = seu_list[[1]],
+  y = seu_list[-1],
+  add.cell.ids = gsm_map$gsm
+)
+
+obj$Condition <- factor(obj$Condition, levels = c("Healthy","NASH"))
+
+cat("[", format(Sys.time(), "%H:%M:%S"), "] Merge done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+cat("Merged -> Cells:", ncol(obj), " Genes:", nrow(obj), "\n")
+cat("Condition counts:\n")
+print(table(obj$Condition, obj$sample))
+
+# ----------------------------
+# QC (snRNA: %mt can be weird; keep thresholds cautious)
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Computing percent.mt...\n", sep = "")
+t0 <- Sys.time()
+obj[["percent.mt"]] <- PercentageFeatureSet(obj, pattern = "^MT-")
+if (all(obj$percent.mt == 0)) obj[["percent.mt"]] <- PercentageFeatureSet(obj, pattern = "^mt-")
+cat("[", format(Sys.time(), "%H:%M:%S"), "] percent.mt done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1), " secs\n", sep = "")
+
+cat("\nQC summary (before filtering):\n")
+print(summary(obj$nFeature_RNA))
+print(summary(obj$nCount_RNA))
+print(summary(obj$percent.mt))
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] QC filtering...\n", sep = "")
+t0 <- Sys.time()
+obj <- subset(obj, subset = nFeature_RNA > MIN_FEATURES & percent.mt < MAX_MT_PCT)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] QC filter done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs")), 1), " secs\n", sep = "")
+cat("After QC -> Cells:", ncol(obj), " Genes:", nrow(obj), "\n")
+cat("Condition counts after QC:\n")
+print(table(obj$Condition))
+
+# ----------------------------
+# Normalise + JoinLayers safety + PCA + UMAP
+# ----------------------------
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] NormalizeData...\n", sep = "")
+t0 <- Sys.time()
+obj <- NormalizeData(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] NormalizeData done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+
+# Seurat v5 safety: join layers after normalisation
+if ("JoinLayers" %in% getNamespaceExports("Seurat")) {
+  cat("[", format(Sys.time(), "%H:%M:%S"), "] JoinLayers after NormalizeData...\n", sep = "")
+  obj <- JoinLayers(obj)
+}
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] FindVariableFeatures...\n", sep = "")
+t0 <- Sys.time()
+obj <- FindVariableFeatures(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] FindVariableFeatures done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] ScaleData...\n", sep = "")
+t0 <- Sys.time()
+obj <- ScaleData(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] ScaleData done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] RunPCA...\n", sep = "")
+t0 <- Sys.time()
+obj <- RunPCA(obj, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] RunPCA done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] RunUMAP...\n", sep = "")
+t0 <- Sys.time()
+obj <- RunUMAP(obj, dims = PCA_DIMS, verbose = FALSE)
+cat("[", format(Sys.time(), "%H:%M:%S"), "] RunUMAP done in ",
+    round(as.numeric(difftime(Sys.time(), t0, units = "mins")), 2), " mins\n", sep = "")
+
+pdf("XIAO_GSE189600_UMAP_By_Condition_raw.pdf", width = 8, height = 6)
+print(DimPlot(obj, group.by = "Condition", pt.size = 0.3) +
+        ggtitle("Xiao GSE189600: UMAP (merged, post-QC)"))
+dev.off()
+
+pdf("XIAO_GSE189600_UMAP_By_Sample_raw.pdf", width = 8, height = 6)
+print(DimPlot(obj, group.by = "sample", pt.size = 0.3) +
+        ggtitle("Xiao GSE189600: UMAP by sample (merged, post-QC)"))
+dev.off()
+
+cat("\n[", format(Sys.time(), "%H:%M:%S"), "] Saving merged object...\n", sep = "")
+saveRDS(obj, "XIAO_GSE189600_merged_postQC.rds")
+
+cat("\n============================================================\n")
+cat("DONE:", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+cat("============================================================\n")

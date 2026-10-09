@@ -1,0 +1,5 @@
+"version","gene_set","called_in_2plus","consistent","conflicting","consistent_in_all","mouse_and_human_agree","mouse_and_human_disagree"
+"v2 (fixed)","all genes",529,206,323,28,95,39
+"v2 (fixed)","target genes",19,7,12,1,3,0
+"legacy (original)","all genes",962,598,364,67,314,61
+"legacy (original)","target genes",31,20,11,2,13,3

@@ -1,0 +1,17 @@
+"variant","compared_with","auc_sign_agreement","n_auc","pb_cor","pb_sign_agreement","n_pb"
+"wang_human_GSE212837_decontx","coassolo_GSE210501",0.522,138,NA,NA,0
+"wang_human_GSE212837_decontx","su_GSE166504",0.613,106,0.151,0.657,983
+"wang_human_GSE212837_decontx","wang_human_GSE212837",1,851,0.969,0.999,10940
+"wang_human_GSE212837_decontx","xiao_GSE189600",0.358,391,-0.106,0.404,4596
+"wang_human_GSE212837_decontx","bulk (NASH F2-F4 vs control)",0.632,299,0.265,0.662,2120
+"wang_human_GSE212837_unsorted","coassolo_GSE210501",0.516,159,NA,NA,0
+"wang_human_GSE212837_unsorted","su_GSE166504",0.594,128,0.176,0.692,906
+"wang_human_GSE212837_unsorted","wang_human_GSE212837",1,817,0.958,0.999,10076
+"wang_human_GSE212837_unsorted","xiao_GSE189600",0.383,399,-0.067,0.428,4318
+"wang_human_GSE212837_unsorted","bulk (NASH F2-F4 vs control)",0.666,323,0.309,0.686,1973
+"xiao_GSE189600_decontx","coassolo_GSE210501",0.574,122,NA,NA,0
+"xiao_GSE189600_decontx","su_GSE166504",0.678,115,0.088,0.572,842
+"xiao_GSE189600_decontx","wang_human_GSE212837",0.305,344,-0.155,0.37,4396
+"xiao_GSE189600_decontx","xiao_GSE189600",1,915,0.96,0.997,7178
+"xiao_GSE189600_decontx","bulk (NASH F2-F4 vs control)",0.512,293,0.156,0.574,1824
+"wang_human_GSE212837_decontx","xiao_GSE189600_decontx",0.307,316,-0.135,0.396,4560

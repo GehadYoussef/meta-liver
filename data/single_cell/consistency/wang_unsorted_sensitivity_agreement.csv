@@ -1,0 +1,9 @@
+"dataset_a","dataset_b","n_genes","agreement"
+"wang_human_GSE212837","coassolo_GSE210501",139,0.532374100719424
+"wang_human_GSE212837","su_GSE166504",112,0.651785714285714
+"wang_human_GSE212837","wang_human_unsorted",817,1
+"wang_human_GSE212837","xiao_GSE189600",430,0.33953488372093
+"wang_human_unsorted","coassolo_GSE210501",159,0.515723270440252
+"wang_human_unsorted","su_GSE166504",128,0.59375
+"wang_human_unsorted","wang_human_GSE212837",817,1
+"wang_human_unsorted","xiao_GSE189600",399,0.383458646616541
