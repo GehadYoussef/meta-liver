@@ -19,7 +19,7 @@ bulkUI <- function(id, d) {
       bslib::layout_columns(
         col_widths = c(6, 6),
         bslib::card(bslib::card_header(shiny::uiOutput(ns("title"))),
-                    plotly::plotlyOutput(ns("volcano"), height = "440px")),
+                    plot_output(ns("volcano"), height = "440px")),
         bslib::card(bslib::card_header(shiny::uiOutput(ns("table_title"))),
                     reactable::reactableOutput(ns("table")))
       )
@@ -37,7 +37,7 @@ bulkUI <- function(id, d) {
         bslib::layout_columns(
           col_widths = c(6, 6),
           bslib::card(bslib::card_header(card_title("Meta-analysis volcano", "chart-simple")),
-                      plotly::plotlyOutput(ns("meta_volcano"), height = "440px")),
+                      plot_output(ns("meta_volcano"), height = "440px")),
           bslib::card(bslib::card_header(shiny::uiOutput(ns("meta_title"))), reactable::reactableOutput(ns("meta_table")))
         )
       )
@@ -53,13 +53,13 @@ bulkServer <- function(id, d) {
     output$title <- shiny::renderUI(card_title(contrast(), "flask",
       "DESeq2 results. Stage contrasts compare each stage with stage 0, the other contrasts compare with controls."))
 
-    output$volcano <- plotly::renderPlotly({
+    output$volcano <- render_plot({
       b <- rows()
       hi <- b$padj < 0.05 & abs(b$log2FC) >= (input$lfc %||% 1)
       col <- ifelse(!hi, "#B8C0CC", ifelse(b$log2FC > 0, PAL$up, PAL$down))
       b$hover <- sprintf("<b>%s</b><br>log2FC %+.2f<br>padj %s", ifelse(is.na(b$gene_human), b$ensembl, b$gene_human),
                          b$log2FC, fmt_p(b$padj))
-      plotly::plot_ly(b, x = ~log2FC, y = ~-log10(pmax(padj, 1e-300)), type = "scattergl", mode = "markers",
+      plot_ly(b, x = ~log2FC, y = ~-log10(pmax(padj, 1e-300)), type = "scattergl", mode = "markers",
                       marker = list(size = ifelse(hi, 6, 4), color = col, opacity = ifelse(hi, 0.9, 0.45), line = list(width = 0)), text = ~hover, hoverinfo = "text") |>
         plot_style(xaxis = list(title = "log2 fold change"), yaxis = list(title = "−log10 adjusted p"),
                    shapes = list(hline(-log10(0.05))), showlegend = FALSE)
@@ -95,14 +95,14 @@ bulkServer <- function(id, d) {
       if (!isFALSE(input$meta_consistent)) m <- m[m$agreement == 1, ]
       m
     })
-    output$meta_volcano <- plotly::renderPlotly({
+    output$meta_volcano <- render_plot({
       m <- meta_rows()
       shiny::validate(shiny::need(nrow(m) > 0, "No genes pass the filters."))
       hi <- m$fdr < 0.05 & abs(m$meta_log2FC) >= 1
       col <- ifelse(!hi, "#B8C0CC", ifelse(m$meta_log2FC > 0, PAL$up, PAL$down))
       m$hover <- sprintf("<b>%s</b><br>meta log2FC %+.2f<br>FDR %s<br>%d cohorts, I\u00b2 %s", m$gene_human,
                          m$meta_log2FC, fmt_p(m$fdr), m$n_studies, ifelse(is.na(m$i2), "n/a", sprintf("%.0f%%", 100 * m$i2)))
-      plotly::plot_ly(m, x = ~meta_log2FC, y = ~-log10(pmax(fdr, 1e-300)), type = "scattergl", mode = "markers",
+      plot_ly(m, x = ~meta_log2FC, y = ~-log10(pmax(fdr, 1e-300)), type = "scattergl", mode = "markers",
                       marker = list(size = ifelse(hi, 6, 4), color = col, opacity = ifelse(hi, 0.9, 0.45), line = list(width = 0)), text = ~hover, hoverinfo = "text") |>
         plot_style(xaxis = list(title = "meta-analysis log2 fold change"), yaxis = list(title = "\u2212log10 FDR"),
                    shapes = list(hline(-log10(0.05))), showlegend = FALSE)

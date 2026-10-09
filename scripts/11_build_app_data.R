@@ -145,10 +145,15 @@ ppi_network <- timed("PPI network", build_ppi_network())
 utils::write.csv(evidence, file.path(cons_dir, "single_cell_evidence_scores.csv"), row.names = FALSE)
 log_step("Evidence tiers: ", paste(names(table(evidence$tier)), table(evidence$tier), sep = "=", collapse = ", "))
 
+# Columns the app does not read are left out to keep the browser version small
+bulk_cohorts$meta$tau2 <- NULL
+sc_unused <- c("legacy_cell_logFC", "legacy_cell_padj", "result_version", "cell_population",
+               "mean_logexpr_disease", "mean_logexpr_control", "pb_method")
+
 app_data <- list(
   bulk_cohorts = bulk_cohorts,
   invitro = invitro[, c("line", "contrast", "ensembl", "gene_human", "log2FC", "lfcSE", "padj", "significant")],
-  invitro_agreement = invitro_agreement,
+  invitro_agreement = invitro_agreement[, c("gene_human", "contrast", "call")],
   evidence = evidence,
   kg_nodes = kg_nodes,
   active_drugs = active_drugs,
@@ -162,7 +167,7 @@ app_data <- list(
   consistency_compare = consistency_compare,
   comparison = comparison,
   hep_specificity = build_hep_specificity(),
-  sc = sc, sc_info = sc_info, bulk = bulk, kg = kg, ppi = ppi, wgcna = wgcna,
+  sc = sc[, setdiff(names(sc), sc_unused)], sc_info = sc_info, bulk = bulk, kg = kg, ppi = ppi, wgcna = wgcna,
   target_genes_mouse = read_target_genes(cfg$defaults$target_genes_mouse),
   target_genes_human = target_genes_human(read_target_genes(cfg$defaults$target_genes_mouse)),
   orthologs = if (is.null(load_orthologs())) "upper-case symbol matching (MGI table not built)" else "MGI one-to-one orthologs",

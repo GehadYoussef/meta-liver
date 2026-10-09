@@ -75,7 +75,7 @@ overviewUI <- function(id, d) {
       bslib::card(
         bslib::card_header(card_title("Do datasets agree on direction?", "code-compare",
           "Share of genes called up or down in both datasets that go the same way. 50% = chance.")),
-        plotly::plotlyOutput(ns("heatmap"), height = "300px")
+        plot_output(ns("heatmap"), height = "300px")
       ),
       bslib::card(
         bslib::card_body(fillable = FALSE, class = "insights",
@@ -93,7 +93,7 @@ overviewUI <- function(id, d) {
 
 overviewServer <- function(id, d) {
   shiny::moduleServer(id, function(input, output, session) {
-    output$heatmap <- plotly::renderPlotly({
+    output$heatmap <- render_plot({
       m <- d$datasets_meta[order(d$datasets_meta$species != "human", -d$datasets_meta$bulk_agreement), ]
       agreement_heatmap(d$consistency$pairwise, m$dataset, m$label)
     })

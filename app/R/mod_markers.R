@@ -25,8 +25,8 @@ markersUI <- function(id, d) {
       bslib::navset_card_underline(
         title = card_title("Strongest genes", "chart-simple",
                            "Bars start at AUC 0.5 (no difference): right = higher in NASH, left = lower."),
-        bslib::nav_panel("Top 25", plotly::plotlyOutput(ns("bars"), height = "560px")),
-        bslib::nav_panel("All genes", plotly::plotlyOutput(ns("plot"), height = "560px"))),
+        bslib::nav_panel("Top 25", plot_output(ns("bars"), height = "560px")),
+        bslib::nav_panel("All genes", plot_output(ns("plot"), height = "560px"))),
       bslib::card(bslib::card_header(card_title("Top genes", "ranking-star",
                     "Ranked by distance of the AUC from 0.5, so strong up- and down-regulated genes rank equally.")),
                   reactable::reactableOutput(ns("table")))
@@ -63,7 +63,7 @@ markersServer <- function(id, d) {
     })
     top <- shiny::reactive(utils::head(filtered(), max(1, input$top_n %||% 100)))
 
-    output$bars <- plotly::renderPlotly({
+    output$bars <- render_plot({
       x <- utils::head(filtered(), 25)
       shiny::validate(shiny::need(nrow(x) > 0, "No genes match the filters."))
       x <- x[order(x$auc), ]
@@ -72,7 +72,7 @@ markersServer <- function(id, d) {
       x$hover <- sprintf("<b>%s</b><br>AUC %.2f<br>detected %.0f%% NASH / %.0f%% control<br>FDR %s",
                          x$gene, x$auc, 100 * x$pct_disease, 100 * x$pct_control, fmt_p(x$pb_fdr))
       lim <- max(0.25, max(abs(x$auc - 0.5)) + 0.05)
-      plotly::plot_ly(x, y = ~gene, x = ~(auc - 0.5), base = 0.5, type = "bar", orientation = "h",
+      plot_ly(x, y = ~gene, x = ~(auc - 0.5), base = 0.5, type = "bar", orientation = "h",
                       marker = list(color = col, line = list(width = 0)), text = ~hover, hoverinfo = "text",
                       textposition = "none") |>
         plot_style(xaxis = list(title = "AUC (NASH vs control)", range = c(0.5 - lim, 0.5 + lim), zeroline = FALSE),
@@ -80,14 +80,14 @@ markersServer <- function(id, d) {
                    shapes = list(vline(0.5)), bargap = 0.35, showlegend = FALSE)
     })
 
-    output$plot <- plotly::renderPlotly({
+    output$plot <- render_plot({
       x <- filtered()
       shiny::validate(shiny::need(nrow(x) > 0, "No genes match the filters."))
       in_top <- x$gene %in% top()$gene
       col <- ifelse(!in_top, "#B8C0CC", ifelse(x$auc > 0.5, PAL$up, PAL$down))
       x$hover <- sprintf("<b>%s</b><br>AUC %.2f<br>detected %.0f%% NASH / %.0f%% control<br>FDR %s",
                          x$gene, x$auc, 100 * x$pct_disease, 100 * x$pct_control, fmt_p(x$pb_fdr))
-      plotly::plot_ly(x, x = ~auc, y = ~(pct_disease - pct_control), type = "scattergl", mode = "markers",
+      plot_ly(x, x = ~auc, y = ~(pct_disease - pct_control), type = "scattergl", mode = "markers",
                       marker = list(size = ifelse(in_top, 8, 5), color = col, opacity = ifelse(in_top, 0.95, 0.45), line = list(width = 0)),
                       text = ~hover, hoverinfo = "text") |>
         plot_style(xaxis = list(title = "AUC (NASH vs control)", range = c(0, 1)),

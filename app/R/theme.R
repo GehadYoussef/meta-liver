@@ -83,9 +83,9 @@ species_icon <- function(species) shiny::icon(if (identical(species, "human")) "
 # Plots
 
 plot_style <- function(p, xaxis = list(), yaxis = list(), legend = list(), ...) {
-  axis_default <- list(gridcolor = "rgba(0,0,0,0.06)", zerolinecolor = "rgba(0,0,0,0.15)")
+  axis_default <- list(gridcolor = "rgba(0,0,0,0.06)", zerolinecolor = "rgba(0,0,0,0.15)", automargin = TRUE)
   p |>
-    plotly::layout(
+    plot_layout(
       font = list(family = "Inter, Segoe UI, system-ui, sans-serif", size = 12, color = PAL$muted),
       paper_bgcolor = "rgba(0,0,0,0)", plot_bgcolor = "rgba(0,0,0,0)",
       xaxis = utils::modifyList(axis_default, xaxis),
@@ -95,7 +95,7 @@ plot_style <- function(p, xaxis = list(), yaxis = list(), legend = list(), ...) 
       hoverlabel = list(bgcolor = "#FFFFFF", bordercolor = "rgba(0,0,0,0.1)", font = list(color = PAL$ink)),
       ...
     ) |>
-    plotly::config(displayModeBar = FALSE)
+    plot_config(displayModeBar = FALSE)
 }
 
 vline <- function(x) list(type = "line", x0 = x, x1 = x, y0 = 0, y1 = 1, yref = "paper",
@@ -218,12 +218,12 @@ agreement_heatmap <- function(pairwise, ds, labels, hover = TRUE) {
   xl <- labels[cols]
   txt <- matrix(sprintf("%s vs %s<br>%s go the same way<br>%s genes", rep(yl, length(xl)), rep(xl, each = length(yl)),
                         ifelse(is.na(z), "n/a", sprintf("%.0f%%", 100 * z)), n), length(yl))
-  plotly::plot_ly(x = xl, y = yl, z = z, type = "heatmap", zmin = 0, zmax = 1, showscale = FALSE,
+  plot_ly(x = xl, y = yl, z = z, type = "heatmap", zmin = 0, zmax = 1, showscale = FALSE,
                   # amber = disagree, grey = chance, teal = agree
                   colorscale = list(c(0, "#E5A13A"), c(0.35, "#F6DDB4"), c(0.5, "#EEF1F4"),
                                     c(0.7, "#9FDCD3"), c(1, "#0F9F8F")),
                   text = txt, hoverinfo = if (hover) "text" else "none", xgap = 4, ygap = 4) |>
-    plotly::add_annotations(x = rep(xl, each = length(yl)), y = rep(yl, length(xl)),
+    add_annotations(x = rep(xl, each = length(yl)), y = rep(yl, length(xl)),
                             text = ifelse(is.na(as.vector(z)), "", sprintf("%.0f%%", 100 * as.vector(z))),
                             showarrow = FALSE, font = list(size = 15, color = PAL$ink, family = "Inter")) |>
     plot_style(xaxis = list(showgrid = FALSE, fixedrange = TRUE, automargin = TRUE),

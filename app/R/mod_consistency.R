@@ -22,13 +22,13 @@ consistencyUI <- function(id, d) {
       bslib::card(
         bslib::card_header(card_title("Does each dataset agree with bulk?", "bullseye",
           "Share of genes significant in the independent bulk cohort (NASH F2–F4 vs control) that go the same way in hepatocytes. Dashed line = chance.")),
-        plotly::plotlyOutput(ns("bulk_bars"), height = "260px")),
+        plot_output(ns("bulk_bars"), height = "260px")),
       bslib::card(
         bslib::card_header(shiny::div(class = "d-flex justify-content-between align-items-center w-100",
           card_title("Pairwise agreement", "code-compare",
                      "Share of genes called in both datasets that go the same way. 50% = chance."),
           pills(ns("version"), c("Fixed" = "v2", "Original" = "legacy")))),
-        plotly::plotlyOutput(ns("heatmap"), height = "260px"))
+        plot_output(ns("heatmap"), height = "260px"))
     ),
     bslib::card(
       bslib::card_header(shiny::div(class = "d-flex justify-content-between align-items-center w-100",
@@ -39,7 +39,7 @@ consistencyUI <- function(id, d) {
                    chip("Up in NASH", "arrow-up", "up"), chip("Down in NASH", "arrow-down", "down"),
                    chip("No call", "minus", "muted")))),
       shiny::uiOutput(ns("count")),
-      plotly::plotlyOutput(ns("matrix"), height = "300px")
+      plot_output(ns("matrix"), height = "300px")
     ),
     bslib::accordion(open = FALSE,
       bslib::accordion_panel("Gene table", icon = shiny::icon("table"),
@@ -77,11 +77,11 @@ consistencyServer <- function(id, d) {
       w
     })
 
-    output$bulk_bars <- plotly::renderPlotly({
+    output$bulk_bars <- render_plot({
       m <- meta[order(meta$bulk_agreement), ]
       col <- ifelse(!m$directions_reliable, PAL$na, ifelse(m$bulk_agreement >= 0.5, PAL$primary, PAL$warn))
       txt <- sprintf("%.0f%%%s", 100 * m$bulk_agreement, ifelse(m$directions_reliable, "", "  (unreliable)"))
-      plotly::plot_ly(m, x = ~bulk_agreement, y = ~factor(label, levels = label), type = "bar", orientation = "h",
+      plot_ly(m, x = ~bulk_agreement, y = ~factor(label, levels = label), type = "bar", orientation = "h",
                       marker = list(color = col), text = txt, textposition = "outside", hoverinfo = "text",
                       hovertext = sprintf("<b>%s</b> (%s)<br>%.0f%% of bulk genes agree<br>pseudobulk r = %s",
                                           m$label, m$species, 100 * m$bulk_agreement, fmt_num(m$bulk_cor))) |>
@@ -89,7 +89,7 @@ consistencyServer <- function(id, d) {
                    shapes = list(vline(0.5)), showlegend = FALSE)
     })
 
-    output$heatmap <- plotly::renderPlotly({
+    output$heatmap <- render_plot({
       p <- if (identical(input$version, "legacy")) d$consistency_legacy_pairwise else d$consistency$pairwise
       m <- meta[order(meta$species != "human", -meta$bulk_agreement), ]
       agreement_heatmap(p, m$dataset, m$label)
@@ -102,7 +102,7 @@ consistencyServer <- function(id, d) {
         if (n > MAX_ROWS) chip(sprintf("showing the strongest %d", MAX_ROWS), "filter", "muted"))
     })
 
-    output$matrix <- plotly::renderPlotly({
+    output$matrix <- render_plot({
       w <- utils::head(genes(), MAX_ROWS)
       shiny::validate(shiny::need(nrow(w) > 0, "No genes match the filters."))
       cols <- c(d$consistency$datasets, if ("bulk" %in% names(w)) "bulk")
@@ -115,7 +115,7 @@ consistencyServer <- function(id, d) {
       hover <- t(sapply(seq_along(cols), function(j) sprintf("<b>%s</b>, %s<br>%s", w$gene_human, xl[j],
                                                               ifelse(is.na(w[[cols[j]]]), "not tested", w[[cols[j]]]))))
       if (nrow(w) == 1) hover <- matrix(hover, ncol = 1)
-      plotly::plot_ly(x = w$gene_human, y = xl, z = zt, type = "heatmap", zmin = -1, zmax = 1, showscale = FALSE,
+      plot_ly(x = w$gene_human, y = xl, z = zt, type = "heatmap", zmin = -1, zmax = 1, showscale = FALSE,
                       colorscale = list(c(0, PAL$down), c(0.5, "#E4E7EB"), c(1, PAL$up)),
                       text = hover, hoverinfo = "text", xgap = 2, ygap = 4, height = 300) |>
         plot_style(xaxis = list(showgrid = FALSE, fixedrange = TRUE, tickangle = -90, tickfont = list(size = 10),

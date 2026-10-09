@@ -19,7 +19,7 @@ drugsUI <- function(id, d) {
           col_widths = c(6, 6),
           bslib::card(bslib::card_header(card_title("PageRank vs betweenness", "chart-simple",
                         "Colour = whether the drug lies on shortest paths to NASH / hepatic steatosis in the graph.")),
-                      plotly::plotlyOutput(ns("kg_plot"), height = "420px")),
+                      plot_output(ns("kg_plot"), height = "420px")),
           bslib::card(bslib::card_header(card_title("Ranked drugs", "ranking-star")),
                       reactable::reactableOutput(ns("kg_table"))))
       ),
@@ -38,7 +38,7 @@ drugsUI <- function(id, d) {
           col_widths = c(6, 6),
           bslib::card(bslib::card_header(card_title("Closer than chance to early-MAFLD proteins", "bullseye",
                         "z < 0 = drug targets sit closer to the key proteins than random target sets. Bubble size = key proteins hit directly.")),
-                      plotly::plotlyOutput(ns("ppi_plot"), height = "420px")),
+                      plot_output(ns("ppi_plot"), height = "420px")),
           bslib::card(bslib::card_header(card_title("Drugs", "capsules")),
                       reactable::reactableOutput(ns("ppi_table"))))
       )
@@ -57,13 +57,13 @@ drugsServer <- function(id, d) {
                                      ifelse(in_nash_shortest_paths, "NASH", ifelse(in_steatosis_shortest_paths, "Steatosis", "None"))))
     path_cols <- c("NASH + steatosis" = PAL$up, "NASH" = "#E07A5F", "Steatosis" = PAL$warn, "None" = "#CBD2D9")
 
-    output$kg_plot <- plotly::renderPlotly({
+    output$kg_plot <- render_plot({
       x <- kg_sel()
       x <- x[is.finite(x$pagerank_score) & is.finite(x$betweenness_score), ]
       x$paths <- path_label(x)
       x$hover <- sprintf("<b>%s</b> (%s)<br>PageRank #%d<br>paths: %s<br>PPI proximity z: %s",
                          x$name, x$drugbank_accession, x$pagerank_rank, x$paths, fmt_num(x$ppi_proximity_z))
-      plotly::plot_ly(x, x = ~pagerank_score, y = ~log10(betweenness_score + 1), type = "scatter", mode = "markers",
+      plot_ly(x, x = ~pagerank_score, y = ~log10(betweenness_score + 1), type = "scatter", mode = "markers",
                       color = ~factor(paths, levels = names(path_cols)), colors = path_cols,
                       marker = list(size = 9, line = list(color = "#fff", width = 1)),
                       text = ~hover, hoverinfo = "text") |>
@@ -95,13 +95,13 @@ drugsServer <- function(id, d) {
       x
     })
 
-    output$ppi_plot <- plotly::renderPlotly({
+    output$ppi_plot <- render_plot({
       x <- ppi_sel()
       shiny::validate(shiny::need(nrow(x) > 0, "No drugs pass the filter."))
       x$label <- ifelse(is.na(x$drug_name), x$drug_id, x$drug_name)
       x$hover <- sprintf("<b>%s</b> (%s)<br>z = %.2f, d = %.2f<br>%d targets, %d key proteins hit",
                          x$label, x$drug_id, x$z, x$d, x$n_targets, x$n_key_0deg)
-      plotly::plot_ly(x, x = ~d, y = ~z, type = "scatter", mode = "markers",
+      plot_ly(x, x = ~d, y = ~z, type = "scatter", mode = "markers",
                       marker = list(size = pmin(6 + 1.5 * x$n_key_0deg, 34), color = PAL$down, opacity = 0.55,
                                     line = list(color = "#fff", width = 1)),
                       text = ~hover, hoverinfo = "text") |>
@@ -145,7 +145,7 @@ drugsServer <- function(id, d) {
       nm <- ifelse(!is.na(match(ids, kg$drugbank_accession)), kg$name[match(ids, kg$drugbank_accession)],
                    ad$drug[match(ids, ad$drugbank)])
       nm[is.na(nm)] <- ids[is.na(nm)]
-      o <- order(nm)
+      o <- order(toupper(nm), method = "radix")
       stats::setNames(ids[o], sprintf("%s (%s)", nm[o], ids[o]))
     })
     shiny::updateSelectizeInput(session, "drug", choices = drug_choices, server = TRUE, selected = character())

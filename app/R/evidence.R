@@ -123,7 +123,7 @@ gene_narrative <- function(e) {
 
 # One row per gene with every screener criterion
 gene_master <- function(d) {
-  genes <- sort(unique(c(d$evidence$gene_human, d$bulk_cohorts$meta$gene_human, d$invitro_agreement$gene_human)))
+  genes <- sort(unique(c(d$evidence$gene_human, d$bulk_cohorts$meta$gene_human, d$invitro_agreement$gene_human)), method = "radix")
   m <- data.frame(gene = genes, stringsAsFactors = FALSE)
   ev <- d$evidence[match(genes, d$evidence$gene_human), ]
   m$evidence <- ev$evidence
@@ -206,6 +206,6 @@ run_screener <- function(master, d, crit, max_n = 250) {
   # Rank by strength before cutting to max_n
   score <- ifelse(is.na(res$evidence), 0, res$evidence) +
            ifelse(is.na(res$bulk_fdr), 0, pmin(1, -log10(pmax(res$bulk_fdr, 1e-300)) / 10))
-  res <- res[order(-score, res$gene), ]
+  res <- res[order(-score, res$gene, method = "radix"), ]
   list(n_total = nrow(res), table = utils::head(res, max_n))
 }

@@ -9,7 +9,7 @@ modulesUI <- function(id, d) {
       col_widths = c(5, 7),
       bslib::card(bslib::card_header(card_title("Modules vs disease stage", "diagram-project",
                     "Pearson correlation of the module eigengene with stage. Bars use the module colour.")),
-                  plotly::plotlyOutput(ns("bars"), height = "520px")),
+                  plot_output(ns("bars"), height = "520px")),
       bslib::card(
         bslib::card_header(shiny::uiOutput(ns("title"))),
         bslib::navset_underline(
@@ -23,25 +23,23 @@ modulesServer <- function(id, d) {
   shiny::moduleServer(id, function(input, output, session) {
     tr <- d$wgcna$trait
     module <- shiny::reactiveVal(tr$module[which.max(abs(tr$cor_stage))])
-    click <- shiny::reactive(suppressWarnings(plotly::event_data("plotly_click", source = session$ns("bars"))))
+    click <- shiny::reactive(input$bars_click)
     shiny::observeEvent(click(), {
       ev <- click()
       if (!is.null(ev$y) && ev$y %in% tr$module) module(ev$y)
     })
     target_human <- unique(c(d$target_genes_human, toupper(d$target_genes_mouse)))
 
-    output$bars <- plotly::renderPlotly({
+    output$bars <- render_plot({
       t <- tr[order(tr$cor_stage), ]
       t$hover <- sprintf("<b>%s</b>, %d genes<br>r = %+.2f, p = %s", t$module, t$n_genes, t$cor_stage, fmt_p(t$p_stage))
       sel <- t$module == module()
-      plotly::plot_ly(t, x = ~cor_stage, y = ~factor(module, levels = module), type = "bar", orientation = "h",
-                      source = session$ns("bars"),
+      plot_ly(t, x = ~cor_stage, y = ~factor(module, levels = module), type = "bar", orientation = "h",
                       marker = list(color = module_hex(t$module),
                                     line = list(color = ifelse(sel, PAL$ink, "rgba(0,0,0,0.25)"), width = ifelse(sel, 2.5, 0.5))),
                       text = ~hover, hoverinfo = "text", textposition = "none") |>
         plot_style(xaxis = list(title = "Correlation with stage", zeroline = TRUE), yaxis = list(title = ""),
-                   showlegend = FALSE) |>
-        plotly::event_register("plotly_click")
+                   showlegend = FALSE)
     })
 
     output$title <- shiny::renderUI({

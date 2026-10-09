@@ -263,3 +263,6 @@ body { -webkit-font-smoothing: antialiased; }
 .gene-link { font-weight: 700; color: var(--primary-ink); cursor: pointer; text-decoration: none; white-space: nowrap; }
 .gene-link:hover { text-decoration: underline; }
 .layer-head .shiny-input-container, .layer-head .bslib-input-switch { width: auto !important; flex: none; margin: 0 !important; }
+
+.mash-plot { width: 100%; }
+.plot-msg { color: var(--muted); padding: 1rem; font-size: .9rem; }

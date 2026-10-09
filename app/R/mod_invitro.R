@@ -9,10 +9,10 @@ invitroUI <- function(id, d) {
       col_widths = c(5, 7),
       bslib::card(bslib::card_header(card_title("How many genes respond at each step?", "stairs",
                     "Genes with padj < 0.05 and at least a 2-fold change, per cell line. Each step adds a stimulus to the previous one.")),
-                  plotly::plotlyOutput(ns("steps"), height = "300px")),
+                  plot_output(ns("steps"), height = "300px")),
       bslib::card(bslib::card_header(card_title("Do the two cell lines agree?", "code-compare",
                     "Genes significant in both lines in the same direction (replicated), in one line only, or in opposite directions.")),
-                  plotly::plotlyOutput(ns("agree"), height = "300px"))
+                  plot_output(ns("agree"), height = "300px"))
     ),
     shiny::div(class = "toolbar",
       shiny::span(class = "toolbar-label", "Exposure"),
@@ -26,7 +26,7 @@ invitroUI <- function(id, d) {
     ),
     bslib::layout_columns(
       col_widths = c(6, 6),
-      bslib::card(bslib::card_header(shiny::uiOutput(ns("title"))), plotly::plotlyOutput(ns("volcano"), height = "440px")),
+      bslib::card(bslib::card_header(shiny::uiOutput(ns("title"))), plot_output(ns("volcano"), height = "440px")),
       bslib::card(bslib::card_header(card_title("Replicated in both lines", "list-ol",
                     "Genes significant (padj < 0.05) in both lines in the same direction, ranked by the smaller fold change.")),
                   reactable::reactableOutput(ns("table")))
@@ -40,25 +40,25 @@ invitroServer <- function(id, d) {
     short <- c("OA+PA" = "OA+PA", "OA+PA + resistin/myostatin" = "+ resistin/myostatin",
                "OA+PA + resistin/myostatin + PBMC" = "+ PBMC")
 
-    output$steps <- plotly::renderPlotly({
+    output$steps <- render_plot({
       x <- iv[iv$significant & abs(iv$log2FC) >= 1, ]
       cnt <- as.data.frame(table(contrast = x$contrast, line = x$line, dir = ifelse(x$log2FC > 0, "up", "down")))
       cnt$step <- factor(short[as.character(cnt$contrast)], levels = short)
       cnt$y <- ifelse(cnt$dir == "up", cnt$Freq, -cnt$Freq)
       cnt$grp <- paste(cnt$line, cnt$dir)
-      plotly::plot_ly(cnt, x = ~step, y = ~y, color = ~grp, type = "bar",
+      plot_ly(cnt, x = ~step, y = ~y, color = ~grp, type = "bar",
                       colors = c("1b down" = "#2F80C3", "5a down" = "#8DB9E0", "1b up" = "#E05263", "5a up" = "#F0A3AD"),
                       text = ~sprintf("line %s, %d genes %s", line, Freq, dir), hoverinfo = "text", textposition = "none") |>
         plot_style(barmode = "relative", xaxis = list(title = ""), yaxis = list(title = "genes (down below 0, up above)"),
                    legend = list(orientation = "h", y = -0.15))
     })
 
-    output$agree <- plotly::renderPlotly({
+    output$agree <- render_plot({
       a <- d$invitro_agreement
       a <- a[a$call != "not significant", ]
       cats <- c("up (both lines)", "up (one line)", "lines disagree", "down (one line)", "down (both lines)")
       cnt <- as.data.frame(table(step = factor(short[a$contrast], levels = short), call = factor(a$call, levels = cats)))
-      plotly::plot_ly(cnt, x = ~step, y = ~Freq, color = ~call, type = "bar",
+      plot_ly(cnt, x = ~step, y = ~Freq, color = ~call, type = "bar",
                       colors = c("up (both lines)" = "#E05263", "up (one line)" = "#F4B6BE", "lines disagree" = "#E5A13A",
                                  "down (one line)" = "#A9CBEA", "down (both lines)" = "#2F80C3"),
                       text = ~sprintf("%s: %d genes", call, Freq), hoverinfo = "text", textposition = "none") |>
@@ -70,13 +70,13 @@ invitroServer <- function(id, d) {
 
     output$title <- shiny::renderUI(card_title(sprintf("Line %s, %s vs untreated", input$line, input$contrast), "chart-simple"))
 
-    output$volcano <- plotly::renderPlotly({
+    output$volcano <- render_plot({
       x <- sel()
       hi <- x$significant & abs(x$log2FC) >= (input$lfc %||% 1)
       col <- ifelse(!hi, "#B8C0CC", ifelse(x$log2FC > 0, PAL$up, PAL$down))
       x$hover <- sprintf("<b>%s</b><br>log2FC %+.2f<br>padj %s", ifelse(is.na(x$gene_human), x$ensembl, x$gene_human),
                          x$log2FC, fmt_p(x$padj))
-      plotly::plot_ly(x, x = ~log2FC, y = ~-log10(pmax(padj, 1e-300)), type = "scattergl", mode = "markers",
+      plot_ly(x, x = ~log2FC, y = ~-log10(pmax(padj, 1e-300)), type = "scattergl", mode = "markers",
                       marker = list(size = ifelse(hi, 6, 4), color = col, opacity = ifelse(hi, 0.9, 0.45), line = list(width = 0)), text = ~hover, hoverinfo = "text") |>
         plot_style(xaxis = list(title = "log2 fold change"), yaxis = list(title = "−log10 adjusted p"),
                    shapes = list(hline(-log10(0.05))), showlegend = FALSE)

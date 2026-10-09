@@ -19,19 +19,19 @@ geneUI <- function(id) {
       col_widths = c(6, 6),
       bslib::card(bslib::card_header(card_title("Hepatocytes: NASH vs control", "microscope",
                     "AUC = chance that a NASH hepatocyte expresses the gene more than a control hepatocyte. 0.5 = no difference.")),
-                  plotly::plotlyOutput(ns("sc_plot"), height = "280px")),
+                  plot_output(ns("sc_plot"), height = "280px")),
       bslib::card(bslib::card_header(card_title("Whole liver across disease stages (GSE135251)", "chart-line",
                     "DESeq2 log2 fold change with 95% interval. Filled points have padj < 0.05.")),
-                  plotly::plotlyOutput(ns("bulk_plot"), height = "280px"))
+                  plot_output(ns("bulk_plot"), height = "280px"))
     ),
     bslib::navset_card_underline(
       title = card_title("Context", "layer-group"),
       bslib::nav_panel(shiny::span(shiny::icon("flask"), " Bulk cohorts"),
                        shiny::p(class = "small text-muted", "Each cohort's log2 fold change with 95% interval, and the random-effects meta-analysis (diamond, coloured when FDR < 0.05)."),
-                       plotly::plotlyOutput(ns("forest"), height = "360px")),
+                       plot_output(ns("forest"), height = "360px")),
       bslib::nav_panel(shiny::span(shiny::icon("vial"), " iHeps model"),
                        shiny::p(class = "small text-muted", "Stem-cell-derived hepatocytes (lines 1b and 5a) after each exposure, vs untreated. ● = padj < 0.05."),
-                       plotly::plotlyOutput(ns("invitro"), height = "260px")),
+                       plot_output(ns("invitro"), height = "260px")),
       bslib::nav_panel(shiny::span(shiny::icon("circle-nodes"), " Interactors"), reactable::reactableOutput(ns("ppi"))),
       bslib::nav_panel(shiny::span(shiny::icon("share-nodes"), " Knowledge-graph cluster"), reactable::reactableOutput(ns("cluster"))),
       bslib::nav_panel(shiny::span(shiny::icon("capsules"), " Drugs"), reactable::reactableOutput(ns("drugs"))),
@@ -45,7 +45,7 @@ geneServer <- function(id, d) {
     meta <- d$datasets_meta[order(d$datasets_meta$species != "human", -d$datasets_meta$bulk_agreement), ]
     all_genes <- sort(unique(stats::na.omit(c(d$sc$gene_human, d$bulk$gene_human, d$wgcna$membership$gene_human,
                                               d$ppi$centrality$gene_human, d$kg$genes$name,
-                                              d$bulk_cohorts$meta$gene_human, d$invitro$gene_human))))
+                                              d$bulk_cohorts$meta$gene_human, d$invitro$gene_human))), method = "radix")
     target_human <- unique(c(d$target_genes_human,
                              d$sc$gene_human[d$sc$species == "mouse" & d$sc$gene %in% d$target_genes_mouse]))
     delta <- d$consistency$delta
@@ -181,7 +181,7 @@ geneServer <- function(id, d) {
     })
 
     # Charts
-    output$sc_plot <- plotly::renderPlotly({
+    output$sc_plot <- render_plot({
       s <- gene_sc()
       shiny::validate(shiny::need(nrow(s) > 0, "Not measured in any single-cell dataset."))
       s$label <- d$datasets_meta$label[match(s$dataset, d$datasets_meta$dataset)]
@@ -194,7 +194,7 @@ geneServer <- function(id, d) {
       shapes <- c(list(vline(0.5)), lapply(seq_len(nrow(s)), function(i) list(
         type = "line", x0 = 0.5, x1 = s$x[i], y0 = as.character(s$label[i]), y1 = as.character(s$label[i]), yref = "y",
         line = list(color = s$col[i], width = 3))))
-      plotly::plot_ly(s, x = ~x, y = ~label, type = "scatter", mode = "markers",
+      plot_ly(s, x = ~x, y = ~label, type = "scatter", mode = "markers",
                       marker = list(size = 16, color = s$col, line = list(color = "#fff", width = 2)),
                       text = ~hover, hoverinfo = "text") |>
         plot_style(xaxis = list(range = 0.5 + c(-1, 1) * max(0.15, max(abs(s$x - 0.5)) + 0.05),
@@ -202,7 +202,7 @@ geneServer <- function(id, d) {
                    yaxis = list(title = "", automargin = TRUE), shapes = shapes, showlegend = FALSE)
     })
 
-    output$bulk_plot <- plotly::renderPlotly({
+    output$bulk_plot <- render_plot({
       b <- gene_bulk()
       shiny::validate(shiny::need(nrow(b) > 0, "Not measured in the bulk dataset."))
       b <- b[order(b$contrast), ]
@@ -211,7 +211,7 @@ geneServer <- function(id, d) {
       b$short <- factor(b$short, levels = unique(b$short))
       b$hover <- sprintf("<b>%s</b><br>log2FC %+.2f<br>padj %s", b$contrast, b$log2FC, fmt_p(b$padj))
       cols <- ifelse(b$log2FC > 0, PAL$up, PAL$down)
-      plotly::plot_ly(b, x = ~short, y = ~log2FC, type = "scatter", mode = "markers",
+      plot_ly(b, x = ~short, y = ~log2FC, type = "scatter", mode = "markers",
                       error_y = list(type = "data", array = 1.96 * b$lfcSE, color = "rgba(0,0,0,0.25)", thickness = 1.5, width = 0),
                       marker = list(size = 12, color = ifelse(b$sig, cols, "#FFFFFF"), line = list(color = cols, width = 2)),
                       text = ~hover, hoverinfo = "text") |>
@@ -220,7 +220,7 @@ geneServer <- function(id, d) {
     })
 
     # Forest plot: each cohort plus the meta-analysis, per contrast
-    output$forest <- plotly::renderPlotly({
+    output$forest <- render_plot({
       g <- gene()
       st <- d$bulk_cohorts$studies[d$bulk_cohorts$studies$gene_human == g, ]
       mt <- d$bulk_cohorts$meta[d$bulk_cohorts$meta$gene_human == g, ]
@@ -239,7 +239,7 @@ geneServer <- function(id, d) {
       rows$hover <- sprintf("<b>%s</b><br>%s<br>log2FC %+.2f (95%% CI %+.2f to %+.2f)<br>%s %s", rows$label, rows$contrast,
                             rows$lfc, rows$lfc - 1.96 * rows$se, rows$lfc + 1.96 * rows$se,
                             ifelse(rows$kind == "meta", "FDR", "p"), fmt_p(rows$p))
-      plotly::plot_ly(rows, x = ~lfc, y = ~y, type = "scatter", mode = "markers",
+      plot_ly(rows, x = ~lfc, y = ~y, type = "scatter", mode = "markers",
                       error_x = list(type = "data", array = 1.96 * rows$se, color = "rgba(16,24,40,0.35)", thickness = 1.5, width = 0),
                       marker = list(symbol = ifelse(rows$kind == "meta", "diamond", "square"),
                                     size = ifelse(rows$kind == "meta", 15, 9), color = col),
@@ -250,7 +250,7 @@ geneServer <- function(id, d) {
     })
 
     # iHeps heatmap: lines by exposures
-    output$invitro <- plotly::renderPlotly({
+    output$invitro <- render_plot({
       iv <- d$invitro[!is.na(d$invitro$gene_human) & d$invitro$gene_human == gene(), ]
       shiny::validate(shiny::need(nrow(iv) > 0, "Not measured in the iHeps model."))
       lv <- levels(d$invitro$contrast)
@@ -265,10 +265,10 @@ geneServer <- function(id, d) {
       lim <- max(1, max(abs(z), na.rm = TRUE))
       xl <- c("OA+PA", "+ resistin/myostatin", "+ PBMC")
       txt <- matrix(ifelse(is.na(z), "", sprintf("%+.2f%s", z, ifelse(sig, " ●", ""))), nrow = 2)
-      plotly::plot_ly(x = xl, y = c("line 1b", "line 5a"), z = z, type = "heatmap", zmin = -lim, zmax = lim,
+      plot_ly(x = xl, y = c("line 1b", "line 5a"), z = z, type = "heatmap", zmin = -lim, zmax = lim,
                       colorscale = list(c(0, PAL$down), c(0.5, "#F2F4F7"), c(1, PAL$up)), showscale = FALSE,
                       hoverinfo = "none", xgap = 4, ygap = 4) |>
-        plotly::add_annotations(x = rep(xl, each = 2), y = rep(c("line 1b", "line 5a"), 3), text = as.vector(txt),
+        add_annotations(x = rep(xl, each = 2), y = rep(c("line 1b", "line 5a"), 3), text = as.vector(txt),
                                 showarrow = FALSE, font = list(size = 15, color = PAL$ink)) |>
         plot_style(xaxis = list(showgrid = FALSE, side = "top"), yaxis = list(showgrid = FALSE, autorange = "reversed"))
     })

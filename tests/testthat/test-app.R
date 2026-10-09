@@ -162,3 +162,17 @@ test_that("gene narrative handles conflicting and missing evidence", {
   expect_match(none$headline, "not clearly changed", fixed = TRUE)
   expect_type(none$copy, "character")
 })
+
+test_that("plot_ly builds one trace per colour group, keeps factor order and single points as arrays", {
+  df <- data.frame(a = c(1, 2, 3), b = factor(c("z", "y", "z"), levels = c("z", "y")), g = c("p", "q", "p"))
+  fig <- env$plot_ly(df, x = ~a, y = ~b, color = ~g, colors = c(p = "red", q = "blue"), type = "bar",
+                     marker = list(size = c(5, 6, 7)))
+  expect_length(fig$data, 2)
+  expect_equal(fig$data[[2]]$marker$color, "blue")
+  expect_equal(as.vector(fig$data[[1]]$marker$size), c(5, 7))
+  expect_equal(as.vector(fig$layout$yaxis$categoryarray), c("z", "y"))
+  json <- shiny:::toJSON(env$plot_ly(data.frame(a = 1), x = ~a, y = ~a)$data)
+  expect_match(json, '"x":[1]', fixed = TRUE)
+  named <- env$plot_ly(data.frame(a = 1:2), x = ~a, y = ~a, marker = list(color = c(p = "red", q = "blue")))
+  expect_match(shiny:::toJSON(named$data), '"color":["red","blue"]', fixed = TRUE)
+})
