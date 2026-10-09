@@ -11,7 +11,7 @@ env <- app_env()
 d <- env$d
 
 test_that("every page UI builds without error", {
-  for (f in c("overviewUI", "markersUI", "consistencyUI", "bulkUI", "drugsUI", "modulesUI", "aboutUI")) {
+  for (f in c("overviewUI", "markersUI", "consistencyUI", "bulkUI", "drugsUI", "modulesUI", "aboutUI", "kgUI")) {
     expect_s3_class(env[[f]]("x", d), "shiny.tag.list")
   }
   expect_s3_class(env$geneUI("x"), "shiny.tag.list")
@@ -175,4 +175,16 @@ test_that("plot_ly builds one trace per colour group, keeps factor order and sin
   expect_match(json, '"x":[1]', fixed = TRUE)
   named <- env$plot_ly(data.frame(a = 1:2), x = ~a, y = ~a, marker = list(color = c(p = "red", q = "blue")))
   expect_match(shiny:::toJSON(named$data), '"color":["red","blue"]', fixed = TRUE)
+})
+
+test_that("knowledge graph page opens the NASH cluster and follows node search", {
+  shiny::testServer(env$kgServer, args = list(d = d), {
+    nash <- d$kg_nodes$cluster[d$kg_nodes$name == "non-alcoholic steatohepatitis"]
+    expect_equal(cluster(), nash)
+    for (o in c("tiles", "cluster_title", "diseases", "genes", "drugs")) expect_no_error(output[[o]])
+    i <- which(d$kg_nodes$name == "UBC")
+    session$setInputs(node = as.character(i), type = "drug")
+    expect_equal(cluster(), d$kg_nodes$cluster[i])
+    expect_no_error(output$top)
+  })
 })

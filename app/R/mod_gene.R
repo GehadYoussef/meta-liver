@@ -33,7 +33,8 @@ geneUI <- function(id) {
                        shiny::p(class = "small text-muted", "Stem-cell-derived hepatocytes (lines 1b and 5a) after each exposure, vs untreated. ● = padj < 0.05."),
                        plot_output(ns("invitro"), height = "260px")),
       bslib::nav_panel(shiny::span(shiny::icon("circle-nodes"), " Interactors"), reactable::reactableOutput(ns("ppi"))),
-      bslib::nav_panel(shiny::span(shiny::icon("share-nodes"), " Knowledge-graph cluster"), reactable::reactableOutput(ns("cluster"))),
+      bslib::nav_panel(shiny::span(shiny::icon("share-nodes"), " Knowledge-graph cluster"),
+                       shiny::uiOutput(ns("cluster_link")), reactable::reactableOutput(ns("cluster"))),
       bslib::nav_panel(shiny::span(shiny::icon("capsules"), " Drugs"), reactable::reactableOutput(ns("drugs"))),
       bslib::nav_panel(shiny::span(shiny::icon("table"), " Single-cell table"), reactable::reactableOutput(ns("table")))
     )
@@ -287,6 +288,12 @@ geneServer <- function(id, d) {
         Partner = reactable::colDef(style = list(fontWeight = 600)),
         Degree = col_bar("Partner's interactions", max = max(net$degree$degree), color = PAL$down, digits = 0, width = 170),
         Key = col_check("Early-MAFLD key protein"), Target = col_check("Target gene")))
+    })
+
+    output$cluster_link <- shiny::renderUI({
+      e <- ev()
+      shiny::req(nrow(e$kg) > 0)
+      shiny::p(class = "small", shiny::HTML(kg_link(e$kg$cluster, sprintf("Open cluster %d on the Knowledge graph page", e$kg$cluster))))
     })
 
     output$cluster <- reactable::renderReactable({

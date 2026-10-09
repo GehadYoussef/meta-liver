@@ -266,3 +266,16 @@ body { -webkit-font-smoothing: antialiased; }
 
 .mash-plot { width: 100%; }
 .plot-msg { color: var(--muted); padding: 1rem; font-size: .9rem; }
+
+/* Knowledge graph */
+.kg-legend { display: flex; gap: 1rem; align-items: center; font-size: .8rem; color: var(--muted); margin-left: auto; }
+.kg-legend > span { display: inline-flex; align-items: center; gap: .35rem; }
+.kg-dot { width: .7rem; height: .7rem; border-radius: 3px; display: inline-block; }
+.kg-liver { color: var(--warn); }
+.kg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: .5rem; }
+.kg-tile { border: 1px solid var(--line); border-radius: 10px; padding: .4rem .5rem; cursor: pointer; background: var(--surface); transition: box-shadow .15s; }
+.kg-tile:hover { box-shadow: var(--shadow-hover); }
+.kg-tile.active { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+.kg-id { font-weight: 700; font-size: .85rem; color: var(--ink); display: flex; justify-content: space-between; }
+.kg-mix { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: .3rem 0 .2rem; background: var(--line); }
+.kg-n { font-size: .7rem; color: var(--muted); }

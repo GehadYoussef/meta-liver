@@ -13,6 +13,8 @@ install. The first visit takes about 30 seconds to load R in the browser, later 
 | ![Gene](docs/screenshots/gene.png) | ![Screener](docs/screenshots/screener.png) |
 | **Whole liver: cohort meta-analysis** | **In-vitro model** |
 | ![Bulk](docs/screenshots/bulk.png) | ![In vitro](docs/screenshots/invitro.png) |
+| **Knowledge graph** | **Drugs** |
+| ![Knowledge graph](docs/screenshots/kg.png) | ![Drugs](docs/screenshots/drugs.png) |
 
 ## Data
 
@@ -35,6 +37,7 @@ install. The first visit takes about 30 seconds to load R in the browser, later 
 | Consistency | Direction agreement between datasets and with bulk |
 | Whole liver | Disease-stage volcano plots and the cohort meta-analysis |
 | In-vitro model | Genes changed at each exposure step and whether the two cell lines agree |
+| Knowledge graph | The 60 clusters of the MASH knowledge graph, each cluster's diseases, genes and drugs, and the most central nodes |
 | Drugs | Drug lookup, knowledge-graph ranking, drugs acting on stage-linked modules, network proximity |
 | Modules | Co-expression modules vs stage, with their pathways and genes |
 | About | Definitions, methods and data provenance |

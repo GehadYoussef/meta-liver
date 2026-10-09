@@ -8,12 +8,12 @@ suppressPackageStartupMessages({
 d <- readRDS(file.path("data", "app_data.rds"))
 
 PAGES <- data.frame(
-  id      = c("overview", "gene", "screener", "markers", "consistency", "bulk", "invitro", "drugs", "modules", "about"),
-  label   = c("Overview", "Gene lookup", "Gene screener", "Markers", "Consistency", "Whole liver", "In-vitro model",
+  id      = c("overview", "gene", "screener", "markers", "consistency", "bulk", "invitro", "kg", "drugs", "modules", "about"),
+  label   = c("Overview", "Gene lookup", "Gene screener", "Markers", "Consistency", "Whole liver", "In-vitro model", "Knowledge graph",
               "Drugs", "Modules", "About"),
-  icon    = c("house", "magnifying-glass", "filter", "ranking-star", "arrows-up-down", "flask", "vial", "capsules",
+  icon    = c("house", "magnifying-glass", "filter", "ranking-star", "arrows-up-down", "flask", "vial", "share-nodes", "capsules",
               "diagram-project", "circle-info"),
-  section = c("Explore", "Explore", "Explore", "Explore", "Evidence", "Evidence", "Evidence", "Evidence", "Evidence", "Reference")
+  section = c("Explore", "Explore", "Explore", "Explore", "Evidence", "Evidence", "Evidence", "Evidence", "Evidence", "Evidence", "Reference")
 )
 
 rail <- function() {
@@ -68,6 +68,7 @@ ui <- page(
         nav_panel_hidden("consistency", consistencyUI("consistency", d)),
         nav_panel_hidden("bulk", bulkUI("bulk", d)),
         nav_panel_hidden("invitro", invitroUI("invitro", d)),
+        nav_panel_hidden("kg", kgUI("kg", d)),
         nav_panel_hidden("drugs", drugsUI("drugs", d)),
         nav_panel_hidden("modules", modulesUI("modules", d)),
         nav_panel_hidden("about", aboutUI("about", d))
@@ -85,6 +86,7 @@ server <- function(input, output, session) {
   consistencyServer("consistency", d)
   bulkServer("bulk", d)
   invitroServer("invitro", d)
+  kgServer("kg", d)
   drugsServer("drugs", d)
   modulesServer("modules", d)
   aboutServer("about", d)
