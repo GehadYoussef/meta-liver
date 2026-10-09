@@ -7,6 +7,9 @@ suppressPackageStartupMessages({
 
 d <- readRDS(file.path("data", "app_data.rds"))
 
+# Content hash in the URL so browsers fetch www/ files again after an update
+versioned <- function(f) paste0(f, "?v=", substr(unname(tools::md5sum(file.path("www", f))), 1, 8))
+
 PAGES <- data.frame(
   id      = c("overview", "gene", "screener", "markers", "consistency", "bulk", "invitro", "kg", "drugs", "modules", "about"),
   label   = c("Overview", "Gene lookup", "Gene screener", "Markers", "Consistency", "Whole liver", "In-vitro model", "Knowledge graph",
@@ -41,9 +44,9 @@ ui <- page(
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
     tags$link(rel = "stylesheet",
               href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"),
-    tags$link(rel = "stylesheet", href = "styles.css"),
-    tags$script(src = "plot.js"),
-    tags$script(src = "table.js"),
+    tags$link(rel = "stylesheet", href = versioned("styles.css")),
+    tags$script(src = versioned("plot.js")),
+    tags$script(src = versioned("table.js")),
     tags$script(HTML("
       window.mashGo = function(p) {
         if (!document.querySelector('.rail-item[data-page=\"' + p + '\"]')) p = 'overview';

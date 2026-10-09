@@ -4,7 +4,7 @@ invitroUI <- function(id, d) {
   ns <- shiny::NS(id)
   shiny::tagList(
     page_header("vial", "In-vitro MASLD model",
-                "Stem-cell-derived hepatocytes exposed to fatty acids, adipokines and immune cells"),
+                "iPSC hepatocytes under three MASLD exposures"),
     bslib::layout_columns(
       col_widths = c(5, 7),
       bslib::card(bslib::card_header(card_title("How many genes respond at each step?", "stairs",

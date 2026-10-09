@@ -122,12 +122,6 @@ body { -webkit-font-smoothing: antialiased; }
 .ring-caption { font-size: .72rem; color: var(--muted); line-height: 1.2; max-width: 9ch; text-align: right; }
 
 /* Insight callouts */
-.insights { display: flex; flex-direction: column; justify-content: center; height: 100%; }
-.insight { display: flex; gap: .9rem; padding: .95rem 1rem; border-radius: 14px; background: var(--c-soft); margin-bottom: .75rem; }
-.insight:last-child { margin-bottom: 0; }
-.insight-icon { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: #fff; background: var(--c); flex: none; }
-.insight-title { font-weight: 700; font-size: .95rem; }
-.insight-text { color: var(--muted); font-size: .86rem; margin-top: .15rem; }
 
 /* Toolbar and pills */
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem; margin-bottom: 1.25rem;
@@ -292,3 +286,12 @@ body { -webkit-font-smoothing: antialiased; }
 .kg-id { font-weight: 700; font-size: .85rem; color: var(--ink); display: flex; justify-content: space-between; }
 .kg-mix { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: .3rem 0 .2rem; background: var(--line); }
 .kg-n { font-size: .7rem; color: var(--muted); }
+
+/* Replicated genes */
+.gene-chips { display: flex; flex-wrap: wrap; gap: .4rem; padding: .25rem 0 .5rem; }
+.gene-chip { padding: .22rem .65rem; border-radius: 999px; font-weight: 700; font-size: .8rem; cursor: pointer; text-decoration: none; }
+.gene-chip.up { background: var(--up-soft); color: var(--up); }
+.gene-chip.down { background: var(--down-soft); color: var(--down); }
+.gene-chip:hover { filter: brightness(.95); text-decoration: none; }
+.rep-foot { display: flex; gap: 1.25rem; color: var(--muted); font-size: .8rem; border-top: 1px dashed var(--line); padding-top: .6rem; }
+.rep-foot b { color: var(--ink); }

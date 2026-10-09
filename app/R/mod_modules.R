@@ -4,7 +4,7 @@ modulesUI <- function(id, d) {
   ns <- shiny::NS(id)
   shiny::tagList(
     page_header("diagram-project", "Co-expression modules",
-                "Gene modules in the bulk cohort and how they track disease stage. Click a bar to see its pathways and genes."),
+                "Co-expression modules vs fibrosis stage"),
     bslib::layout_columns(
       col_widths = c(5, 7),
       bslib::card(bslib::card_header(card_title("Modules vs disease stage", "diagram-project",

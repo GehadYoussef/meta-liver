@@ -33,7 +33,7 @@ kgUI <- function(id, d) {
   k <- d$kg_nodes
   shiny::tagList(
     page_header("share-nodes", "Knowledge graph",
-                sprintf("%s genes, drugs and diseases from the MASH knowledge graph, in %d clusters, ranked by centrality",
+                sprintf("%s genes, drugs and diseases in %d clusters",
                         format(nrow(k), big.mark = ","), length(unique(k$cluster)))),
     shiny::div(class = "toolbar",
       shiny::span(class = "toolbar-label", shiny::icon("magnifying-glass"), " Find a node"),

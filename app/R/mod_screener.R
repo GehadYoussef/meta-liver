@@ -11,7 +11,7 @@ screenerUI <- function(id, d) {
   }
   shiny::tagList(
     page_header("filter", "Gene screener",
-                "Genes that meet your criteria in every evidence layer. Click a gene to open it."),
+                "Filter genes across evidence layers"),
     shiny::div(class = "toolbar",
       shiny::span(class = "toolbar-label", "Direction"),
       pills(ns("direction"), c("Any" = "any", "▲ Up in disease" = "up", "▼ Down in disease" = "down")),

@@ -4,9 +4,11 @@ overviewUI <- function(id, d) {
   ns <- shiny::NS(id)
   meta <- d$datasets_meta
   meta <- meta[order(meta$species != "human", -meta$bulk_agreement), ]
-  cmp <- d$consistency_compare
-  v2_all <- cmp[cmp$version == "v2 (fixed)" & cmp$gene_set == "all genes", ]
-  best <- meta[which.max(meta$bulk_agreement), ]
+  g <- d$consistency$genes
+  nds <- length(d$consistency$datasets)
+  replicated <- g[g$n_up == nds | g$n_down == nds, ]
+  replicated <- replicated[order(replicated$n_down > 0, replicated$gene_human), ]
+  n_tested <- length(unique(d$sc$gene_human[d$sc$tested]))
 
   glass <- function(icon, value, label, color) {
     shiny::div(class = "glass",
@@ -48,44 +50,45 @@ overviewUI <- function(id, d) {
     )
   }
 
-  insight <- function(icon, color, soft, title, text) {
-    shiny::div(class = "insight", style = sprintf("--c:%s;--c-soft:%s", color, soft),
-               shiny::div(class = "insight-icon", shiny::icon(icon)),
-               shiny::div(shiny::div(class = "insight-title", title), shiny::div(class = "insight-text", text)))
+  gene_chip <- function(gene, dir) {
+    shiny::tags$a(class = paste("gene-chip", dir), gene,
+                  onclick = sprintf("Shiny.setInputValue('gene-pick', '%s', {priority: 'event'}); mashGo('gene');", gene))
   }
 
   shiny::tagList(
     shiny::div(class = "hero",
       shiny::icon("dna", class = "hero-deco"),
       shiny::div(class = "hero-eyebrow", "MASH hepatocyte omics"),
-      shiny::h1("What changes in liver cells as fatty liver disease progresses?"),
-      shiny::p("Single-cell, bulk, in-vitro, network and knowledge-graph evidence for MASH. Every single-cell result is ",
-               "computed per donor, on hepatocytes only, and checked against an independent bulk cohort."),
+      shiny::h1("Hepatocyte gene changes in MASH"),
+      shiny::p("Each gene is scored in every dataset and checked against bulk liver, an iPSC model and networks."),
       shiny::div(class = "hero-stats",
-        glass("layer-group", nrow(meta), "single-cell datasets (2 human, 2 mouse)", "#5EEAD4"),
-        glass("microscope", format(sum(meta$n_hepatocytes, na.rm = TRUE), big.mark = ","), "hepatocytes analysed", "#93C5FD"),
-        glass("arrows-up-down", v2_all$consistent_in_all, "genes consistent in every usable dataset", "#FDA4AF"),
-        glass("bullseye", sprintf("%.0f%%", 100 * best$bulk_agreement), sprintf("best agreement with bulk (%s)", best$label), "#FCD34D"))
+        glass("layer-group", nrow(meta), "single-cell datasets", "#5EEAD4"),
+        glass("microscope", format(sum(meta$n_hepatocytes, na.rm = TRUE), big.mark = ","), "hepatocytes", "#93C5FD"),
+        glass("dna", format(n_tested, big.mark = ","), "genes tested", "#FCD34D"),
+        glass("circle-check", nrow(replicated), sprintf("replicated in all %d datasets", nds), "#FDA4AF"))
     ),
     shiny::div(class = "section-label", shiny::icon("layer-group"), "Datasets"),
     shiny::div(class = "ds-grid", lapply(seq_len(nrow(meta)), ds_card)),
-    shiny::div(class = "section-label", shiny::icon("lightbulb"), "What the data say"),
+    shiny::div(class = "section-label", shiny::icon("arrows-up-down"), "Replication"),
     bslib::layout_columns(
       col_widths = c(6, 6),
       bslib::card(
-        bslib::card_header(card_title("Do datasets agree on direction?", "code-compare",
-          "Share of genes called up or down in both datasets that go the same way. 50% = chance.")),
+        bslib::card_header(card_title("Direction agreement", "code-compare",
+          "Share of genes called up or down in both datasets that go the same way. 50% is chance.")),
         plot_output(ns("heatmap"), height = "300px")
       ),
       bslib::card(
-        bslib::card_body(fillable = FALSE, class = "insights",
-          insight("arrows-up-down", PAL$primary, "var(--primary-soft)", "A steatosis program replicates",
-                  "SREBF1, PLIN2 and FABP1 go up and cholesterol-synthesis genes go down in every usable dataset."),
-          insight("triangle-exclamation", PAL$warn, "var(--warn-soft)", "The two human cohorts disagree",
-                  "Xiao and Wang mostly point in opposite directions, under every processing choice tested."),
-          insight("bullseye", PAL$down, "var(--down-soft)", "Bulk agreement varies by dataset",
-                  "Wang agrees best with the independent bulk cohort. A result from one cohort needs replication.")
-        )
+        bslib::card_header(shiny::div(class = "d-flex align-items-center gap-2 w-100",
+          card_title("Replicated genes", "circle-check",
+            sprintf("Same direction (AUC ≥ 0.55 or ≤ 0.45) in all %d datasets with reliable directions. Click a gene to open it.", nds)),
+          chip(sprintf("%d up", sum(replicated$n_up == nds)), "arrow-up", "up"),
+          chip(sprintf("%d down", sum(replicated$n_down == nds)), "arrow-down", "down"))),
+        shiny::div(class = "gene-chips",
+          lapply(seq_len(nrow(replicated)), function(i)
+            gene_chip(replicated$gene_human[i], if (replicated$n_up[i] == nds) "up" else "down"))),
+        shiny::div(class = "rep-foot",
+          shiny::span(shiny::tags$b(sum(grepl("^consistent", g$consistency))), " consistent in 2+ datasets"),
+          shiny::span(shiny::tags$b(sum(grepl("^conflicting", g$consistency))), " conflicting"))
       )
     )
   )

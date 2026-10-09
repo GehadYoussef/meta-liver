@@ -6,7 +6,7 @@ markersUI <- function(id, d) {
   ds_choices <- stats::setNames(meta$dataset, meta$label)
   shiny::tagList(
     page_header("ranking-star", "Markers",
-                "The hepatocyte genes that best separate NASH from control in each dataset"),
+                "Top hepatocyte genes, NASH vs control"),
     shiny::div(class = "toolbar",
       pills(ns("dataset"), ds_choices, selected = meta$dataset[meta$label == "Wang"][1]),
       shiny::span(class = "vr mx-1"),

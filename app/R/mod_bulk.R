@@ -6,7 +6,7 @@ bulkUI <- function(id, d) {
   short <- sub(" vs control", "", ct)
   shiny::tagList(
     page_header("flask", "Whole liver (bulk RNA-seq)",
-                "Disease stages in GSE135251, and a meta-analysis across three independent cohorts"),
+                "Disease stages and a three-cohort meta-analysis"),
     bslib::navset_pill(
       bslib::nav_panel(shiny::span(shiny::icon("stairs"), " Disease stages (GSE135251)"),
         shiny::div(class = "mt-3"),
@@ -31,12 +31,9 @@ bulkUI <- function(id, d) {
             shiny::sliderInput(ns("meta_min_studies"), "Min cohorts", 1, 3, 2, step = 1),
             shiny::checkboxInput(ns("meta_consistent"), "Same direction in every cohort", TRUE),
             title = "Meta-analysis filters")),
-        shiny::p(class = "page-intro small", shiny::icon("circle-info"),
-                 " GSE126848 and GSE135251 (RNA-seq) plus GSE151158 (618-gene panel, MASLD vs control only). ",
-                 "Random-effects meta-analysis of log2 fold changes using each study's standard error."),
         bslib::layout_columns(
           col_widths = c(6, 6),
-          bslib::card(bslib::card_header(card_title("Meta-analysis volcano", "chart-simple")),
+          bslib::card(bslib::card_header(card_title("Meta-analysis volcano", "chart-simple", "GSE126848 and GSE135251 (RNA-seq) plus GSE151158 (618-gene panel, MASLD vs control only). Random-effects meta-analysis of log2 fold changes.")),
                       plot_output(ns("meta_volcano"), height = "440px")),
           bslib::card(bslib::card_header(shiny::uiOutput(ns("meta_title"))), table_output(ns("meta_table")))
         )

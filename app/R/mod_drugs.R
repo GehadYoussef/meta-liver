@@ -3,7 +3,7 @@
 drugsUI <- function(id, d) {
   ns <- shiny::NS(id)
   shiny::tagList(
-    page_header("capsules", "Drugs", "Candidate drugs from the knowledge graph, the protein interaction network and the co-expression network"),
+    page_header("capsules", "Drugs", "Candidates from the knowledge graph and networks"),
     shiny::div(class = "toolbar",
       shiny::span(class = "toolbar-label", shiny::icon("magnifying-glass"), " Drug lookup"),
       shiny::selectizeInput(ns("drug"), NULL, choices = NULL, width = "340px",
@@ -24,10 +24,10 @@ drugsUI <- function(id, d) {
                       table_output(ns("kg_table"))))
       ),
       bslib::nav_panel(shiny::span(shiny::icon("diagram-project"), " Network-active drugs"),
-        shiny::p(class = "page-intro small mt-3", shiny::icon("circle-info"),
-                 " 132 drugs whose targets sit closer than chance to the fibrosis-associated co-expression network ",
-                 "(network proximity z), with mechanism, indication and targets."),
-        bslib::card(table_output(ns("active_table")))
+        bslib::card(class = "mt-3",
+          bslib::card_header(card_title("Drugs near the fibrosis network", "diagram-project",
+            "132 drugs whose targets sit closer than chance to the fibrosis-associated co-expression network (network proximity z).")),
+          table_output(ns("active_table")))
       ),
       bslib::nav_panel(shiny::span(shiny::icon("circle-nodes"), " Network proximity"),
         shiny::div(class = "toolbar mt-3",

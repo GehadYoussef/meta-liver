@@ -6,7 +6,7 @@ geneUI <- function(id) {
   ns <- shiny::NS(id)
   shiny::tagList(
     shiny::div(class = "gene-band",
-      shiny::div(class = "band-title", shiny::icon("magnifying-glass"), " Gene lookup across all evidence layers"),
+      shiny::div(class = "band-title", shiny::icon("magnifying-glass"), " Gene lookup"),
       shiny::selectizeInput(ns("gene"), NULL, choices = NULL, width = "100%",
                             options = list(placeholder = "Search a gene (human symbol)…")),
       shiny::div(class = "quick-picks", lapply(QUICK_PICKS, function(g) shiny::tags$button(
