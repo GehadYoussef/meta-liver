@@ -21,7 +21,7 @@ bulkUI <- function(id, d) {
         bslib::card(bslib::card_header(shiny::uiOutput(ns("title"))),
                     plot_output(ns("volcano"), height = "440px")),
         bslib::card(bslib::card_header(shiny::uiOutput(ns("table_title"))),
-                    reactable::reactableOutput(ns("table")))
+                    table_output(ns("table")))
       )
       ),
       bslib::nav_panel(shiny::span(shiny::icon("layer-group"), " Cohort meta-analysis"),
@@ -38,7 +38,7 @@ bulkUI <- function(id, d) {
           col_widths = c(6, 6),
           bslib::card(bslib::card_header(card_title("Meta-analysis volcano", "chart-simple")),
                       plot_output(ns("meta_volcano"), height = "440px")),
-          bslib::card(bslib::card_header(shiny::uiOutput(ns("meta_title"))), reactable::reactableOutput(ns("meta_table")))
+          bslib::card(bslib::card_header(shiny::uiOutput(ns("meta_title"))), table_output(ns("meta_table")))
         )
       )
     )
@@ -78,7 +78,7 @@ bulkServer <- function(id, d) {
       chip(sprintf("%s genes", format(nrow(sig()), big.mark = ",")), "dna", "muted"),
       if (nrow(sig()) > MAX_TABLE) chip(sprintf("showing the strongest %d", MAX_TABLE), "filter", "muted")))
 
-    output$table <- reactable::renderReactable({
+    output$table <- render_table({
       b <- utils::head(sig(), MAX_TABLE)
       out <- data.frame(Gene = paste(ifelse(is.na(b$gene_human), "(no symbol)", b$gene_human), b$ensembl, sep = "|"),
                         Direction = ifelse(b$log2FC > 0, "up_in_disease", "down_in_disease"),
@@ -113,7 +113,7 @@ bulkServer <- function(id, d) {
         card_title("Strongest genes", "list-ol"),
         chip(sprintf("%s at FDR < 0.05", format(sum(m$fdr < 0.05), big.mark = ",")), "dna", "muted"))
     })
-    output$meta_table <- reactable::renderReactable({
+    output$meta_table <- render_table({
       m <- meta_rows()
       m <- m[m$fdr < 0.05, ]
       m <- utils::head(m[order(m$p), ], 500)
@@ -123,8 +123,8 @@ bulkServer <- function(id, d) {
       rt(data.frame(Gene = link, Direction = ifelse(m$meta_log2FC > 0, "up_in_disease", "down_in_disease"),
                     FC = m$meta_log2FC, FDR = m$fdr, N = m$n_studies, I2 = m$i2),
          page = 12, columns = list(
-           Gene = reactable::colDef(html = TRUE, minWidth = 115), Direction = col_dir(), FC = col_num("meta log2FC"),
-           FDR = col_p("FDR"), N = reactable::colDef(name = "Cohorts", align = "center", maxWidth = 80),
+           Gene = col_def(html = TRUE, minWidth = 115), Direction = col_dir(), FC = col_num("meta log2FC"),
+           FDR = col_p("FDR"), N = col_def(name = "Cohorts", align = "center", maxWidth = 80),
            I2 = col_bar("Heterogeneity (I\u00b2)", digits = 2, color = PAL$warn, width = 150)))
     })
 

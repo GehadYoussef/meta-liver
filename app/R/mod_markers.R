@@ -29,7 +29,7 @@ markersUI <- function(id, d) {
         bslib::nav_panel("All genes", plot_output(ns("plot"), height = "560px"))),
       bslib::card(bslib::card_header(card_title("Top genes", "ranking-star",
                     "Ranked by distance of the AUC from 0.5, so strong up- and down-regulated genes rank equally.")),
-                  reactable::reactableOutput(ns("table")))
+                  table_output(ns("table")))
     )
   )
 }
@@ -95,14 +95,14 @@ markersServer <- function(id, d) {
                    shapes = list(vline(0.5), hline(0)), showlegend = FALSE)
     })
 
-    output$table <- reactable::renderReactable({
+    output$table <- render_table({
       x <- top()
       shiny::req(nrow(x) > 0)
       out <- data.frame(Gene = x$gene, AUC = x$auc, Strength = x$auc_power,
                         Detected = sprintf("%f|%f", x$pct_disease, x$pct_control),
                         log2FC = x$pb_logFC, FDR = x$pb_fdr, Target = x$gene_human %in% target_human)
       cols <- list(
-        Gene = reactable::colDef(minWidth = 95, style = list(fontWeight = 600)),
+        Gene = col_def(minWidth = 95, style = list(fontWeight = 600)),
         AUC = col_effect(), Strength = col_bar("Strength", digits = 2, width = 120),
         Detected = col_detect(), log2FC = col_num("log2FC"), FDR = col_p("FDR"),
         Target = col_check("Target"))

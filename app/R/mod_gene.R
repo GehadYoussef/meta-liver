@@ -32,11 +32,11 @@ geneUI <- function(id) {
       bslib::nav_panel(shiny::span(shiny::icon("vial"), " iHeps model"),
                        shiny::p(class = "small text-muted", "Stem-cell-derived hepatocytes (lines 1b and 5a) after each exposure, vs untreated. ● = padj < 0.05."),
                        plot_output(ns("invitro"), height = "260px")),
-      bslib::nav_panel(shiny::span(shiny::icon("circle-nodes"), " Interactors"), reactable::reactableOutput(ns("ppi"))),
+      bslib::nav_panel(shiny::span(shiny::icon("circle-nodes"), " Interactors"), table_output(ns("ppi"))),
       bslib::nav_panel(shiny::span(shiny::icon("share-nodes"), " Knowledge-graph cluster"),
-                       shiny::uiOutput(ns("cluster_link")), reactable::reactableOutput(ns("cluster"))),
-      bslib::nav_panel(shiny::span(shiny::icon("capsules"), " Drugs"), reactable::reactableOutput(ns("drugs"))),
-      bslib::nav_panel(shiny::span(shiny::icon("table"), " Single-cell table"), reactable::reactableOutput(ns("table")))
+                       shiny::uiOutput(ns("cluster_link")), table_output(ns("cluster"))),
+      bslib::nav_panel(shiny::span(shiny::icon("capsules"), " Drugs"), table_output(ns("drugs"))),
+      bslib::nav_panel(shiny::span(shiny::icon("table"), " Single-cell table"), table_output(ns("table")))
     )
   )
 }
@@ -274,7 +274,7 @@ geneServer <- function(id, d) {
         plot_style(xaxis = list(showgrid = FALSE, side = "top"), yaxis = list(showgrid = FALSE, autorange = "reversed"))
     })
 
-    output$ppi <- reactable::renderReactable({
+    output$ppi <- render_table({
       g <- gene()
       net <- d$ppi_network
       i <- match(g, net$nodes)
@@ -285,7 +285,7 @@ geneServer <- function(id, d) {
                         Target = nbn %in% target_human)
       out <- out[order(-out$Key, -out$Degree), ]
       rt(out, page = 10, columns = list(
-        Partner = reactable::colDef(style = list(fontWeight = 600)),
+        Partner = col_def(style = list(fontWeight = 600)),
         Degree = col_bar("Partner's interactions", max = max(net$degree$degree), color = PAL$down, digits = 0, width = 170),
         Key = col_check("Early-MAFLD key protein"), Target = col_check("Target gene")))
     })
@@ -296,34 +296,34 @@ geneServer <- function(id, d) {
       shiny::p(class = "small", shiny::HTML(kg_link(e$kg$cluster, sprintf("Open cluster %d on the Knowledge graph page", e$kg$cluster))))
     })
 
-    output$cluster <- reactable::renderReactable({
+    output$cluster <- render_table({
       e <- ev()
       shiny::validate(shiny::need(nrow(e$kg) > 0, "Not a node in the MASH knowledge graph."))
       nodes <- d$kg_nodes[d$kg_nodes$cluster == e$kg$cluster & d$kg_nodes$name != e$kg$name, ]
       nodes <- nodes[order(nodes$type, -nodes$composite_pct), ]
       rt(data.frame(Node = nodes$name, Type = nodes$type, Composite = nodes$composite_pct / 100), page = 10, columns = list(
-        Node = reactable::colDef(minWidth = 180, style = list(fontWeight = 600)),
-        Type = reactable::colDef(html = TRUE, cell = function(v) chip_html(v, switch(v, drug = "up", disease = "warn", "muted"))),
+        Node = col_def(minWidth = 180, style = list(fontWeight = 600)),
+        Type = col_def(html = TRUE, cell = function(v) chip_html(v, switch(v, drug = "up", disease = "warn", "muted"))),
         Composite = col_bar("Centrality percentile (within type)", digits = 2, width = 200)))
     })
 
-    output$drugs <- reactable::renderReactable({
+    output$drugs <- render_table({
       x <- ev()$drugs
       shiny::validate(shiny::need(nrow(x) > 0, "No network-active drug targets this gene."))
       rt(data.frame(Drug = paste(x$drug, x$drugbank, sep = "|"), z = x$z, Mechanism = x$moa, Indication = x$indication),
          page = 8, columns = list(Drug = col_name_id("Drug", 160), z = col_num("Network z"),
-           Mechanism = reactable::colDef(minWidth = 260, style = list(fontSize = "0.8rem")),
-           Indication = reactable::colDef(minWidth = 260, style = list(fontSize = "0.8rem", color = PAL$muted))))
+           Mechanism = col_def(minWidth = 260, style = list(fontSize = "0.8rem")),
+           Indication = col_def(minWidth = 260, style = list(fontSize = "0.8rem", color = PAL$muted))))
     })
 
-    output$table <- reactable::renderReactable({
+    output$table <- render_table({
       s <- gene_sc()
       shiny::req(nrow(s) > 0)
       out <- data.frame(Dataset = d$datasets_meta$label[match(s$dataset, d$datasets_meta$dataset)],
                         Gene = s$gene, AUC = s$auc, Detected = sprintf("%f|%f", s$pct_disease, s$pct_control),
                         log2FC = s$pb_logFC, FDR = s$pb_fdr)
       rt(out, searchable = FALSE, columns = list(
-        Dataset = reactable::colDef(style = list(fontWeight = 600)),
+        Dataset = col_def(style = list(fontWeight = 600)),
         AUC = col_effect(), Detected = col_detect(), log2FC = col_num("Pseudobulk log2FC"), FDR = col_p("FDR")))
     })
 

@@ -13,8 +13,8 @@ modulesUI <- function(id, d) {
       bslib::card(
         bslib::card_header(shiny::uiOutput(ns("title"))),
         bslib::navset_underline(
-          bslib::nav_panel(shiny::span(shiny::icon("route"), " Pathways"), reactable::reactableOutput(ns("enrich"))),
-          bslib::nav_panel(shiny::span(shiny::icon("dna"), " Genes"), reactable::reactableOutput(ns("genes")))))
+          bslib::nav_panel(shiny::span(shiny::icon("route"), " Pathways"), table_output(ns("enrich"))),
+          bslib::nav_panel(shiny::span(shiny::icon("dna"), " Genes"), table_output(ns("genes")))))
     )
   )
 }
@@ -51,25 +51,25 @@ modulesServer <- function(id, d) {
         chip(sprintf("%d genes", t$n_genes), "dna", "muted"))
     })
 
-    output$enrich <- reactable::renderReactable({
+    output$enrich <- render_table({
       e <- d$wgcna$enrichment
       e <- e[e$module == module(), ]
       e <- e[order(e$p_value), ]
       shiny::validate(shiny::need(nrow(e) > 0, "No enriched pathways for this module."))
       rt(data.frame(Source = e$source, Term = e$term_name, p = -log10(e$p_value), Overlap = e$intersection_size),
          page = 12, columns = list(
-           Source = reactable::colDef(maxWidth = 90, html = TRUE, cell = function(v) chip_html(v, "muted")),
-           Term = reactable::colDef(minWidth = 260),
+           Source = col_def(maxWidth = 90, html = TRUE, cell = function(v) chip_html(v, "muted")),
+           Term = col_def(minWidth = 260),
            p = col_bar("−log10 p", max = max(-log10(e$p_value)), color = PAL$primary, digits = 1),
-           Overlap = reactable::colDef(align = "right", maxWidth = 90)))
+           Overlap = col_def(align = "right", maxWidth = 90)))
     })
 
-    output$genes <- reactable::renderReactable({
+    output$genes <- render_table({
       m <- d$wgcna$membership
       m <- m[m$module == module(), ]
       rt(data.frame(Gene = ifelse(is.na(m$gene_human), m$ensembl, m$gene_human),
                     Target = !is.na(m$gene_human) & m$gene_human %in% target_human),
-         page = 15, columns = list(Gene = reactable::colDef(style = list(fontWeight = 600)), Target = col_check("Target")))
+         page = 15, columns = list(Gene = col_def(style = list(fontWeight = 600)), Target = col_check("Target")))
     })
     list(module = module)
   })

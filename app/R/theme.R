@@ -113,23 +113,6 @@ module_hex <- function(m) {
 
 # Tables
 
-rt <- function(df, columns = list(), page = 10, searchable = TRUE, ...) {
-  reactable::reactable(
-    df, columns = columns, defaultPageSize = page, searchable = searchable,
-    compact = TRUE, highlight = TRUE, borderless = TRUE, striped = FALSE,
-    showPageSizeOptions = FALSE, paginationType = "simple",
-    defaultColDef = reactable::colDef(headerClass = "rt-head", minWidth = 70),
-    theme = reactable::reactableTheme(
-      headerStyle = list(color = PAL$muted, fontWeight = 600, fontSize = "0.78rem",
-                         textTransform = "uppercase", letterSpacing = "0.03em",
-                         borderBottom = "1px solid rgba(0,0,0,0.08)"),
-      rowHighlightStyle = list(background = "rgba(15,118,110,0.06)"),
-      searchInputStyle = list(borderRadius = "999px", width = "220px", fontSize = "0.85rem")
-    ),
-    ...
-  )
-}
-
 # Cells are plain HTML strings because building tags per row makes large tables slow.
 esc <-function(x) htmltools::htmlEscape(as.character(x))
 ARROW <- c(up_in_disease = "\u25B2", down_in_disease = "\u25BC", no_change = "\u2013", not_tested = "")
@@ -147,19 +130,19 @@ bar_html <- function(value, max = 1, color = PAL$primary, label = NULL, thin = F
 }
 
 col_bar <- function(name, max = 1, color = PAL$primary, digits = 2, width = 130) {
-  reactable::colDef(name = name, minWidth = width, align = "left", html = TRUE, cell = function(value) {
+  col_def(name = name, minWidth = width, align = "left", html = TRUE, cell = function(value) {
     bar_html(value, max, color, if (is.na(value)) "" else formatC(value, format = "f", digits = digits))
   })
 }
 
 col_dir <- function(name = "Direction") {
-  reactable::colDef(name = name, minWidth = 120, html = TRUE, cell = function(value) {
+  col_def(name = name, minWidth = 120, html = TRUE, cell = function(value) {
     pill_html(value, (DIR_INFO[[value]] %||% DIR_INFO$not_tested)$label)
   })
 }
 
 col_call <- function(name) {
-  reactable::colDef(name = name, align = "center", minWidth = 70, html = TRUE, cell = function(value) {
+  col_def(name = name, align = "center", minWidth = 70, html = TRUE, cell = function(value) {
     if (is.na(value)) return('')
     key <- switch(value, up = "up_in_disease", down = "down_in_disease", none = "no_change", "no_change")
     sprintf('<span style="color:%s;font-weight:700">%s</span>', DIR_INFO[[key]]$color, ARROW[[key]])
@@ -167,20 +150,20 @@ col_call <- function(name) {
 }
 
 col_num <- function(name, digits = 2) {
-  reactable::colDef(name = name, format = reactable::colFormat(digits = digits), align = "right")
+  col_def(name = name, format = col_format(digits = digits), align = "right")
 }
 col_p <- function(name) {
-  reactable::colDef(name = name, align = "right", cell = function(value) fmt_p(value))
+  col_def(name = name, align = "right", cell = function(value) fmt_p(value))
 }
 col_check <- function(name) {
-  reactable::colDef(name = name, align = "center", html = TRUE, cell = function(value) {
+  col_def(name = name, align = "center", html = TRUE, cell = function(value) {
     if (isTRUE(value)) sprintf('<span style="color:%s;font-weight:700">\u2713</span>', PAL$primary) else ""
   })
 }
 
 # AUC in a pill coloured by its direction
 col_effect <- function(name = "Effect (AUC)", delta = 0.05) {
-  reactable::colDef(name = name, minWidth = 105, align = "left", html = TRUE, cell = function(value) {
+  col_def(name = name, minWidth = 105, align = "left", html = TRUE, cell = function(value) {
     if (is.na(value)) return('<span class="call-na">n/a</span>')
     dir <- if (value >= 0.5 + delta) "up_in_disease" else if (value <= 0.5 - delta) "down_in_disease" else "no_change"
     pill_html(dir, formatC(value, format = "f", digits = 2))
@@ -189,7 +172,7 @@ col_effect <- function(name = "Effect (AUC)", delta = 0.05) {
 
 # Value is "nash|control" detection
 col_detect <- function(name = "Detected (NASH / control)") {
-  reactable::colDef(name = name, minWidth = 150, html = TRUE, cell = function(value) {
+  col_def(name = name, minWidth = 150, html = TRUE, cell = function(value) {
     v <- as.numeric(strsplit(value, "|", fixed = TRUE)[[1]])
     sprintf('<div class="dual-bar">%s%s</div>',
             bar_html(v[1], 1, PAL$up, sprintf("%.0f%%", 100 * v[1]), thin = TRUE),
@@ -232,7 +215,7 @@ agreement_heatmap <- function(pairwise, ds, labels, hover = TRUE) {
 
 # Value is "name|id"
 col_name_id <- function(name, min_width = 170) {
-  reactable::colDef(name = name, minWidth = min_width, html = TRUE, cell = function(value) {
+  col_def(name = name, minWidth = min_width, html = TRUE, cell = function(value) {
     v <- strsplit(value, "|", fixed = TRUE)[[1]]
     id <- if (length(v) > 1 && nzchar(v[2]) && v[2] != v[1]) sprintf('<div class="cell-id">%s</div>', esc(v[2])) else ""
     sprintf('<div class="cell-name">%s</div>%s', esc(v[1]), id)

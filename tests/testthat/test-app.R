@@ -188,3 +188,12 @@ test_that("knowledge graph page opens the NASH cluster and follows node search",
     expect_no_error(output$top)
   })
 })
+
+test_that("rt builds escaped cells, formats numbers and keeps single rows as arrays", {
+  x <- env$rt(data.frame(Name = "A&B", N = 27210, P = 0.000123, Link = "<b>x</b>"),
+              columns = list(N = env$col_def(format = env$col_format(separators = TRUE)), Link = env$col_def(html = TRUE)))
+  cells <- lapply(x$cols, function(c) as.vector(c$cells))
+  expect_equal(cells, list("A&amp;B", "27,210", "0.000123", "<b>x</b>"))
+  expect_match(shiny:::toJSON(x$cols[[1]]), '"cells":["A&amp;B"]', fixed = TRUE)
+  expect_equal(as.vector(x$text), "a&amp;b 27,210 0.000123 x")
+})

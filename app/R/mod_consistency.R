@@ -43,9 +43,9 @@ consistencyUI <- function(id, d) {
     ),
     bslib::accordion(open = FALSE,
       bslib::accordion_panel("Gene table", icon = shiny::icon("table"),
-                             reactable::reactableOutput(ns("table"))),
+                             table_output(ns("table"))),
       bslib::accordion_panel("Fixed pipeline vs original results", icon = shiny::icon("clock-rotate-left"),
-                             reactable::reactableOutput(ns("compare"))))
+                             table_output(ns("compare"))))
   )
 }
 
@@ -124,27 +124,27 @@ consistencyServer <- function(id, d) {
                                 tickfont = list(size = 12)))
     })
 
-    output$table <- reactable::renderReactable({
+    output$table <- render_table({
       w <- genes()
       shiny::req(nrow(w) > 0)
       cols <- c("gene_human", d$consistency$datasets, intersect("bulk", names(w)), "consistency")
       out <- w[, cols]
-      defs <- c(list(gene_human = reactable::colDef(name = "Gene", style = list(fontWeight = 600)),
-                     consistency = reactable::colDef(name = "Pattern", minWidth = 170)),
+      defs <- c(list(gene_human = col_def(name = "Gene", style = list(fontWeight = 600)),
+                     consistency = col_def(name = "Pattern", minWidth = 170)),
                 stats::setNames(lapply(d$consistency$datasets, function(x) col_call(lab[[x]])), d$consistency$datasets),
                 if ("bulk" %in% names(w)) list(bulk = col_call("Bulk")))
       rt(out, columns = defs, page = 15)
     })
 
-    output$compare <- reactable::renderReactable({
+    output$compare <- render_table({
       x <- d$consistency_compare
       rt(x, searchable = FALSE, columns = list(
-        version = reactable::colDef(name = "Version"), gene_set = reactable::colDef(name = "Genes"),
-        called_in_2plus = reactable::colDef(name = "Called in 2+"),
-        consistent = reactable::colDef(name = "Consistent"), conflicting = reactable::colDef(name = "Conflicting"),
-        consistent_in_all = reactable::colDef(name = "In all"),
-        mouse_and_human_agree = reactable::colDef(name = "Mouse = human"),
-        mouse_and_human_disagree = reactable::colDef(name = "Mouse and human disagree")))
+        version = col_def(name = "Version"), gene_set = col_def(name = "Genes"),
+        called_in_2plus = col_def(name = "Called in 2+"),
+        consistent = col_def(name = "Consistent"), conflicting = col_def(name = "Conflicting"),
+        consistent_in_all = col_def(name = "In all"),
+        mouse_and_human_agree = col_def(name = "Mouse = human"),
+        mouse_and_human_disagree = col_def(name = "Mouse and human disagree")))
     })
 
     list(genes = genes)

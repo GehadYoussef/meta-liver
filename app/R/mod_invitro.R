@@ -29,7 +29,7 @@ invitroUI <- function(id, d) {
       bslib::card(bslib::card_header(shiny::uiOutput(ns("title"))), plot_output(ns("volcano"), height = "440px")),
       bslib::card(bslib::card_header(card_title("Replicated in both lines", "list-ol",
                     "Genes significant (padj < 0.05) in both lines in the same direction, ranked by the smaller fold change.")),
-                  reactable::reactableOutput(ns("table")))
+                  table_output(ns("table")))
     )
   )
 }
@@ -82,7 +82,7 @@ invitroServer <- function(id, d) {
                    shapes = list(hline(-log10(0.05))), showlegend = FALSE)
     })
 
-    output$table <- reactable::renderReactable({
+    output$table <- render_table({
       cc <- shiny::req(input$contrast)
       x <- iv[iv$contrast == cc & !is.na(iv$gene_human), ]
       w <- stats::reshape(x[, c("gene_human", "line", "log2FC", "padj", "significant")], idvar = "gene_human",
@@ -96,8 +96,8 @@ invitroServer <- function(id, d) {
       rt(data.frame(Gene = gene_link, Direction = ifelse(both$min_fc > 0, "up_in_disease", "down_in_disease"),
                     FC1b = both$log2FC.1b, FC5a = both$log2FC.5a, P = pmax(both$padj.1b, both$padj.5a)),
          page = 12, columns = list(
-           Gene = reactable::colDef(html = TRUE, minWidth = 115),
-           Direction = reactable::colDef(html = TRUE, minWidth = 135, cell = function(v) pill_html(v, if (v == "up_in_disease") "Up in model" else "Down in model")),
+           Gene = col_def(html = TRUE, minWidth = 115),
+           Direction = col_def(html = TRUE, minWidth = 135, cell = function(v) pill_html(v, if (v == "up_in_disease") "Up in model" else "Down in model")),
            FC1b = utils::modifyList(col_num("log2FC 1b"), list(minWidth = 80)),
            FC5a = utils::modifyList(col_num("log2FC 5a"), list(minWidth = 80)),
            P = utils::modifyList(col_p("Larger padj"), list(minWidth = 85))))

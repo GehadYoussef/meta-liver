@@ -45,9 +45,9 @@ aboutUI <- function(id, d) {
     ),
     bslib::navset_card_underline(
       title = card_title("Provenance", "clipboard-list"),
-      bslib::nav_panel("Datasets", reactable::reactableOutput(ns("datasets"))),
-      bslib::nav_panel("Original vs fixed", reactable::reactableOutput(ns("comparison"))),
-      bslib::nav_panel("Sensitivity", reactable::reactableOutput(ns("sensitivity")))
+      bslib::nav_panel("Datasets", table_output(ns("datasets"))),
+      bslib::nav_panel("Original vs fixed", table_output(ns("comparison"))),
+      bslib::nav_panel("Sensitivity", table_output(ns("sensitivity")))
     ),
     shiny::p(class = "text-muted small mt-2", shiny::icon("clock"), sprintf(" App data built %s", d$built_at))
   )
@@ -55,41 +55,41 @@ aboutUI <- function(id, d) {
 
 aboutServer <- function(id, d) {
   shiny::moduleServer(id, function(input, output, session) {
-    output$datasets <- reactable::renderReactable({
+    output$datasets <- render_table({
       m <- d$datasets_meta
       rt(data.frame(Dataset = m$label, GEO = m$geo, Species = m$species, Assay = m$assay,
                     Design = sprintf("%s vs %s", m$n_disease, m$n_control), Hepatocytes = m$n_hepatocytes,
                     PValues = m$pvalues, Reliable = m$directions_reliable, Bulk = m$bulk_agreement),
          searchable = FALSE, columns = list(
-           Dataset = reactable::colDef(style = list(fontWeight = 600)),
-           Hepatocytes = reactable::colDef(format = reactable::colFormat(separators = TRUE)),
+           Dataset = col_def(style = list(fontWeight = 600)),
+           Hepatocytes = col_def(format = col_format(separators = TRUE)),
            PValues = col_check("p-values"), Reliable = col_check("Directions OK"),
            Bulk = col_bar("Agrees with bulk", digits = 2)))
     })
-    output$comparison <- reactable::renderReactable({
+    output$comparison <- render_table({
       shiny::validate(shiny::need(!is.null(d$comparison), "No dataset has been rerun yet."))
       x <- d$comparison
       x$dataset <- d$datasets_meta$label[match(x$dataset, d$datasets_meta$dataset)]
       rt(x, searchable = FALSE, columns = list(
-        dataset = reactable::colDef(name = "Dataset", style = list(fontWeight = 600)),
-        genes_compared = reactable::colDef(name = "Genes"),
+        dataset = col_def(name = "Dataset", style = list(fontWeight = 600)),
+        genes_compared = col_def(name = "Genes"),
         auc_correlation = col_bar("AUC correlation", digits = 2),
         direction_agreement_strong_genes = col_bar("Same direction", digits = 2),
-        top50_overlap = reactable::colDef(name = "Top-50 overlap"),
-        old_cell_level_padj_lt_0.05 = reactable::colDef(name = "Significant, original (cell-level)"),
-        new_pseudobulk_fdr_lt_0.05 = reactable::colDef(name = "Significant, fixed (pseudobulk FDR < 0.05)"),
-        new_pvalue_method = reactable::colDef(name = "p-value method", minWidth = 220,
+        top50_overlap = col_def(name = "Top-50 overlap"),
+        old_cell_level_padj_lt_0.05 = col_def(name = "Significant, original (cell-level)"),
+        new_pseudobulk_fdr_lt_0.05 = col_def(name = "Significant, fixed (pseudobulk FDR < 0.05)"),
+        new_pvalue_method = col_def(name = "p-value method", minWidth = 220,
                                               style = list(fontSize = "0.78rem", color = PAL$muted))))
     })
-    output$sensitivity <- reactable::renderReactable({
+    output$sensitivity <- render_table({
       shiny::validate(shiny::need(!is.null(d$sensitivity), "No sensitivity analyses have been run."))
       s <- d$sensitivity
       rt(s, searchable = FALSE, page = 12, columns = list(
-        variant = reactable::colDef(name = "Variant", minWidth = 200, style = list(fontWeight = 600)),
-        compared_with = reactable::colDef(name = "Compared with", minWidth = 180),
+        variant = col_def(name = "Variant", minWidth = 200, style = list(fontWeight = 600)),
+        compared_with = col_def(name = "Compared with", minWidth = 180),
         auc_sign_agreement = col_bar("AUC same direction", digits = 2),
-        n_auc = reactable::colDef(name = "n"), pb_cor = col_num("Pseudobulk r"),
-        pb_sign_agreement = col_bar("Pseudobulk same direction", digits = 2), n_pb = reactable::colDef(name = "n")))
+        n_auc = col_def(name = "n"), pb_cor = col_num("Pseudobulk r"),
+        pb_sign_agreement = col_bar("Pseudobulk same direction", digits = 2), n_pb = col_def(name = "n")))
     })
   })
 }

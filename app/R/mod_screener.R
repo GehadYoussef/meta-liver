@@ -47,7 +47,7 @@ screenerUI <- function(id, d) {
         shiny::div(class = "d-flex gap-2 align-items-center",
           shiny::numericInput(ns("max_n"), NULL, 250, min = 10, max = 5000, step = 50, width = "110px"),
           shiny::downloadButton(ns("download"), "CSV", class = "btn-gear")))),
-      reactable::reactableOutput(ns("table"))
+      table_output(ns("table"))
     )
   )
 }
@@ -86,7 +86,7 @@ screenerServer <- function(id, d) {
                                                   if (r$n_total > nrow(r$table)) sprintf(", showing the strongest %d", nrow(r$table)) else "")))
     })
 
-    output$table <- reactable::renderReactable({
+    output$table <- render_table({
       x <- result()$table
       shiny::validate(shiny::need(nrow(x) > 0, "No gene passes all the selected criteria. Try relaxing a threshold or switching a layer off."))
       link <- sprintf('<a class="gene-link" onclick="Shiny.setInputValue(\'gene-pick\', \'%s\', {priority: \'event\'}); mashGo(\'gene\');">%s</a>',
@@ -100,18 +100,18 @@ screenerServer <- function(id, d) {
                         Module = ifelse(is.na(x$module) | x$module == "grey", "", sprintf("%s|%s", x$module, ifelse(is.na(x$module_r), "", sprintf("%+.2f", x$module_r)))),
                         Drugs = x$n_drugs, Target = x$target, stringsAsFactors = FALSE)
       rt(out, page = 15, searchable = TRUE, columns = list(
-        Gene = reactable::colDef(html = TRUE, minWidth = 115),
+        Gene = col_def(html = TRUE, minWidth = 115),
         Evidence = col_bar("Single-cell evidence", digits = 2, width = 150),
         SC = col_call("Hepatocytes"), Bulk = col_call("Whole liver"),
         BulkFC = col_num("Liver log2FC"), BulkFDR = col_p("Liver FDR"), iHeps = col_call("iHeps"),
         KG = col_bar("KG centrality", digits = 2, color = PAL$down, width = 130),
-        Module = reactable::colDef(name = "Module (r)", minWidth = 120, html = TRUE, cell = function(v) {
+        Module = col_def(name = "Module (r)", minWidth = 120, html = TRUE, cell = function(v) {
           if (!nzchar(v)) return("")
           p <- strsplit(v, "|", fixed = TRUE)[[1]]
           sprintf('<span style="display:inline-block;width:.7rem;height:.7rem;border-radius:3px;background:%s;margin-right:.35rem"></span>%s <span class="cell-id">%s</span>',
                   module_hex(p[1]), esc(p[1]), if (length(p) > 1) p[2] else "")
         }),
-        Drugs = reactable::colDef(align = "center", maxWidth = 70), Target = col_check("Target")))
+        Drugs = col_def(align = "center", maxWidth = 70), Target = col_check("Target")))
     })
 
     output$download <- shiny::downloadHandler(

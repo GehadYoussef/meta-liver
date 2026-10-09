@@ -43,6 +43,7 @@ ui <- page(
               href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"),
     tags$link(rel = "stylesheet", href = "styles.css"),
     tags$script(src = "plot.js"),
+    tags$script(src = "table.js"),
     tags$script(HTML("
       window.mashGo = function(p) {
         if (!document.querySelector('.rail-item[data-page=\"' + p + '\"]')) p = 'overview';

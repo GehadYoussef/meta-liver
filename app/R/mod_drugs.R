@@ -21,13 +21,13 @@ drugsUI <- function(id, d) {
                         "Colour = whether the drug lies on shortest paths to NASH / hepatic steatosis in the graph.")),
                       plot_output(ns("kg_plot"), height = "420px")),
           bslib::card(bslib::card_header(card_title("Ranked drugs", "ranking-star")),
-                      reactable::reactableOutput(ns("kg_table"))))
+                      table_output(ns("kg_table"))))
       ),
       bslib::nav_panel(shiny::span(shiny::icon("diagram-project"), " Network-active drugs"),
         shiny::p(class = "page-intro small mt-3", shiny::icon("circle-info"),
                  " 132 drugs whose targets sit closer than chance to the fibrosis-associated co-expression network ",
                  "(network proximity z), with mechanism, indication and targets."),
-        bslib::card(reactable::reactableOutput(ns("active_table")))
+        bslib::card(table_output(ns("active_table")))
       ),
       bslib::nav_panel(shiny::span(shiny::icon("circle-nodes"), " Network proximity"),
         shiny::div(class = "toolbar mt-3",
@@ -40,7 +40,7 @@ drugsUI <- function(id, d) {
                         "z < 0 = drug targets sit closer to the key proteins than random target sets. Bubble size = key proteins hit directly.")),
                       plot_output(ns("ppi_plot"), height = "420px")),
           bslib::card(bslib::card_header(card_title("Drugs", "capsules")),
-                      reactable::reactableOutput(ns("ppi_table"))))
+                      table_output(ns("ppi_table"))))
       )
     )
   )
@@ -70,17 +70,17 @@ drugsServer <- function(id, d) {
         plot_style(xaxis = list(title = "PageRank"), yaxis = list(title = "log10(betweenness + 1)"))
     })
 
-    output$kg_table <- reactable::renderReactable({
+    output$kg_table <- render_table({
       x <- kg_sel()
       paths <- ifelse(x$in_nash_shortest_paths & x$in_steatosis_shortest_paths, "NASH|Steatosis",
                ifelse(x$in_nash_shortest_paths, "NASH", ifelse(x$in_steatosis_shortest_paths, "Steatosis", "")))
       out <- data.frame(Rank = x$pagerank_rank, Drug = paste(x$name, x$drugbank_accession, sep = "|"),
                         PageRank = x$pagerank_score, Paths = paths, z = x$ppi_proximity_z)
       rt(out, page = 12, columns = list(
-        Rank = reactable::colDef(maxWidth = 60, align = "right", style = list(color = PAL$muted)),
+        Rank = col_def(maxWidth = 60, align = "right", style = list(color = PAL$muted)),
         Drug = col_name_id("Drug"),
         PageRank = col_bar("PageRank", max = max(d$kg$drugs$pagerank_score), color = PAL$primary),
-        Paths = reactable::colDef(name = "Shortest paths", minWidth = 130, html = TRUE, cell = function(v) {
+        Paths = col_def(name = "Shortest paths", minWidth = 130, html = TRUE, cell = function(v) {
           if (!nzchar(v)) return("")
           paste(vapply(strsplit(v, "|", fixed = TRUE)[[1]], function(k) chip_html(k, if (k == "NASH") "up" else "warn"), ""),
                 collapse = " ")
@@ -109,7 +109,7 @@ drugsServer <- function(id, d) {
                    showlegend = FALSE)
     })
 
-    output$ppi_table <- reactable::renderReactable({
+    output$ppi_table <- render_table({
       x <- ppi_sel()
       out <- data.frame(Drug = paste(ifelse(is.na(x$drug_name), x$drug_id, x$drug_name), x$drug_id, sep = "|"),
                         z = x$z, KeyHit = x$n_key_0deg, Targets = x$targets_key_proteins,
@@ -118,22 +118,22 @@ drugsServer <- function(id, d) {
         Drug = col_name_id("Drug", 150), z = col_num("z"),
         KeyHit = col_bar("Key proteins hit", max = max(d$ppi$proximity$n_key_0deg, na.rm = TRUE),
                          color = PAL$down, digits = 0, width = 120),
-        Targets = reactable::colDef(name = "Which key proteins", minWidth = 200,
+        Targets = col_def(name = "Which key proteins", minWidth = 200,
                                     style = list(fontSize = "0.75rem", color = PAL$muted)),
-        KGrank = reactable::colDef(name = "KG rank", align = "right", maxWidth = 80)))
+        KGrank = col_def(name = "KG rank", align = "right", maxWidth = 80)))
     })
 
     # Network-active drugs
-    output$active_table <- reactable::renderReactable({
+    output$active_table <- render_table({
       a <- d$active_drugs$drugs
       rt(data.frame(Drug = paste(a$drug, a$drugbank, sep = "|"), z = a$z, Distance = a$distance,
                     Mechanism = a$moa, Indication = a$indication,
                     Targets = vapply(strsplit(a$targets, ",\\s*"), function(t) sprintf("%d targets", length(t)), "")),
          page = 12, columns = list(
            Drug = col_name_id("Drug", 170), z = col_num("Proximity z"), Distance = col_num("Distance"),
-           Mechanism = reactable::colDef(minWidth = 280, style = list(fontSize = "0.8rem")),
-           Indication = reactable::colDef(minWidth = 240, style = list(fontSize = "0.8rem", color = PAL$muted)),
-           Targets = reactable::colDef(maxWidth = 100)))
+           Mechanism = col_def(minWidth = 280, style = list(fontSize = "0.8rem")),
+           Indication = col_def(minWidth = 240, style = list(fontSize = "0.8rem", color = PAL$muted)),
+           Targets = col_def(maxWidth = 100)))
     })
 
     # Drug lookup

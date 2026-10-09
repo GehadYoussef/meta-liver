@@ -51,15 +51,15 @@ kgUI <- function(id, d) {
       bslib::card(bslib::card_header(shiny::uiOutput(ns("cluster_title"))),
                   shiny::uiOutput(ns("diseases")),
                   bslib::navset_underline(
-                    bslib::nav_panel(shiny::span(shiny::icon("dna"), " Genes"), reactable::reactableOutput(ns("genes"))),
-                    bslib::nav_panel(shiny::span(shiny::icon("capsules"), " Drugs"), reactable::reactableOutput(ns("drugs")))))
+                    bslib::nav_panel(shiny::span(shiny::icon("dna"), " Genes"), table_output(ns("genes"))),
+                    bslib::nav_panel(shiny::span(shiny::icon("capsules"), " Drugs"), table_output(ns("drugs")))))
     ),
     bslib::card(
       bslib::card_header(shiny::div(class = "d-flex justify-content-between align-items-center w-100",
         card_title("Most central nodes", "ranking-star",
                    "Composite centrality: weighted geometric mean of PageRank, betweenness and eigenvector percentiles, within node type."),
         pills(ns("type"), c("Genes" = "gene", "Drugs" = "drug", "Diseases" = "disease")))),
-      reactable::reactableOutput(ns("top")))
+      table_output(ns("top")))
   )
 }
 
@@ -114,7 +114,7 @@ kgServer <- function(id, d) {
         if (nrow(dis) > nrow(shown)) shiny::span(class = "small text-muted", sprintf("and %d more", nrow(dis) - nrow(shown))))
     })
 
-    output$genes <- reactable::renderReactable({
+    output$genes <- render_table({
       g <- members()
       g <- g[g$kind == "gene", ]
       shiny::validate(shiny::need(nrow(g) > 0, "No genes in this cluster."))
@@ -127,13 +127,13 @@ kgServer <- function(id, d) {
       rt(data.frame(Gene = gene_link(g$name), Centrality = g$composite_pct / 100,
                     Liver = liver, SC = sc, stringsAsFactors = FALSE),
          page = 10, columns = list(
-           Gene = reactable::colDef(html = TRUE, minWidth = 110),
+           Gene = col_def(html = TRUE, minWidth = 110),
            Centrality = col_bar("Centrality percentile", digits = 2, width = 170),
            Liver = utils::modifyList(col_call("Whole liver"), list(minWidth = 95)),
            SC = utils::modifyList(col_call("Hepatocytes"), list(minWidth = 110))))
     })
 
-    output$drugs <- reactable::renderReactable({
+    output$drugs <- render_table({
       x <- members()
       x <- x[x$kind == "drug", ]
       shiny::validate(shiny::need(nrow(x) > 0, "No drugs in this cluster."))
@@ -146,14 +146,14 @@ kgServer <- function(id, d) {
          page = 10, columns = list(
            Drug = col_name_id("Drug", 180),
            Centrality = col_bar("Centrality percentile", digits = 2, width = 170),
-           Paths = reactable::colDef(name = "On shortest paths to", html = TRUE, minWidth = 140, cell = function(v) {
+           Paths = col_def(name = "On shortest paths to", html = TRUE, minWidth = 140, cell = function(v) {
              if (!nzchar(v)) return("")
              paste(vapply(strsplit(v, "|", fixed = TRUE)[[1]], function(p) chip_html(p, if (p == "NASH") "up" else "warn"), ""),
                    collapse = "")
            })))
     })
 
-    output$top <- reactable::renderReactable({
+    output$top <- render_table({
       t <- input$type %||% "gene"
       x <- k[k$kind == t, ]
       x <- utils::head(x[order(-x$composite_pct, -x$pagerank_score), ], 300)
@@ -161,8 +161,8 @@ kgServer <- function(id, d) {
       rt(data.frame(Name = name, Cluster = kg_link(x$cluster, paste("Cluster", x$cluster)),
                     Centrality = x$composite_pct / 100, PageRank = x$pagerank_score, stringsAsFactors = FALSE),
          page = 10, columns = list(
-           Name = reactable::colDef(html = TRUE, minWidth = 220),
-           Cluster = reactable::colDef(html = TRUE, minWidth = 100),
+           Name = col_def(html = TRUE, minWidth = 220),
+           Cluster = col_def(html = TRUE, minWidth = 100),
            Centrality = col_bar("Centrality percentile", digits = 2, width = 200),
            PageRank = col_num("PageRank", 3)))
     })
