@@ -4,7 +4,7 @@ A dashboard that brings together single-cell, bulk, in-vitro, network and knowle
 evidence for MASH (formerly NASH), with the pipeline that produces it.
 
 **Open the app:** https://gehadyoussef.github.io/meta-liver/ (runs in the browser, nothing to
-install. The first visit takes about a minute to load R in the browser, later visits are faster.)
+install. The first visit takes about 30 seconds to load R in the browser, later visits about 15.)
 
 ![Overview](docs/screenshots/overview.png)
 
