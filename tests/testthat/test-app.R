@@ -95,7 +95,6 @@ test_that("every plot and table renders without error", {
       for (o in outputs) expect_error(tryCatch(output[[o]], shiny.silent.error = function(e) NULL), NA, label = o)
     })
   }
-  render(env$overviewServer, list(), "heatmap")
   render(env$geneServer, list(gene = "SREBF1"), c("header", "strip", "sc_plot", "bulk_plot", "table"))
   render(env$markersServer, list(dataset = "wang_human_GSE212837", dir = "both", min_pct = 0.1, fdr = FALSE,
                                  targets = FALSE, search = "", top_n = 50), c("note", "bars", "plot", "table"))

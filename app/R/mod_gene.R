@@ -54,7 +54,12 @@ geneServer <- function(id, d) {
     shiny::updateSelectizeInput(session, "gene", choices = all_genes, server = TRUE,
                                 selected = if ("SREBF1" %in% all_genes) "SREBF1" else all_genes[1])
     shiny::observeEvent(input$pick, {
-      shiny::updateSelectizeInput(session, "gene", choices = all_genes, server = TRUE, selected = input$pick)
+      g <- all_genes[match(toupper(input$pick), toupper(all_genes))]
+      if (is.na(g)) {
+        shiny::showNotification(sprintf("%s is not in the data", input$pick), type = "warning", duration = 4)
+      } else {
+        shiny::updateSelectizeInput(session, "gene", choices = all_genes, server = TRUE, selected = g)
+      }
     })
 
     gene <- shiny::reactive(shiny::req(input$gene))

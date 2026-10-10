@@ -6,6 +6,7 @@ consistencyUI <- function(id, d) {
   shiny::tagList(
     page_header("arrows-up-down", "Direction consistency",
                 "Same direction across datasets and bulk"),
+    dataset_cards(d),
     shiny::div(class = "toolbar",
       pills(ns("set"), c("All genes" = "all", "Target genes" = "target")),
       shiny::span(class = "vr mx-1"),

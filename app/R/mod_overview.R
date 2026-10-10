@@ -1,22 +1,20 @@
-# Overview: headline numbers, dataset cards, agreement heatmap and key findings.
+# Home: gene search, the data behind the app, replicated genes, citation.
 
-overviewUI <- function(id, d) {
-  ns <- shiny::NS(id)
-  meta <- d$datasets_meta
-  meta <- meta[order(meta$species != "human", -meta$bulk_agreement), ]
-  g <- d$consistency$genes
-  nds <- length(d$consistency$datasets)
-  replicated <- g[g$n_up == nds | g$n_down == nds, ]
-  replicated <- replicated[order(replicated$n_down > 0, replicated$gene_human), ]
-  n_tested <- length(unique(d$sc$gene_human[d$sc$tested]))
+CITATION_SHORT <- "Weihs J, Baldo F, Cardinali A, Youssef G, et al. Combined stem cell and predictive models reveal flavin cofactors as targets in metabolic liver dysfunction. bioRxiv 2024."
+CITATION_FULL <- paste(
+  "Weihs J, Baldo F, Cardinali A, Youssef G, Ludwik K, Haep N, Tang P, Kumar P, Engelmann C, Quach S,",
+  "Meindl M, Kucklick M, Engelmann S, Chillian B, Rothe M, Meierhofer D, Lurje I, Hammerich L, Ramachandran P,",
+  "Kendall TJ, Fallowfield JA, Stachelscheid H, Sauer I, Tacke F, Bufler P, Hudert C, Han N, Rezvani M.",
+  "Combined stem cell and predictive models reveal flavin cofactors as targets in metabolic liver dysfunction.",
+  "bioRxiv 2024.10.10.617610.")
+DOI_URL <- "https://doi.org/10.1101/2024.10.10.617610"
 
-  glass <- function(icon, value, label, color) {
-    shiny::div(class = "glass",
-      shiny::div(class = "glass-icon", style = sprintf("--c:%s", color), shiny::icon(icon)),
-      shiny::div(shiny::div(class = "glass-value", value), shiny::div(class = "glass-label", label)))
-  }
+doi_link <- function() shiny::tags$a(href = DOI_URL, target = "_blank", "doi:10.1101/2024.10.10.617610")
 
-  ds_card <- function(i) {
+# One card per single-cell dataset: design, hepatocytes, reliability, agreement with bulk
+dataset_cards <- function(d) {
+  meta <- d$datasets_meta[order(d$datasets_meta$species != "human", -d$datasets_meta$bulk_agreement), ]
+  card <- function(i) {
     m <- meta[i, ]
     ring_col <- if (!m$directions_reliable) PAL$na else if (m$bulk_agreement >= 0.6) PAL$primary
                 else if (m$bulk_agreement >= 0.5) PAL$warn else PAL$up
@@ -46,59 +44,68 @@ overviewUI <- function(id, d) {
         shiny::div(shiny::div(class = "big-number", format(m$n_hepatocytes, big.mark = ",")),
                    shiny::div(class = "big-label", "hepatocytes")),
         shiny::div(class = "ring-wrap", shiny::div(class = "ring-caption", "agrees with bulk"),
-                   ring_svg(m$bulk_agreement, ring_col)))
-    )
+                   ring_svg(m$bulk_agreement, ring_col))))
   }
+  shiny::div(class = "ds-grid", lapply(seq_len(nrow(meta)), card))
+}
 
+overviewUI <- function(id, d) {
+  meta <- d$datasets_meta
+  g <- d$consistency$genes
+  nds <- length(d$consistency$datasets)
+  replicated <- g[g$n_up == nds | g$n_down == nds, ]
+  replicated <- replicated[order(replicated$n_down > 0, replicated$gene_human), ]
+  cohorts <- sort(unique(d$bulk_cohorts$studies$study))
+  lines <- sort(unique(d$invitro$line))
+
+  layer <- function(icon, page, title, value, detail) {
+    shiny::tags$button(type = "button", class = "layer-tile", onclick = sprintf("mashGo('%s')", page),
+      shiny::span(class = "layer-tile-icon", shiny::icon(icon)),
+      shiny::span(class = "layer-tile-body",
+        shiny::span(class = "layer-tile-title", title),
+        shiny::span(class = "layer-tile-value", value),
+        shiny::span(class = "layer-tile-detail", detail)))
+  }
   gene_chip <- function(gene, dir) {
     shiny::tags$a(class = paste("gene-chip", dir), gene,
                   onclick = sprintf("Shiny.setInputValue('gene-pick', '%s', {priority: 'event'}); mashGo('gene');", gene))
   }
 
   shiny::tagList(
-    shiny::div(class = "hero",
-      shiny::icon("dna", class = "hero-deco"),
-      shiny::div(class = "hero-eyebrow", "MASH hepatocyte omics"),
-      shiny::h1("Hepatocyte gene changes in MASH"),
-      shiny::p("Each gene is scored in every dataset and checked against bulk liver, an iPSC model and networks."),
-      shiny::div(class = "hero-stats",
-        glass("layer-group", nrow(meta), "single-cell datasets", "#5EEAD4"),
-        glass("microscope", format(sum(meta$n_hepatocytes, na.rm = TRUE), big.mark = ","), "hepatocytes", "#93C5FD"),
-        glass("dna", format(n_tested, big.mark = ","), "genes tested", "#FCD34D"),
-        glass("circle-check", nrow(replicated), sprintf("replicated in all %d datasets", nds), "#FDA4AF"))
-    ),
-    shiny::div(class = "section-label", shiny::icon("layer-group"), "Datasets"),
-    shiny::div(class = "ds-grid", lapply(seq_len(nrow(meta)), ds_card)),
-    shiny::div(class = "section-label", shiny::icon("arrows-up-down"), "Replication"),
-    bslib::layout_columns(
-      col_widths = c(6, 6),
-      bslib::card(
-        bslib::card_header(card_title("Direction agreement", "code-compare",
-          "Share of genes called up or down in both datasets that go the same way. 50% is chance.")),
-        plot_output(ns("heatmap"), height = "300px")
-      ),
-      bslib::card(
-        bslib::card_header(shiny::div(class = "d-flex align-items-center gap-2 w-100",
-          card_title("Replicated genes", "circle-check",
-            sprintf("Same direction (AUC ≥ 0.55 or ≤ 0.45) in all %d datasets with reliable directions. Click a gene to open it.", nds)),
-          chip(sprintf("%d up", sum(replicated$n_up == nds)), "arrow-up", "up"),
-          chip(sprintf("%d down", sum(replicated$n_down == nds)), "arrow-down", "down"))),
-        shiny::div(class = "gene-chips",
-          lapply(seq_len(nrow(replicated)), function(i)
-            gene_chip(replicated$gene_human[i], if (replicated$n_up[i] == nds) "up" else "down"))),
-        shiny::div(class = "rep-foot",
-          shiny::span(shiny::tags$b(sum(grepl("^consistent", g$consistency))), " consistent in 2+ datasets"),
-          shiny::span(shiny::tags$b(sum(grepl("^conflicting", g$consistency))), " conflicting"))
-      )
-    )
+    shiny::div(class = "home-hero",
+      shiny::h1("Meta Liver"),
+      shiny::p("A hypothesis engine for metabolic liver disease"),
+      shiny::div(class = "home-search", shiny::icon("magnifying-glass"),
+        shiny::tags$input(type = "text", placeholder = "Search a gene, e.g. SREBF1", autocomplete = "off",
+          onkeydown = "if (event.key === 'Enter' && this.value.trim()) { Shiny.setInputValue('gene-pick', this.value.trim(), {priority: 'event'}); mashGo('gene'); }"))),
+
+    shiny::div(class = "layer-grid-home",
+      layer("microscope", "markers", "Single-cell", sprintf("%d datasets", nrow(meta)), paste(sort(meta$label), collapse = ", ")),
+      layer("flask", "bulk", "Bulk liver", sprintf("%d cohorts", length(cohorts)), paste(cohorts, collapse = ", ")),
+      layer("vial", "invitro", "In-vitro", sprintf("%d iPSC lines", length(lines)), "3 MASLD exposures"),
+      layer("share-nodes", "kg", "Networks", "3 layers", "PPI, co-expression, knowledge graph")),
+
+    bslib::card(
+      bslib::card_header(shiny::div(class = "d-flex align-items-center gap-2 w-100",
+        card_title(sprintf("Replicated in all %d single-cell datasets", nds), "circle-check",
+          "Same direction (AUC ≥ 0.55 or ≤ 0.45) in every dataset with reliable directions. Click a gene to open it."),
+        chip(sprintf("%d up", sum(replicated$n_up == nds)), "arrow-up", "up"),
+        chip(sprintf("%d down", sum(replicated$n_down == nds)), "arrow-down", "down"))),
+      shiny::div(class = "gene-chips",
+        lapply(seq_len(nrow(replicated)), function(i)
+          gene_chip(replicated$gene_human[i], if (replicated$n_up[i] == nds) "up" else "down"))),
+      shiny::div(class = "rep-foot",
+        shiny::span(shiny::tags$b(sum(grepl("^consistent", g$consistency))), " consistent in 2+ datasets"),
+        shiny::span(shiny::tags$b(sum(grepl("^conflicting", g$consistency))), " conflicting"),
+        shiny::tags$a(class = "rep-more", onclick = "mashGo('consistency')", "All datasets ", shiny::icon("arrow-right")))),
+
+    shiny::div(class = "home-cite",
+      shiny::div(shiny::tags$b("Cite: "), CITATION_SHORT, " ", doi_link()),
+      shiny::div("Han lab, University of Cambridge, and Rezvani lab, Charité Berlin. ",
+                 shiny::tags$a(onclick = "mashGo('about')", "Team")))
   )
 }
 
 overviewServer <- function(id, d) {
-  shiny::moduleServer(id, function(input, output, session) {
-    output$heatmap <- render_plot({
-      m <- d$datasets_meta[order(d$datasets_meta$species != "human", -d$datasets_meta$bulk_agreement), ]
-      agreement_heatmap(d$consistency$pairwise, m$dataset, m$label)
-    })
-  })
+  shiny::moduleServer(id, function(input, output, session) {})
 }

@@ -5,6 +5,22 @@ aboutUI <- function(id, d) {
   item <- function(icon, title, ...) bslib::accordion_panel(title, icon = shiny::icon(icon), shiny::p(...))
   shiny::tagList(
     page_header("circle-info", "About", "Definitions, methods and data sources"),
+    bslib::card(
+      bslib::card_header(card_title("Citation and team", "users")),
+      shiny::p(shiny::tags$b("Please cite: "), CITATION_FULL, " ", doi_link()),
+      shiny::tags$ul(class = "team-list",
+        shiny::tags$li(shiny::tags$b("Computational biology: "),
+          shiny::tags$a(href = "https://www.linkedin.com/in/namshik/", target = "_blank", "Prof Namshik Han"),
+          " (University of Cambridge) and team. ",
+          shiny::tags$a(href = "https://www.linkedin.com/in/dr-gehad-youssef", target = "_blank", "Dr Gehad Youssef"),
+          " led the single-cell and PPI network analyses, ",
+          shiny::tags$a(href = "https://www.linkedin.com/in/fatima-baldo/", target = "_blank", "Dr Fatima Baldo"),
+          " the knowledge graph and ",
+          shiny::tags$a(href = "https://www.linkedin.com/in/cardinali-alessandra/", target = "_blank", "Dr Alessandra Cardinali"),
+          " the WGCNA analyses."),
+        shiny::tags$li(shiny::tags$b("Experimental models: "),
+          shiny::tags$a(href = "https://www.linkedin.com/in/dr-milad-milo-rezvani-aa6a5286/", target = "_blank", "Dr Milad (Milo) Rezvani"),
+          " (Charité Berlin) and team. Julian Weihs led the MASLD in-vitro model."))),
     bslib::layout_columns(
       col_widths = c(6, 6),
       bslib::card(

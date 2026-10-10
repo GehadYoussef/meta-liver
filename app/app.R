@@ -12,7 +12,7 @@ versioned <- function(f) paste0(f, "?v=", substr(unname(tools::md5sum(file.path(
 
 PAGES <- data.frame(
   id      = c("overview", "gene", "screener", "markers", "consistency", "bulk", "invitro", "kg", "drugs", "modules", "about"),
-  label   = c("Overview", "Gene lookup", "Gene screener", "Markers", "Consistency", "Whole liver", "In-vitro model", "Knowledge graph",
+  label   = c("Home", "Gene lookup", "Gene screener", "Markers", "Consistency", "Whole liver", "In-vitro model", "Knowledge graph",
               "Drugs", "Modules", "About"),
   icon    = c("house", "magnifying-glass", "filter", "ranking-star", "arrows-up-down", "flask", "vial", "share-nodes", "capsules",
               "diagram-project", "circle-info"),
@@ -30,7 +30,7 @@ rail <- function() {
   })
   tags$aside(class = "rail",
     div(class = "rail-brand", div(class = "rail-logo", icon("dna")),
-        div(class = "rail-name", "MASH Omics", tags$small("Explorer"))),
+        div(class = "rail-name", "Meta Liver", tags$small("Hypothesis engine"))),
     items,
     div(class = "rail-spacer"),
     div(class = "rail-foot", span(sprintf("Data %s", substr(d$built_at, 1, 10))),
@@ -38,7 +38,7 @@ rail <- function() {
 }
 
 ui <- page(
-  title = "MASH Omics Explorer",
+  title = "Meta Liver",
   theme = app_theme(),
   tags$head(
     tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),

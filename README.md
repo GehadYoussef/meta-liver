@@ -1,4 +1,4 @@
-# Meta Liver: MASH Omics Explorer
+# Meta Liver
 
 A dashboard that brings together single-cell, bulk, in-vitro, network and knowledge-graph
 evidence for MASH (formerly NASH), with the pipeline that produces it.
@@ -30,11 +30,11 @@ install. The first visit takes about 30 seconds to load R in the browser, later 
 
 | Page | Shows |
 |---|---|
-| Overview | One card per dataset, agreement between datasets, main findings |
+| Home | Gene search, the data layers, genes replicated in every single-cell dataset, citation |
 | Gene lookup | A one-paragraph summary across all layers, one tile per layer, charts and context tabs |
 | Gene screener | Genes that pass thresholds in the layers you switch on, optionally with the same direction in all of them |
 | Markers | Strongest NASH vs control hepatocyte genes per dataset |
-| Consistency | Direction agreement between datasets and with bulk |
+| Consistency | One card per single-cell dataset, direction agreement between datasets and with bulk |
 | Whole liver | Disease-stage volcano plots and the cohort meta-analysis |
 | In-vitro model | Genes changed at each exposure step and whether the two cell lines agree |
 | Knowledge graph | The 60 clusters of the MASH knowledge graph, each cluster's diseases, genes and drugs, and the most central nodes |
@@ -141,6 +141,17 @@ Full tables are in `data/single_cell/consistency/`.
 | Meta Liver evidence score let conflicting or single-dataset genes rank high | Net agreement and coverage in the score |
 
 The Streamlit version of Meta Liver is kept at tag `streamlit-v1`.
+
+## Citation and team
+
+Weihs J, Baldo F, Cardinali A, Youssef G, et al. Combined stem cell and predictive models reveal
+flavin cofactors as targets in metabolic liver dysfunction. bioRxiv 2024.
+[doi:10.1101/2024.10.10.617610](https://doi.org/10.1101/2024.10.10.617610)
+
+Computational biology: Prof Namshik Han (University of Cambridge) and team. Dr Gehad Youssef led
+the single-cell and PPI network analyses, Dr Fatima Baldo the knowledge graph and Dr Alessandra
+Cardinali the WGCNA analyses. Experimental models: Dr Milad (Milo) Rezvani (Charité Berlin) and
+team. Julian Weihs led the MASLD in-vitro model.
 
 ## Open questions
 
